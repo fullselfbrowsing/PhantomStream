@@ -1,0 +1,28 @@
+{
+  "name": "@fullselfbrowsing/phantom-stream",
+  "version": "0.1.0",
+  "description": "DOM-native live browser mirroring: snapshot + MutationObserver diff streaming with stable node identity, compressed transport, and bidirectional remote control.",
+  "type": "module",
+  "main": "src/protocol/index.js",
+  "exports": {
+    "./protocol": "./src/protocol/index.js"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fullselfbrowsing/PhantomStream.git"
+  },
+  "keywords": [
+    "dom-streaming",
+    "browser-mirroring",
+    "co-browsing",
+    "mutation-observer",
+    "session-replay",
+    "agent-observability",
+    "remote-control"
+  ],
+  "author": "Lakshman Turlapati",
+  "license": "MIT"
+}
