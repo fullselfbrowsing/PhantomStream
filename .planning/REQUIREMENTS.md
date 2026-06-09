@@ -111,13 +111,51 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (populated by roadmap) | | |
+| CAPT-01 | Phase 1 | Pending |
+| CAPT-02 | Phase 1 | Pending |
+| CAPT-03 | Phase 1 | Pending |
+| CAPT-04 | Phase 1 | Pending |
+| CAPT-05 | Phase 8 | Pending |
+| CAPT-06 | Phase 8 | Pending |
+| CAPT-07 | Phase 7 | Pending |
+| CAPT-08 | Phase 8 | Pending |
+| CAPT-09 | Phase 8 | Pending |
+| CAPT-10 | Phase 9 | Pending |
+| CAPT-11 | Phase 8 | Pending |
+| SEC-01 | Phase 3 | Pending |
+| SEC-02 | Phase 3 | Pending |
+| SEC-03 | Phase 3 | Pending |
+| SEC-04 | Phase 5 | Pending |
+| VIEW-01 | Phase 2 | Pending |
+| VIEW-02 | Phase 4 | Pending |
+| VIEW-03 | Phase 7 | Pending |
+| VIEW-04 | Phase 2 | Pending |
+| VIEW-05 | Phase 5 | Pending |
+| VIEW-06 | Phase 2 | Pending |
+| RELY-01 | Phase 4 | Pending |
+| RELY-02 | Phase 4 | Pending |
+| ADPT-01 | Phase 6 | Pending |
+| ADPT-02 | Phase 5 | Pending |
+| ADPT-03 | Phase 6 | Pending |
+| ADPT-04 | Phase 2 | Pending |
+| PKG-01 | Phase 4 | Pending |
+| PKG-02 | Phase 5 | Pending |
+| PKG-03 | Phase 10 | Pending |
+| PKG-04 | Phase 10 | Pending |
+| FSB-01 | Phase 11 | Pending |
+| EVAL-01 | Phase 12 | Pending |
+| EVAL-02 | Phase 12 | Pending |
+| EVAL-03 | Phase 12 | Pending |
+| EVAL-04 | Phase 12 | Pending |
+| EVAL-05 | Phase 12 | Pending |
+| PAPR-01 | Phase 13 | Pending |
+| PAPR-02 | Phase 13 | Pending |
 
 **Coverage:**
-- v1 requirements: 32 total
-- Mapped to phases: 0
-- Unmapped: 32 ⚠️ (pending roadmap)
+- v1 requirements: 39 total (earlier "32" was a miscount; corrected during roadmap creation)
+- Mapped to phases: 39
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-06-09*
-*Last updated: 2026-06-09 after initial definition*
+*Last updated: 2026-06-09 after roadmap creation (traceability populated)*
