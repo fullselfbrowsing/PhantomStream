@@ -12,7 +12,7 @@ PhantomStream extracts a shipped, production-proven DOM-mirroring system out of 
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Capture Core Extraction + Differential Oracle** - Oracle-anchored extraction of the capture core behind the Transport seam
+- [x] **Phase 1: Capture Core Extraction + Differential Oracle** - Oracle-anchored extraction of the capture core behind the Transport seam (completed 2026-06-10)
 - [ ] **Phase 2: Renderer Core + Embedded Loopback Mirror** - Embeddable viewer + first end-to-end mirror with zero infrastructure
 - [ ] **Phase 3: Security Pipeline — Sanitization + Privacy Masking** - Both-ends sanitization, sandbox contract, capture-side masking (publishing gate)
 - [ ] **Phase 4: Relay, WS Transport & Two-Tab Demo** - Networked mirror: relay core, ws backend, CompressionStream codec, `npx phantom-stream demo`
@@ -51,8 +51,8 @@ Plans:
 - [x] 01-03-PLAN.md — Single-file capture core extraction behind the Transport seam + purity gate
 
 **Wave 4** *(blocked on Wave 3 completion)*
-- [ ] 01-04-PLAN.md — Oracle flip: reference-vs-extracted equivalence + divergence ledger finalization
-- [ ] 01-05-PLAN.md — Lifecycle + reliability defense test suite (rAF, watchdog, identity, truncation)
+- [x] 01-04-PLAN.md — Oracle flip: reference-vs-extracted equivalence + divergence ledger finalization
+- [x] 01-05-PLAN.md — Lifecycle + reliability defense test suite (rAF, watchdog, identity, truncation)
 
 ### Phase 2: Renderer Core + Embedded Loopback Mirror
 **Goal**: A page can mirror itself live — capture core plus embeddable viewer running end-to-end in one page with zero infrastructure
@@ -206,7 +206,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Capture Core Extraction + Differential Oracle | 3/5 | In Progress|  |
+| 1. Capture Core Extraction + Differential Oracle | 5/5 | Complete   | 2026-06-10 |
 | 2. Renderer Core + Embedded Loopback Mirror | 0/TBD | Not started | - |
 | 3. Security Pipeline — Sanitization + Privacy Masking | 0/TBD | Not started | - |
 | 4. Relay, WS Transport & Two-Tab Demo | 0/TBD | Not started | - |
