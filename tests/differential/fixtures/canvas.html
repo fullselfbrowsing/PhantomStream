@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PhantomStream canvas fixture</title>
+</head>
+<body>
+  <!-- Locks the degenerate jsdom canvas path (01-RESEARCH.md Pitfall 4):
+       without the optional `canvas` package, toDataURL() RETURNS NULL
+       without throwing, so the reference's try/catch never triggers and the
+       canvas is replaced by an img with a bogus src on BOTH oracle sides --
+       degenerate but identical. Real-browser canvas behavior (PNG data URL,
+       or SecurityError on tainted canvases) is re-verified in the
+       real-browser phases later in the roadmap. -->
+  <h1 id="canvas-heading">Canvas fixture</h1>
+  <p id="canvas-intro">A paragraph sibling before the canvas element.</p>
+  <canvas id="scene" width="200" height="100"></canvas>
+  <p id="canvas-outro">A paragraph sibling after the canvas element.</p>
+</body>
+</html>

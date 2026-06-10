@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PhantomStream dialog fixture</title>
+</head>
+<body>
+  <!-- Markup is script-free: the ONLY executing script in this fixture is
+       the capture's own injected dialog interceptor, which is why this is
+       the single fixture the harness runs with page-script execution
+       enabled (01-RESEARCH.md Pitfall 5 -- under the default outside-only
+       mode the injected interceptor silently never installs). -->
+  <h1 id="dialog-heading">Dialog fixture</h1>
+  <p id="dialog-intro">A page whose scenario raises alert and confirm dialogs.</p>
+  <button id="dialog-trigger" type="button">Trigger dialog</button>
+</body>
+</html>
