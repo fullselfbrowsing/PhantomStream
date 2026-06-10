@@ -249,10 +249,38 @@ export function createCapture(config) {
     if (!hostSkipElement) return false;
     var node = el;
     while (node) {
-      if (hostSkipElement(node)) return true;
+      try {
+        if (hostSkipElement(node)) return true;
+      } catch (err) {
+        // Host predicate errors are contained like the transport and
+        // overlayProvider seams (D-07): route to the logger and treat the
+        // element as not-skipped. The capture path never throws after the
+        // factory, and one bad predicate call must never lose a whole
+        // mutation batch.
+        logger.error('[DOM Stream] skipElement predicate failed', err);
+        return false;
+      }
       node = node.parentElement;
     }
     return false;
+  }
+
+  /**
+   * Exception-contained direct (non-ancestor) form of the skipElement seam,
+   * used where the serializer mirrors the reference's own-element check.
+   * Same containment contract as skipElementWithAncestors: predicate errors
+   * go to the injected logger and the element is treated as not-skipped.
+   *
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function safeSkipElement(el) {
+    try {
+      return skipElement(el);
+    } catch (err) {
+      logger.error('[DOM Stream] skipElement predicate failed', err);
+      return false;
+    }
   }
 
   /**
@@ -594,8 +622,9 @@ export function createCapture(config) {
       // skipElement seam: elements the host flags (its own UI) are dropped
       // from the clone before any node-id assignment. The default predicate
       // returns false, which matches the reference running on a page with no
-      // host overlay present.
-      if (skipElement(cl)) {
+      // host overlay present. Exception-contained: a throwing host predicate
+      // is logged and treated as not-skipped (never escapes start()).
+      if (safeSkipElement(cl)) {
         toRemove.push(cl);
         continue;
       }
