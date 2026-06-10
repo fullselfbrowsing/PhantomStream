@@ -45,7 +45,7 @@ Plans:
 - [x] 01-01-PLAN.md — Walking skeleton: jsdom infra + differential harness self-test (ref-vs-ref) + CI workflow
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 01-02-PLAN.md — Frozen fixture matrix + scripted scenarios covering every defense, ref-vs-ref green
+- [x] 01-02-PLAN.md — Frozen fixture matrix + scripted scenarios covering every defense, ref-vs-ref green
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 01-03-PLAN.md — Single-file capture core extraction behind the Transport seam + purity gate
@@ -206,7 +206,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Capture Core Extraction + Differential Oracle | 1/5 | In Progress|  |
+| 1. Capture Core Extraction + Differential Oracle | 2/5 | In Progress|  |
 | 2. Renderer Core + Embedded Loopback Mirror | 0/TBD | Not started | - |
 | 3. Security Pipeline — Sanitization + Privacy Masking | 0/TBD | Not started | - |
 | 4. Relay, WS Transport & Two-Tab Demo | 0/TBD | Not started | - |
