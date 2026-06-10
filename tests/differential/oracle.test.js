@@ -12,8 +12,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createReferenceSide, runScenario } from './harness.js';
-import { normalizeReference, canonicalizeIdentity, compareStreams } from './normalize.js';
+import { createReferenceSide, createExtractedSide, runScenario } from './harness.js';
+import { normalizeReference, normalizeExtracted, canonicalizeIdentity, compareStreams } from './normalize.js';
 import { DIVERGENCES } from './divergence-ledger.js';
 import { STREAM, DIFF_OP } from '../../src/protocol/messages.js';
 import * as basicMutations from './scenarios/basic-mutations.js';
@@ -58,6 +58,23 @@ async function captureNormalizedStream(fixtureFile, scenario, config) {
   try {
     const sent = await runScenario(side, scenario);
     return canonicalizeIdentity(normalizeReference(sent));
+  } finally {
+    side.close();
+  }
+}
+
+/**
+ * Run one EXTRACTED-side capture (src/capture/index.js behind the loopback
+ * transport) of a fixture under a scenario and return its normalized,
+ * identity-canonicalized stream. The side is ALWAYS closed -- close()
+ * restores the swapped Node globals as well as clearing the watchdog chain
+ * (Pitfalls 3 and 8).
+ */
+async function captureExtractedStream(fixtureFile, scenario, config) {
+  const side = createExtractedSide(loadFixture(fixtureFile), config);
+  try {
+    const sent = await runScenario(side, scenario);
+    return canonicalizeIdentity(normalizeExtracted(sent));
   } finally {
     side.close();
   }
@@ -155,4 +172,24 @@ test('tampering one payload field reports UNDECLARED DIVERGENCE with fixture, sc
       return true;
     }
   );
+});
+
+// ===========================================================================
+// Flipped mode: reference vs EXTRACTED (src/capture/ behind the Transport
+// seam). The ref-vs-ref tests above stay FIRST as the permanent harness
+// self-test -- if the harness itself drifts, they fail before any flipped
+// test can misattribute the drift to the extraction.
+// ===========================================================================
+
+test('reference and extracted captures emit equivalent streams for basic-mutations on basic.html', async () => {
+  const refStream = await captureNormalizedStream('basic.html', basicMutations, {});
+  const extStream = await captureExtractedStream('basic.html', basicMutations, {});
+
+  assert.ok(refStream.length >= 3, `reference stream is non-trivial (got ${refStream.length} messages)`);
+  assert.ok(extStream.length >= 3, `extracted stream is non-trivial (got ${extStream.length} messages)`);
+
+  // Plain mutation scenarios have NO intentional divergences: the comparison
+  // must pass without consulting a single ledger entry.
+  const matched = compareStreams(refStream, extStream, 'basic.html', 'basic-mutations', DIVERGENCES);
+  assert.equal(matched.size, 0, 'plain mutation scenarios consult zero ledger entries');
 });
