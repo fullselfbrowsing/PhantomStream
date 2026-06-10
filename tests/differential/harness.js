@@ -30,9 +30,16 @@ const FIXTURE_URL = 'https://fixture.test/page';
  * control listener exactly as the extension background would.
  *
  * @param {string} fixtureHtml  frozen fixture HTML (byte-identical per side)
- * @param {{ runScripts?: 'outside-only'|'dangerously' }} [config]
+ * @param {{ runScripts?: 'outside-only'|'dangerously', patchRects?: boolean }} [config]
  *   'dangerously' is reserved for the trusted dialog fixture (Pitfall 5);
- *   everything else runs script-free under 'outside-only'.
+ *   everything else runs script-free under 'outside-only'. When patchRects
+ *   is true, this instance's Element.prototype.getBoundingClientRect is
+ *   replaced BEFORE the capture code loads with a deterministic fake that
+ *   reads the fixture-authored data-test-top attribute (01-RESEARCH.md
+ *   Pattern 5) -- jsdom rects are otherwise all zeros, so pass-1 truncation
+ *   ("drop subtrees below 3x viewport") could never trigger. Because every
+ *   side is built through this one factory from the same config, the patch
+ *   can never drift across instances (Pitfall 6).
  * @returns {{
  *   dom: JSDOM, window: Window, document: Document,
  *   sent: object[],
@@ -48,6 +55,17 @@ export function createReferenceSide(fixtureHtml, config) {
     virtualConsole: new VirtualConsole(), // quiet: swallows "Not implemented" noise
   });
   const ctx = dom.getInternalVMContext();
+
+  // Deterministic fake layout (Pattern 5, verified recipe): rect.top comes
+  // from the fixture's data-test-top attribute; elements without the
+  // attribute sit at the viewport origin. Applied before the capture code
+  // runs so its single-pass TreeWalker rect reads see the fake consistently.
+  if (config && config.patchRects) {
+    dom.window.Element.prototype.getBoundingClientRect = function () {
+      const top = Number(this.getAttribute && this.getAttribute('data-test-top')) || 0;
+      return { top, left: 0, width: 100, height: 50, right: 100, bottom: top + 50, x: 0, y: top };
+    };
+  }
 
   const sent = [];
   let controlListener = null;

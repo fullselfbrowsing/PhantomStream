@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PhantomStream heavy realistic fixture</title>
+  <style>
+    article { border-bottom: 1px solid rgb(220, 220, 220); }
+    .summary { color: rgb(60, 60, 60); }
+    article .tag-list li { font-style: italic; }
+    .feed-item h3 { color: rgb(0, 64, 128) !important; }
+    table { border-collapse: collapse; }
+    .data-row td { padding-left: 4px; }
+  </style>
+</head>
+<body>
+  <header id="site-header" data-region="header">
+    <h1 id="page-title">Heavy realistic fixture</h1>
+    <p id="lede">An introductory paragraph with direct text content for character-data scenarios.</p>
+    <nav id="main-nav" data-nav-style="horizontal">
+      <a href="sections/home">Home</a>
+      <a href="sections/feed?page=1">Feed</a>
+      <a href="../parent/relative">Parent relative link</a>
+    </nav>
+  </header>
+  <figure id="hero-figure">
+    <img id="hero" src="images/hero-800.png" srcset="images/hero-400.png 400w, images/hero-800.png 800w, images/hero-1600.png 1600w" alt="Hero image">
+    <figcaption>Hero image with a multi-candidate srcset.</figcaption>
+  </figure>
+  <svg id="icon-star-svg" width="24" height="24" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <use xlink:href="assets/icons.svg#icon-star"></use>
+  </svg>
+  <section id="deep-nesting" data-purpose="depth-exercise">
+    <div class="level level-1" data-level="1"><div class="level level-2" data-level="2"><div class="level level-3" data-level="3"><div class="level level-4" data-level="4"><div class="level level-5" data-level="5"><div class="level level-6" data-level="6"><div class="level level-7" data-level="7"><div class="level level-8" data-level="8"><div class="level level-9" data-level="9"><div class="level level-10" data-level="10"><div class="level level-11" data-level="11"><div class="level level-12" data-level="12"><p class="leaf" data-depth-leaf="true">Deepest content node at nesting level twelve.</p></div></div></div></div></div></div></div></div></div></div></div></div>
+  </section>
+  <table id="records-table">
+    <thead>
+      <tr><th>Record</th><th>Status</th><th>Detail</th><th>Quantity</th></tr>
+    </thead>
+    <tbody>
+        <tr class="data-row" data-row-index="1"><td>Record 1</td><td>Status 1</td><td><a href="records/item-1">detail 1</a></td><td>17 units</td></tr>
+        <tr class="data-row" data-row-index="2"><td>Record 2</td><td>Status 2</td><td><a href="records/item-2">detail 2</a></td><td>34 units</td></tr>
+        <tr class="data-row" data-row-index="3"><td>Record 3</td><td>Status 3</td><td><a href="records/item-3">detail 3</a></td><td>51 units</td></tr>
+        <tr class="data-row" data-row-index="4"><td>Record 4</td><td>Status 0</td><td><a href="records/item-4">detail 4</a></td><td>68 units</td></tr>
+        <tr class="data-row" data-row-index="5"><td>Record 5</td><td>Status 1</td><td><a href="records/item-5">detail 5</a></td><td>85 units</td></tr>
+        <tr class="data-row" data-row-index="6"><td>Record 6</td><td>Status 2</td><td><a href="records/item-6">detail 6</a></td><td>102 units</td></tr>
+        <tr class="data-row" data-row-index="7"><td>Record 7</td><td>Status 3</td><td><a href="records/item-7">detail 7</a></td><td>119 units</td></tr>
+        <tr class="data-row" data-row-index="8"><td>Record 8</td><td>Status 0</td><td><a href="records/item-8">detail 8</a></td><td>136 units</td></tr>
+        <tr class="data-row" data-row-index="9"><td>Record 9</td><td>Status 1</td><td><a href="records/item-9">detail 9</a></td><td>153 units</td></tr>
+        <tr class="data-row" data-row-index="10"><td>Record 10</td><td>Status 2</td><td><a href="records/item-10">detail 10</a></td><td>170 units</td></tr>
+        <tr class="data-row" data-row-index="11"><td>Record 11</td><td>Status 3</td><td><a href="records/item-11">detail 11</a></td><td>187 units</td></tr>
+        <tr class="data-row" data-row-index="12"><td>Record 12</td><td>Status 0</td><td><a href="records/item-12">detail 12</a></td><td>204 units</td></tr>
+        <tr class="data-row" data-row-index="13"><td>Record 13</td><td>Status 1</td><td><a href="records/item-13">detail 13</a></td><td>221 units</td></tr>
+        <tr class="data-row" data-row-index="14"><td>Record 14</td><td>Status 2</td><td><a href="records/item-14">detail 14</a></td><td>238 units</td></tr>
+        <tr class="data-row" data-row-index="15"><td>Record 15</td><td>Status 3</td><td><a href="records/item-15">detail 15</a></td><td>255 units</td></tr>
+        <tr class="data-row" data-row-index="16"><td>Record 16</td><td>Status 0</td><td><a href="records/item-16">detail 16</a></td><td>272 units</td></tr>
+        <tr class="data-row" data-row-index="17"><td>Record 17</td><td>Status 1</td><td><a href="records/item-17">detail 17</a></td><td>289 units</td></tr>
+        <tr class="data-row" data-row-index="18"><td>Record 18</td><td>Status 2</td><td><a href="records/item-18">detail 18</a></td><td>306 units</td></tr>
+        <tr class="data-row" data-row-index="19"><td>Record 19</td><td>Status 3</td><td><a href="records/item-19">detail 19</a></td><td>323 units</td></tr>
+        <tr class="data-row" data-row-index="20"><td>Record 20</td><td>Status 0</td><td><a href="records/item-20">detail 20</a></td><td>340 units</td></tr>
+        <tr class="data-row" data-row-index="21"><td>Record 21</td><td>Status 1</td><td><a href="records/item-21">detail 21</a></td><td>357 units</td></tr>
+        <tr class="data-row" data-row-index="22"><td>Record 22</td><td>Status 2</td><td><a href="records/item-22">detail 22</a></td><td>374 units</td></tr>
+        <tr class="data-row" data-row-index="23"><td>Record 23</td><td>Status 3</td><td><a href="records/item-23">detail 23</a></td><td>391 units</td></tr>
+        <tr class="data-row" data-row-index="24"><td>Record 24</td><td>Status 0</td><td><a href="records/item-24">detail 24</a></td><td>408 units</td></tr>
+    </tbody>
+  </table>
+  <form id="signup-form" action="forms/submit" method="post">
+    <fieldset>
+      <legend>Sign up</legend>
+      <label for="full-name">Full name</label>
+      <input id="full-name" type="text" name="fullName" value="Ada Lovelace">
+      <label for="plan-select">Plan</label>
+      <select id="plan-select" name="plan">
+        <option value="free">Free</option>
+        <option value="pro" selected>Pro</option>
+        <option value="team">Team</option>
+      </select>
+      <label for="notes-area">Notes</label>
+      <textarea id="notes-area" name="notes" rows="4" cols="40">Initial note text.</textarea>
+      <label for="updates-box"><input id="updates-box" type="checkbox" name="updates" checked> Receive updates</label>
+      <button type="submit">Create account</button>
+    </fieldset>
+  </form>
+  <div id="card-area" data-purpose="append-target"></div>
+  <article class="feed-item" data-item-id="item-1" data-category="cat-1">
+    <h3>Feed item 1: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 1. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-1">
+      <li data-tag="alpha-1">alpha tag for item 1</li>
+      <li data-tag="beta-1">beta tag for item 1</li>
+      <li data-tag="gamma-1">gamma tag for item 1</li>
+    </ul>
+    <a class="more-link" href="articles/item-1?ref=feed">Read more about feed item 1</a>
+    <img class="thumb" src="images/thumb-1.png" alt="Thumbnail for feed item 1">
+  </article>
+  <article class="feed-item" data-item-id="item-2" data-category="cat-2">
+    <h3>Feed item 2: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 2. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-2">
+      <li data-tag="alpha-2">alpha tag for item 2</li>
+      <li data-tag="beta-2">beta tag for item 2</li>
+      <li data-tag="gamma-2">gamma tag for item 2</li>
+    </ul>
+    <a class="more-link" href="articles/item-2?ref=feed">Read more about feed item 2</a>
+    <img class="thumb" src="images/thumb-2.png" alt="Thumbnail for feed item 2">
+  </article>
+  <article class="feed-item" data-item-id="item-3" data-category="cat-3">
+    <h3>Feed item 3: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 3. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-3">
+      <li data-tag="alpha-3">alpha tag for item 3</li>
+      <li data-tag="beta-3">beta tag for item 3</li>
+      <li data-tag="gamma-3">gamma tag for item 3</li>
+    </ul>
+    <a class="more-link" href="articles/item-3?ref=feed">Read more about feed item 3</a>
+    <img class="thumb" src="images/thumb-3.png" alt="Thumbnail for feed item 3">
+  </article>
+  <article class="feed-item" data-item-id="item-4" data-category="cat-4">
+    <h3>Feed item 4: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 4. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-4">
+      <li data-tag="alpha-4">alpha tag for item 4</li>
+      <li data-tag="beta-4">beta tag for item 4</li>
+      <li data-tag="gamma-4">gamma tag for item 4</li>
+    </ul>
+    <a class="more-link" href="articles/item-4?ref=feed">Read more about feed item 4</a>
+    <img class="thumb" src="images/thumb-4.png" alt="Thumbnail for feed item 4">
+  </article>
+  <article class="feed-item" data-item-id="item-5" data-category="cat-0">
+    <h3>Feed item 5: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 5. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-5">
+      <li data-tag="alpha-5">alpha tag for item 5</li>
+      <li data-tag="beta-5">beta tag for item 5</li>
+      <li data-tag="gamma-5">gamma tag for item 5</li>
+    </ul>
+    <a class="more-link" href="articles/item-5?ref=feed">Read more about feed item 5</a>
+    <img class="thumb" src="images/thumb-5.png" alt="Thumbnail for feed item 5">
+  </article>
+  <article class="feed-item" data-item-id="item-6" data-category="cat-1">
+    <h3>Feed item 6: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 6. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-6">
+      <li data-tag="alpha-6">alpha tag for item 6</li>
+      <li data-tag="beta-6">beta tag for item 6</li>
+      <li data-tag="gamma-6">gamma tag for item 6</li>
+    </ul>
+    <a class="more-link" href="articles/item-6?ref=feed">Read more about feed item 6</a>
+    <img class="thumb" src="images/thumb-6.png" alt="Thumbnail for feed item 6">
+  </article>
+  <article class="feed-item" data-item-id="item-7" data-category="cat-2">
+    <h3>Feed item 7: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 7. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-7">
+      <li data-tag="alpha-7">alpha tag for item 7</li>
+      <li data-tag="beta-7">beta tag for item 7</li>
+      <li data-tag="gamma-7">gamma tag for item 7</li>
+    </ul>
+    <a class="more-link" href="articles/item-7?ref=feed">Read more about feed item 7</a>
+    <img class="thumb" src="images/thumb-7.png" alt="Thumbnail for feed item 7">
+  </article>
+  <article class="feed-item" data-item-id="item-8" data-category="cat-3">
+    <h3>Feed item 8: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 8. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-8">
+      <li data-tag="alpha-8">alpha tag for item 8</li>
+      <li data-tag="beta-8">beta tag for item 8</li>
+      <li data-tag="gamma-8">gamma tag for item 8</li>
+    </ul>
+    <a class="more-link" href="articles/item-8?ref=feed">Read more about feed item 8</a>
+    <img class="thumb" src="images/thumb-8.png" alt="Thumbnail for feed item 8">
+  </article>
+  <article class="feed-item" data-item-id="item-9" data-category="cat-4">
+    <h3>Feed item 9: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 9. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-9">
+      <li data-tag="alpha-9">alpha tag for item 9</li>
+      <li data-tag="beta-9">beta tag for item 9</li>
+      <li data-tag="gamma-9">gamma tag for item 9</li>
+    </ul>
+    <a class="more-link" href="articles/item-9?ref=feed">Read more about feed item 9</a>
+    <img class="thumb" src="images/thumb-9.png" alt="Thumbnail for feed item 9">
+  </article>
+  <article class="feed-item" data-item-id="item-10" data-category="cat-0">
+    <h3>Feed item 10: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 10. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-10">
+      <li data-tag="alpha-10">alpha tag for item 10</li>
+      <li data-tag="beta-10">beta tag for item 10</li>
+      <li data-tag="gamma-10">gamma tag for item 10</li>
+    </ul>
+    <a class="more-link" href="articles/item-10?ref=feed">Read more about feed item 10</a>
+    <img class="thumb" src="images/thumb-10.png" alt="Thumbnail for feed item 10">
+  </article>
+  <article class="feed-item" data-item-id="item-11" data-category="cat-1">
+    <h3>Feed item 11: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 11. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-11">
+      <li data-tag="alpha-11">alpha tag for item 11</li>
+      <li data-tag="beta-11">beta tag for item 11</li>
+      <li data-tag="gamma-11">gamma tag for item 11</li>
+    </ul>
+    <a class="more-link" href="articles/item-11?ref=feed">Read more about feed item 11</a>
+    <img class="thumb" src="images/thumb-11.png" alt="Thumbnail for feed item 11">
+  </article>
+  <article class="feed-item" data-item-id="item-12" data-category="cat-2">
+    <h3>Feed item 12: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 12. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-12">
+      <li data-tag="alpha-12">alpha tag for item 12</li>
+      <li data-tag="beta-12">beta tag for item 12</li>
+      <li data-tag="gamma-12">gamma tag for item 12</li>
+    </ul>
+    <a class="more-link" href="articles/item-12?ref=feed">Read more about feed item 12</a>
+    <img class="thumb" src="images/thumb-12.png" alt="Thumbnail for feed item 12">
+  </article>
+  <article class="feed-item" data-item-id="item-13" data-category="cat-3">
+    <h3>Feed item 13: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 13. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-13">
+      <li data-tag="alpha-13">alpha tag for item 13</li>
+      <li data-tag="beta-13">beta tag for item 13</li>
+      <li data-tag="gamma-13">gamma tag for item 13</li>
+    </ul>
+    <a class="more-link" href="articles/item-13?ref=feed">Read more about feed item 13</a>
+    <img class="thumb" src="images/thumb-13.png" alt="Thumbnail for feed item 13">
+  </article>
+  <article class="feed-item" data-item-id="item-14" data-category="cat-4">
+    <h3>Feed item 14: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 14. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-14">
+      <li data-tag="alpha-14">alpha tag for item 14</li>
+      <li data-tag="beta-14">beta tag for item 14</li>
+      <li data-tag="gamma-14">gamma tag for item 14</li>
+    </ul>
+    <a class="more-link" href="articles/item-14?ref=feed">Read more about feed item 14</a>
+    <img class="thumb" src="images/thumb-14.png" alt="Thumbnail for feed item 14">
+  </article>
+  <article class="feed-item" data-item-id="item-15" data-category="cat-0">
+    <h3>Feed item 15: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 15. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-15">
+      <li data-tag="alpha-15">alpha tag for item 15</li>
+      <li data-tag="beta-15">beta tag for item 15</li>
+      <li data-tag="gamma-15">gamma tag for item 15</li>
+    </ul>
+    <a class="more-link" href="articles/item-15?ref=feed">Read more about feed item 15</a>
+    <img class="thumb" src="images/thumb-15.png" alt="Thumbnail for feed item 15">
+  </article>
+  <article class="feed-item" data-item-id="item-16" data-category="cat-1">
+    <h3>Feed item 16: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 16. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-16">
+      <li data-tag="alpha-16">alpha tag for item 16</li>
+      <li data-tag="beta-16">beta tag for item 16</li>
+      <li data-tag="gamma-16">gamma tag for item 16</li>
+    </ul>
+    <a class="more-link" href="articles/item-16?ref=feed">Read more about feed item 16</a>
+    <img class="thumb" src="images/thumb-16.png" alt="Thumbnail for feed item 16">
+  </article>
+  <article class="feed-item" data-item-id="item-17" data-category="cat-2">
+    <h3>Feed item 17: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 17. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-17">
+      <li data-tag="alpha-17">alpha tag for item 17</li>
+      <li data-tag="beta-17">beta tag for item 17</li>
+      <li data-tag="gamma-17">gamma tag for item 17</li>
+    </ul>
+    <a class="more-link" href="articles/item-17?ref=feed">Read more about feed item 17</a>
+    <img class="thumb" src="images/thumb-17.png" alt="Thumbnail for feed item 17">
+  </article>
+  <article class="feed-item" data-item-id="item-18" data-category="cat-3">
+    <h3>Feed item 18: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 18. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-18">
+      <li data-tag="alpha-18">alpha tag for item 18</li>
+      <li data-tag="beta-18">beta tag for item 18</li>
+      <li data-tag="gamma-18">gamma tag for item 18</li>
+    </ul>
+    <a class="more-link" href="articles/item-18?ref=feed">Read more about feed item 18</a>
+    <img class="thumb" src="images/thumb-18.png" alt="Thumbnail for feed item 18">
+  </article>
+  <article class="feed-item" data-item-id="item-19" data-category="cat-4">
+    <h3>Feed item 19: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 19. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-19">
+      <li data-tag="alpha-19">alpha tag for item 19</li>
+      <li data-tag="beta-19">beta tag for item 19</li>
+      <li data-tag="gamma-19">gamma tag for item 19</li>
+    </ul>
+    <a class="more-link" href="articles/item-19?ref=feed">Read more about feed item 19</a>
+    <img class="thumb" src="images/thumb-19.png" alt="Thumbnail for feed item 19">
+  </article>
+  <article class="feed-item" data-item-id="item-20" data-category="cat-0">
+    <h3>Feed item 20: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 20. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-20">
+      <li data-tag="alpha-20">alpha tag for item 20</li>
+      <li data-tag="beta-20">beta tag for item 20</li>
+      <li data-tag="gamma-20">gamma tag for item 20</li>
+    </ul>
+    <a class="more-link" href="articles/item-20?ref=feed">Read more about feed item 20</a>
+    <img class="thumb" src="images/thumb-20.png" alt="Thumbnail for feed item 20">
+  </article>
+  <article class="feed-item" data-item-id="item-21" data-category="cat-1">
+    <h3>Feed item 21: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 21. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-21">
+      <li data-tag="alpha-21">alpha tag for item 21</li>
+      <li data-tag="beta-21">beta tag for item 21</li>
+      <li data-tag="gamma-21">gamma tag for item 21</li>
+    </ul>
+    <a class="more-link" href="articles/item-21?ref=feed">Read more about feed item 21</a>
+    <img class="thumb" src="images/thumb-21.png" alt="Thumbnail for feed item 21">
+  </article>
+  <article class="feed-item" data-item-id="item-22" data-category="cat-2">
+    <h3>Feed item 22: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 22. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-22">
+      <li data-tag="alpha-22">alpha tag for item 22</li>
+      <li data-tag="beta-22">beta tag for item 22</li>
+      <li data-tag="gamma-22">gamma tag for item 22</li>
+    </ul>
+    <a class="more-link" href="articles/item-22?ref=feed">Read more about feed item 22</a>
+    <img class="thumb" src="images/thumb-22.png" alt="Thumbnail for feed item 22">
+  </article>
+  <article class="feed-item" data-item-id="item-23" data-category="cat-3">
+    <h3>Feed item 23: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 23. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-23">
+      <li data-tag="alpha-23">alpha tag for item 23</li>
+      <li data-tag="beta-23">beta tag for item 23</li>
+      <li data-tag="gamma-23">gamma tag for item 23</li>
+    </ul>
+    <a class="more-link" href="articles/item-23?ref=feed">Read more about feed item 23</a>
+    <img class="thumb" src="images/thumb-23.png" alt="Thumbnail for feed item 23">
+  </article>
+  <article class="feed-item" data-item-id="item-24" data-category="cat-4">
+    <h3>Feed item 24: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 24. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-24">
+      <li data-tag="alpha-24">alpha tag for item 24</li>
+      <li data-tag="beta-24">beta tag for item 24</li>
+      <li data-tag="gamma-24">gamma tag for item 24</li>
+    </ul>
+    <a class="more-link" href="articles/item-24?ref=feed">Read more about feed item 24</a>
+    <img class="thumb" src="images/thumb-24.png" alt="Thumbnail for feed item 24">
+  </article>
+  <article class="feed-item" data-item-id="item-25" data-category="cat-0">
+    <h3>Feed item 25: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 25. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-25">
+      <li data-tag="alpha-25">alpha tag for item 25</li>
+      <li data-tag="beta-25">beta tag for item 25</li>
+      <li data-tag="gamma-25">gamma tag for item 25</li>
+    </ul>
+    <a class="more-link" href="articles/item-25?ref=feed">Read more about feed item 25</a>
+    <img class="thumb" src="images/thumb-25.png" alt="Thumbnail for feed item 25">
+  </article>
+  <article class="feed-item" data-item-id="item-26" data-category="cat-1">
+    <h3>Feed item 26: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 26. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-26">
+      <li data-tag="alpha-26">alpha tag for item 26</li>
+      <li data-tag="beta-26">beta tag for item 26</li>
+      <li data-tag="gamma-26">gamma tag for item 26</li>
+    </ul>
+    <a class="more-link" href="articles/item-26?ref=feed">Read more about feed item 26</a>
+    <img class="thumb" src="images/thumb-26.png" alt="Thumbnail for feed item 26">
+  </article>
+  <article class="feed-item" data-item-id="item-27" data-category="cat-2">
+    <h3>Feed item 27: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 27. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-27">
+      <li data-tag="alpha-27">alpha tag for item 27</li>
+      <li data-tag="beta-27">beta tag for item 27</li>
+      <li data-tag="gamma-27">gamma tag for item 27</li>
+    </ul>
+    <a class="more-link" href="articles/item-27?ref=feed">Read more about feed item 27</a>
+    <img class="thumb" src="images/thumb-27.png" alt="Thumbnail for feed item 27">
+  </article>
+  <article class="feed-item" data-item-id="item-28" data-category="cat-3">
+    <h3>Feed item 28: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 28. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-28">
+      <li data-tag="alpha-28">alpha tag for item 28</li>
+      <li data-tag="beta-28">beta tag for item 28</li>
+      <li data-tag="gamma-28">gamma tag for item 28</li>
+    </ul>
+    <a class="more-link" href="articles/item-28?ref=feed">Read more about feed item 28</a>
+    <img class="thumb" src="images/thumb-28.png" alt="Thumbnail for feed item 28">
+  </article>
+  <article class="feed-item" data-item-id="item-29" data-category="cat-4">
+    <h3>Feed item 29: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 29. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-29">
+      <li data-tag="alpha-29">alpha tag for item 29</li>
+      <li data-tag="beta-29">beta tag for item 29</li>
+      <li data-tag="gamma-29">gamma tag for item 29</li>
+    </ul>
+    <a class="more-link" href="articles/item-29?ref=feed">Read more about feed item 29</a>
+    <img class="thumb" src="images/thumb-29.png" alt="Thumbnail for feed item 29">
+  </article>
+  <article class="feed-item" data-item-id="item-30" data-category="cat-0">
+    <h3>Feed item 30: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 30. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-30">
+      <li data-tag="alpha-30">alpha tag for item 30</li>
+      <li data-tag="beta-30">beta tag for item 30</li>
+      <li data-tag="gamma-30">gamma tag for item 30</li>
+    </ul>
+    <a class="more-link" href="articles/item-30?ref=feed">Read more about feed item 30</a>
+    <img class="thumb" src="images/thumb-30.png" alt="Thumbnail for feed item 30">
+  </article>
+  <article class="feed-item" data-item-id="item-31" data-category="cat-1">
+    <h3>Feed item 31: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 31. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-31">
+      <li data-tag="alpha-31">alpha tag for item 31</li>
+      <li data-tag="beta-31">beta tag for item 31</li>
+      <li data-tag="gamma-31">gamma tag for item 31</li>
+    </ul>
+    <a class="more-link" href="articles/item-31?ref=feed">Read more about feed item 31</a>
+    <img class="thumb" src="images/thumb-31.png" alt="Thumbnail for feed item 31">
+  </article>
+  <article class="feed-item" data-item-id="item-32" data-category="cat-2">
+    <h3>Feed item 32: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 32. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-32">
+      <li data-tag="alpha-32">alpha tag for item 32</li>
+      <li data-tag="beta-32">beta tag for item 32</li>
+      <li data-tag="gamma-32">gamma tag for item 32</li>
+    </ul>
+    <a class="more-link" href="articles/item-32?ref=feed">Read more about feed item 32</a>
+    <img class="thumb" src="images/thumb-32.png" alt="Thumbnail for feed item 32">
+  </article>
+  <article class="feed-item" data-item-id="item-33" data-category="cat-3">
+    <h3>Feed item 33: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 33. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-33">
+      <li data-tag="alpha-33">alpha tag for item 33</li>
+      <li data-tag="beta-33">beta tag for item 33</li>
+      <li data-tag="gamma-33">gamma tag for item 33</li>
+    </ul>
+    <a class="more-link" href="articles/item-33?ref=feed">Read more about feed item 33</a>
+    <img class="thumb" src="images/thumb-33.png" alt="Thumbnail for feed item 33">
+  </article>
+  <article class="feed-item" data-item-id="item-34" data-category="cat-4">
+    <h3>Feed item 34: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 34. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-34">
+      <li data-tag="alpha-34">alpha tag for item 34</li>
+      <li data-tag="beta-34">beta tag for item 34</li>
+      <li data-tag="gamma-34">gamma tag for item 34</li>
+    </ul>
+    <a class="more-link" href="articles/item-34?ref=feed">Read more about feed item 34</a>
+    <img class="thumb" src="images/thumb-34.png" alt="Thumbnail for feed item 34">
+  </article>
+  <article class="feed-item" data-item-id="item-35" data-category="cat-0">
+    <h3>Feed item 35: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 35. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-35">
+      <li data-tag="alpha-35">alpha tag for item 35</li>
+      <li data-tag="beta-35">beta tag for item 35</li>
+      <li data-tag="gamma-35">gamma tag for item 35</li>
+    </ul>
+    <a class="more-link" href="articles/item-35?ref=feed">Read more about feed item 35</a>
+    <img class="thumb" src="images/thumb-35.png" alt="Thumbnail for feed item 35">
+  </article>
+  <article class="feed-item" data-item-id="item-36" data-category="cat-1">
+    <h3>Feed item 36: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 36. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-36">
+      <li data-tag="alpha-36">alpha tag for item 36</li>
+      <li data-tag="beta-36">beta tag for item 36</li>
+      <li data-tag="gamma-36">gamma tag for item 36</li>
+    </ul>
+    <a class="more-link" href="articles/item-36?ref=feed">Read more about feed item 36</a>
+    <img class="thumb" src="images/thumb-36.png" alt="Thumbnail for feed item 36">
+  </article>
+  <article class="feed-item" data-item-id="item-37" data-category="cat-2">
+    <h3>Feed item 37: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 37. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-37">
+      <li data-tag="alpha-37">alpha tag for item 37</li>
+      <li data-tag="beta-37">beta tag for item 37</li>
+      <li data-tag="gamma-37">gamma tag for item 37</li>
+    </ul>
+    <a class="more-link" href="articles/item-37?ref=feed">Read more about feed item 37</a>
+    <img class="thumb" src="images/thumb-37.png" alt="Thumbnail for feed item 37">
+  </article>
+  <article class="feed-item" data-item-id="item-38" data-category="cat-3">
+    <h3>Feed item 38: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 38. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-38">
+      <li data-tag="alpha-38">alpha tag for item 38</li>
+      <li data-tag="beta-38">beta tag for item 38</li>
+      <li data-tag="gamma-38">gamma tag for item 38</li>
+    </ul>
+    <a class="more-link" href="articles/item-38?ref=feed">Read more about feed item 38</a>
+    <img class="thumb" src="images/thumb-38.png" alt="Thumbnail for feed item 38">
+  </article>
+  <article class="feed-item" data-item-id="item-39" data-category="cat-4">
+    <h3>Feed item 39: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 39. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-39">
+      <li data-tag="alpha-39">alpha tag for item 39</li>
+      <li data-tag="beta-39">beta tag for item 39</li>
+      <li data-tag="gamma-39">gamma tag for item 39</li>
+    </ul>
+    <a class="more-link" href="articles/item-39?ref=feed">Read more about feed item 39</a>
+    <img class="thumb" src="images/thumb-39.png" alt="Thumbnail for feed item 39">
+  </article>
+  <article class="feed-item" data-item-id="item-40" data-category="cat-0">
+    <h3>Feed item 40: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 40. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-40">
+      <li data-tag="alpha-40">alpha tag for item 40</li>
+      <li data-tag="beta-40">beta tag for item 40</li>
+      <li data-tag="gamma-40">gamma tag for item 40</li>
+    </ul>
+    <a class="more-link" href="articles/item-40?ref=feed">Read more about feed item 40</a>
+    <img class="thumb" src="images/thumb-40.png" alt="Thumbnail for feed item 40">
+  </article>
+  <article class="feed-item" data-item-id="item-41" data-category="cat-1">
+    <h3>Feed item 41: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 41. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-41">
+      <li data-tag="alpha-41">alpha tag for item 41</li>
+      <li data-tag="beta-41">beta tag for item 41</li>
+      <li data-tag="gamma-41">gamma tag for item 41</li>
+    </ul>
+    <a class="more-link" href="articles/item-41?ref=feed">Read more about feed item 41</a>
+    <img class="thumb" src="images/thumb-41.png" alt="Thumbnail for feed item 41">
+  </article>
+  <article class="feed-item" data-item-id="item-42" data-category="cat-2">
+    <h3>Feed item 42: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 42. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-42">
+      <li data-tag="alpha-42">alpha tag for item 42</li>
+      <li data-tag="beta-42">beta tag for item 42</li>
+      <li data-tag="gamma-42">gamma tag for item 42</li>
+    </ul>
+    <a class="more-link" href="articles/item-42?ref=feed">Read more about feed item 42</a>
+    <img class="thumb" src="images/thumb-42.png" alt="Thumbnail for feed item 42">
+  </article>
+  <article class="feed-item" data-item-id="item-43" data-category="cat-3">
+    <h3>Feed item 43: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 43. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-43">
+      <li data-tag="alpha-43">alpha tag for item 43</li>
+      <li data-tag="beta-43">beta tag for item 43</li>
+      <li data-tag="gamma-43">gamma tag for item 43</li>
+    </ul>
+    <a class="more-link" href="articles/item-43?ref=feed">Read more about feed item 43</a>
+    <img class="thumb" src="images/thumb-43.png" alt="Thumbnail for feed item 43">
+  </article>
+  <article class="feed-item" data-item-id="item-44" data-category="cat-4">
+    <h3>Feed item 44: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 44. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-44">
+      <li data-tag="alpha-44">alpha tag for item 44</li>
+      <li data-tag="beta-44">beta tag for item 44</li>
+      <li data-tag="gamma-44">gamma tag for item 44</li>
+    </ul>
+    <a class="more-link" href="articles/item-44?ref=feed">Read more about feed item 44</a>
+    <img class="thumb" src="images/thumb-44.png" alt="Thumbnail for feed item 44">
+  </article>
+  <article class="feed-item" data-item-id="item-45" data-category="cat-0">
+    <h3>Feed item 45: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 45. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-45">
+      <li data-tag="alpha-45">alpha tag for item 45</li>
+      <li data-tag="beta-45">beta tag for item 45</li>
+      <li data-tag="gamma-45">gamma tag for item 45</li>
+    </ul>
+    <a class="more-link" href="articles/item-45?ref=feed">Read more about feed item 45</a>
+    <img class="thumb" src="images/thumb-45.png" alt="Thumbnail for feed item 45">
+  </article>
+  <article class="feed-item" data-item-id="item-46" data-category="cat-1">
+    <h3>Feed item 46: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 46. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-46">
+      <li data-tag="alpha-46">alpha tag for item 46</li>
+      <li data-tag="beta-46">beta tag for item 46</li>
+      <li data-tag="gamma-46">gamma tag for item 46</li>
+    </ul>
+    <a class="more-link" href="articles/item-46?ref=feed">Read more about feed item 46</a>
+    <img class="thumb" src="images/thumb-46.png" alt="Thumbnail for feed item 46">
+  </article>
+  <article class="feed-item" data-item-id="item-47" data-category="cat-2">
+    <h3>Feed item 47: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 47. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-47">
+      <li data-tag="alpha-47">alpha tag for item 47</li>
+      <li data-tag="beta-47">beta tag for item 47</li>
+      <li data-tag="gamma-47">gamma tag for item 47</li>
+    </ul>
+    <a class="more-link" href="articles/item-47?ref=feed">Read more about feed item 47</a>
+    <img class="thumb" src="images/thumb-47.png" alt="Thumbnail for feed item 47">
+  </article>
+  <article class="feed-item" data-item-id="item-48" data-category="cat-3">
+    <h3>Feed item 48: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 48. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-48">
+      <li data-tag="alpha-48">alpha tag for item 48</li>
+      <li data-tag="beta-48">beta tag for item 48</li>
+      <li data-tag="gamma-48">gamma tag for item 48</li>
+    </ul>
+    <a class="more-link" href="articles/item-48?ref=feed">Read more about feed item 48</a>
+    <img class="thumb" src="images/thumb-48.png" alt="Thumbnail for feed item 48">
+  </article>
+  <article class="feed-item" data-item-id="item-49" data-category="cat-4">
+    <h3>Feed item 49: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 49. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-49">
+      <li data-tag="alpha-49">alpha tag for item 49</li>
+      <li data-tag="beta-49">beta tag for item 49</li>
+      <li data-tag="gamma-49">gamma tag for item 49</li>
+    </ul>
+    <a class="more-link" href="articles/item-49?ref=feed">Read more about feed item 49</a>
+    <img class="thumb" src="images/thumb-49.png" alt="Thumbnail for feed item 49">
+  </article>
+  <article class="feed-item" data-item-id="item-50" data-category="cat-0">
+    <h3>Feed item 50: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 50. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-50">
+      <li data-tag="alpha-50">alpha tag for item 50</li>
+      <li data-tag="beta-50">beta tag for item 50</li>
+      <li data-tag="gamma-50">gamma tag for item 50</li>
+    </ul>
+    <a class="more-link" href="articles/item-50?ref=feed">Read more about feed item 50</a>
+    <img class="thumb" src="images/thumb-50.png" alt="Thumbnail for feed item 50">
+  </article>
+  <article class="feed-item" data-item-id="item-51" data-category="cat-1">
+    <h3>Feed item 51: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 51. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-51">
+      <li data-tag="alpha-51">alpha tag for item 51</li>
+      <li data-tag="beta-51">beta tag for item 51</li>
+      <li data-tag="gamma-51">gamma tag for item 51</li>
+    </ul>
+    <a class="more-link" href="articles/item-51?ref=feed">Read more about feed item 51</a>
+    <img class="thumb" src="images/thumb-51.png" alt="Thumbnail for feed item 51">
+  </article>
+  <article class="feed-item" data-item-id="item-52" data-category="cat-2">
+    <h3>Feed item 52: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 52. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-52">
+      <li data-tag="alpha-52">alpha tag for item 52</li>
+      <li data-tag="beta-52">beta tag for item 52</li>
+      <li data-tag="gamma-52">gamma tag for item 52</li>
+    </ul>
+    <a class="more-link" href="articles/item-52?ref=feed">Read more about feed item 52</a>
+    <img class="thumb" src="images/thumb-52.png" alt="Thumbnail for feed item 52">
+  </article>
+  <article class="feed-item" data-item-id="item-53" data-category="cat-3">
+    <h3>Feed item 53: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 53. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-53">
+      <li data-tag="alpha-53">alpha tag for item 53</li>
+      <li data-tag="beta-53">beta tag for item 53</li>
+      <li data-tag="gamma-53">gamma tag for item 53</li>
+    </ul>
+    <a class="more-link" href="articles/item-53?ref=feed">Read more about feed item 53</a>
+    <img class="thumb" src="images/thumb-53.png" alt="Thumbnail for feed item 53">
+  </article>
+  <article class="feed-item" data-item-id="item-54" data-category="cat-4">
+    <h3>Feed item 54: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 54. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-54">
+      <li data-tag="alpha-54">alpha tag for item 54</li>
+      <li data-tag="beta-54">beta tag for item 54</li>
+      <li data-tag="gamma-54">gamma tag for item 54</li>
+    </ul>
+    <a class="more-link" href="articles/item-54?ref=feed">Read more about feed item 54</a>
+    <img class="thumb" src="images/thumb-54.png" alt="Thumbnail for feed item 54">
+  </article>
+  <article class="feed-item" data-item-id="item-55" data-category="cat-0">
+    <h3>Feed item 55: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 55. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-55">
+      <li data-tag="alpha-55">alpha tag for item 55</li>
+      <li data-tag="beta-55">beta tag for item 55</li>
+      <li data-tag="gamma-55">gamma tag for item 55</li>
+    </ul>
+    <a class="more-link" href="articles/item-55?ref=feed">Read more about feed item 55</a>
+    <img class="thumb" src="images/thumb-55.png" alt="Thumbnail for feed item 55">
+  </article>
+  <article class="feed-item" data-item-id="item-56" data-category="cat-1">
+    <h3>Feed item 56: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 56. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-56">
+      <li data-tag="alpha-56">alpha tag for item 56</li>
+      <li data-tag="beta-56">beta tag for item 56</li>
+      <li data-tag="gamma-56">gamma tag for item 56</li>
+    </ul>
+    <a class="more-link" href="articles/item-56?ref=feed">Read more about feed item 56</a>
+    <img class="thumb" src="images/thumb-56.png" alt="Thumbnail for feed item 56">
+  </article>
+  <article class="feed-item" data-item-id="item-57" data-category="cat-2">
+    <h3>Feed item 57: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 57. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-57">
+      <li data-tag="alpha-57">alpha tag for item 57</li>
+      <li data-tag="beta-57">beta tag for item 57</li>
+      <li data-tag="gamma-57">gamma tag for item 57</li>
+    </ul>
+    <a class="more-link" href="articles/item-57?ref=feed">Read more about feed item 57</a>
+    <img class="thumb" src="images/thumb-57.png" alt="Thumbnail for feed item 57">
+  </article>
+  <article class="feed-item" data-item-id="item-58" data-category="cat-3">
+    <h3>Feed item 58: repeated structural block</h3>
+    <p class="summary">Summary paragraph for feed item number 58. Repetitive markup reaches realistic page weight through structure rather than unique prose, exercising identical serializer paths on both oracle sides.</p>
+    <ul class="tag-list" data-list-of="item-58">
+      <li data-tag="alpha-58">alpha tag for item 58</li>
+      <li data-tag="beta-58">beta tag for item 58</li>
+      <li data-tag="gamma-58">gamma tag for item 58</li>
+    </ul>
+    <a class="more-link" href="articles/item-58?ref=feed">Read more about feed item 58</a>
+    <img class="thumb" src="images/thumb-58.png" alt="Thumbnail for feed item 58">
+  </article>
+  <script>var heavyFixtureMarker = true; /* stripped by the serializer on both sides; never executes under outside-only */</script>
+  <noscript><p>Interactive features require JavaScript.</p></noscript>
+</body>
+</html>

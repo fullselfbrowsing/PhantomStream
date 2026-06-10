@@ -1,9 +1,13 @@
-// tests/differential/oracle.test.js -- differential oracle self-test (CAPT-04).
-// Proves (1) the harness yields equivalent normalized streams for two
-// independent reference-side captures of the same frozen fixture under the
-// same scripted scenario (ref-vs-ref), and (2) the oracle can FAIL loudly:
-// tampering a single payload field reports an UNDECLARED DIVERGENCE with
-// fixture name, scenario name, and message index (negative control).
+// tests/differential/oracle.test.js -- differential oracle matrix (CAPT-04).
+// Runs every frozen fixture x scripted scenario pair reference-vs-reference
+// and proves zero divergences, so each reliability defense (truncation budget
+// overflow, mutation bursts, add/rm/attr/text ops, scroll throttle, dialog
+// interception, pause/resume lifecycle) has an oracle pair guarding it before
+// the extraction lands (D-09 gate). Two explicit guards prevent
+// identical-but-empty false confidence: the truncation pair must actually
+// truncate, and the dialog pair must actually carry dialog messages. A
+// negative control proves the oracle can FAIL loudly with fixture, scenario,
+// and message index in the error.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,45 +17,123 @@ import { normalizeReference, canonicalizeIdentity, compareStreams } from './norm
 import { DIVERGENCES } from './divergence-ledger.js';
 import { STREAM, DIFF_OP } from '../../src/protocol/messages.js';
 import * as basicMutations from './scenarios/basic-mutations.js';
-
-const fixtureHtml = readFileSync(
-  new URL('./fixtures/basic.html', import.meta.url),
-  'utf8'
-);
+import * as snapshotOnly from './scenarios/snapshot-only.js';
+import * as mutationBurst from './scenarios/mutation-burst.js';
+import * as structuralOps from './scenarios/structural-ops.js';
+import * as scroll from './scenarios/scroll.js';
+import * as dialog from './scenarios/dialog.js';
+import * as pauseResume from './scenarios/pause-resume.js';
 
 /**
- * Run one full reference-side capture of basic.html under basic-mutations
- * and return its normalized, identity-canonicalized stream.
- * The side is ALWAYS closed (watchdog setTimeout chain leak -- Pitfall 3).
+ * The full fixture x scenario matrix. Every reliability defense from the
+ * phase success criteria maps to at least one pair here. Config is defined
+ * ONCE per pair -- guard tests look their pair up in this table so harness
+ * configuration can never drift between the matrix test and its guard
+ * (Pitfall 6).
  */
-async function captureNormalizedStream() {
-  const side = createReferenceSide(fixtureHtml);
+const MATRIX = [
+  { fixture: 'basic.html', scenario: basicMutations, config: {} },
+  { fixture: 'basic.html', scenario: mutationBurst, config: {} },
+  { fixture: 'basic.html', scenario: structuralOps, config: {} },
+  { fixture: 'basic.html', scenario: scroll, config: {} },
+  { fixture: 'basic.html', scenario: pauseResume, config: {} },
+  { fixture: 'heavy-realistic.html', scenario: snapshotOnly, config: {} },
+  { fixture: 'heavy-realistic.html', scenario: structuralOps, config: {} },
+  { fixture: 'truncation-overflow.html', scenario: snapshotOnly, config: { patchRects: true } },
+  { fixture: 'canvas.html', scenario: snapshotOnly, config: {} },
+  { fixture: 'dialog.html', scenario: dialog, config: { runScripts: 'dangerously' } },
+];
+
+function loadFixture(fixtureFile) {
+  return readFileSync(new URL('./fixtures/' + fixtureFile, import.meta.url), 'utf8');
+}
+
+/**
+ * Run one full reference-side capture of a fixture under a scenario and
+ * return its normalized, identity-canonicalized stream. The side is ALWAYS
+ * closed (watchdog setTimeout chain leak -- Pitfall 3).
+ */
+async function captureNormalizedStream(fixtureFile, scenario, config) {
+  const side = createReferenceSide(loadFixture(fixtureFile), config);
   try {
-    const sent = await runScenario(side, basicMutations);
+    const sent = await runScenario(side, scenario);
     return canonicalizeIdentity(normalizeReference(sent));
   } finally {
     side.close();
   }
 }
 
-test('two independent reference captures of basic.html emit equivalent normalized streams', async () => {
-  // Run side A fully to completion BEFORE constructing side B -- interleaving
-  // would batch mutations differently per side (Pitfall 10).
-  const streamA = await captureNormalizedStream();
-  const streamB = await captureNormalizedStream();
+/**
+ * Capture the (A, B) stream pair for one matrix entry, memoized per pair so
+ * guard tests reuse the matrix run instead of re-serializing the expensive
+ * fixtures. Side A runs to FULL completion before side B is constructed --
+ * interleaving batches mutations differently per side (Pitfall 10).
+ */
+const pairCache = new Map();
+function capturePair(entry) {
+  const key = entry.fixture + '::' + entry.scenario.name;
+  if (!pairCache.has(key)) {
+    pairCache.set(key, (async () => {
+      const streamA = await captureNormalizedStream(entry.fixture, entry.scenario, entry.config);
+      const streamB = await captureNormalizedStream(entry.fixture, entry.scenario, entry.config);
+      return { streamA, streamB };
+    })());
+  }
+  return pairCache.get(key);
+}
 
-  // A silently-empty harness must not pass: at minimum ready, snapshot, and
-  // one mutations message.
-  assert.ok(streamA.length >= 3, `stream A is non-trivial (got ${streamA.length} messages)`);
-  assert.ok(streamB.length >= 3, `stream B is non-trivial (got ${streamB.length} messages)`);
+for (const entry of MATRIX) {
+  test(`two independent reference captures emit equivalent normalized streams for ${entry.scenario.name} on ${entry.fixture}`, async () => {
+    const { streamA, streamB } = await capturePair(entry);
 
-  // Ref-vs-ref has zero divergences by construction: must not throw.
-  compareStreams(streamA, streamB, 'basic.html', 'basic-mutations', DIVERGENCES);
+    // A silently-empty harness must not pass: at minimum ready, snapshot,
+    // and one overlay message.
+    assert.ok(streamA.length >= 3, `stream A is non-trivial (got ${streamA.length} messages)`);
+    assert.ok(streamB.length >= 3, `stream B is non-trivial (got ${streamB.length} messages)`);
+
+    // Ref-vs-ref has zero divergences by construction: must not throw.
+    compareStreams(streamA, streamB, entry.fixture, entry.scenario.name, DIVERGENCES);
+  });
+}
+
+test('truncation provably triggers: both sides report truncated === true with equal missingDescendants on the overflow fixture', async () => {
+  const entry = MATRIX.find((p) => p.fixture === 'truncation-overflow.html');
+  const { streamA, streamB } = await capturePair(entry);
+
+  const snapA = streamA.find((msg) => msg.type === STREAM.SNAPSHOT);
+  const snapB = streamB.find((msg) => msg.type === STREAM.SNAPSHOT);
+  assert.ok(snapA, 'stream A contains a snapshot message');
+  assert.ok(snapB, 'stream B contains a snapshot message');
+
+  // Explicit, not just deep-equal: identical-but-untruncated snapshots would
+  // deep-equal while silently never exercising the truncation defense.
+  assert.equal(snapA.payload.truncated, true, 'side A snapshot is truncated');
+  assert.equal(snapB.payload.truncated, true, 'side B snapshot is truncated');
+  assert.ok(snapA.payload.missingDescendants > 0, 'side A dropped at least one subtree');
+  assert.equal(
+    snapA.payload.missingDescendants,
+    snapB.payload.missingDescendants,
+    'both sides dropped the same number of subtrees'
+  );
+});
+
+test('dialog channel provably carries messages: both sides record at least one dialog message on the dialog fixture', async () => {
+  const entry = MATRIX.find((p) => p.fixture === 'dialog.html');
+  const { streamA, streamB } = await capturePair(entry);
+
+  // Guards against identical-but-empty false confidence (Pitfall 5): if the
+  // injected interceptor never installed, BOTH sides would emit zero dialog
+  // messages and the matrix pair would still deep-equal green.
+  const dialogsA = streamA.filter((msg) => msg.type === STREAM.DIALOG);
+  const dialogsB = streamB.filter((msg) => msg.type === STREAM.DIALOG);
+  assert.ok(dialogsA.length >= 1, `side A recorded dialog messages (got ${dialogsA.length})`);
+  assert.ok(dialogsB.length >= 1, `side B recorded dialog messages (got ${dialogsB.length})`);
 });
 
 test('tampering one payload field reports UNDECLARED DIVERGENCE with fixture, scenario, and index', async () => {
-  const stream = await captureNormalizedStream();
-  const tampered = structuredClone(stream);
+  const entry = MATRIX.find((p) => p.fixture === 'basic.html' && p.scenario === basicMutations);
+  const { streamA } = await capturePair(entry);
+  const tampered = structuredClone(streamA);
 
   // Flip one mutation op's attr value deep inside a payload.
   const mutationIndex = tampered.findIndex(
@@ -64,7 +146,7 @@ test('tampering one payload field reports UNDECLARED DIVERGENCE with fixture, sc
   attrOp.val = String(attrOp.val) + '-tampered';
 
   assert.throws(
-    () => compareStreams(stream, tampered, 'basic.html', 'basic-mutations', DIVERGENCES),
+    () => compareStreams(streamA, tampered, 'basic.html', 'basic-mutations', DIVERGENCES),
     (error) => {
       assert.match(error.message, /UNDECLARED DIVERGENCE/);
       assert.ok(error.message.includes('basic.html'), 'error names the fixture');
