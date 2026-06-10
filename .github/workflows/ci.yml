@@ -1,0 +1,26 @@
+# PhantomStream CI: full test suite (protocol + differential oracle) on the
+# jsdom 29 engine floor matrix. Read-only token, no secrets (T-01-02).
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # jsdom 29 engines: ^20.19.0 || ^22.13.0 || >=24.0.0
+        node-version: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
