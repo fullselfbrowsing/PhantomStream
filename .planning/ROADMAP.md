@@ -65,8 +65,23 @@ Plans:
   3. The viewer iframe is created with `sandbox="allow-same-origin"` only, asserted at creation (sandbox backstop from day one; full security contract lands in Phase 3)
   4. Scroll position and native `alert`/`confirm`/`prompt` dialogs are mirrored with reference parity
   5. Action-glow and progress overlays render anchored to mirrored nodes, and hosts can send custom DOM-anchored overlays through the documented, extensible overlay message type
-**Plans**: TBD
+**Plans**: 6 plans (4 waves)
 **UI hint**: yes
+
+Plans:
+**Wave 1**
+- [ ] 02-01-PLAN.md — Pure renderer core: snapshot HTML builder + Document-parameterized diff applier (jsdom-mandated seams)
+- [ ] 02-02-PLAN.md — Overlay registry + glow/progress/dialog built-ins + oracle-safe capture overlay-key forwarding
+
+**Wave 2** *(blocked on Wave 1)*
+- [ ] 02-03-PLAN.md — createViewer factory: sandbox assertion, dispatch, scale-to-fit, latched CONTROL.START resync + purity gate
+
+**Wave 3** *(blocked on Wave 2)*
+- [ ] 02-04-PLAN.md — Loopback e2e proof (recursion guard, resync round-trip, dialog/custom-overlay channels) + renderer README/divergence ledger
+- [ ] 02-05-PLAN.md — First-light demo: loopback transport module, dep-free static server, loopback-mirror.html, package exports
+
+**Wave 4** *(blocked on Wave 3)*
+- [ ] 02-06-PLAN.md — Full-suite gate + real-browser human verification checkpoint
 
 ### Phase 3: Security Pipeline — Sanitization + Privacy Masking
 **Goal**: Mirrored content is safe to render and masked content never leaves the captured page — the hard gate for anything embeddable or published
@@ -207,7 +222,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Capture Core Extraction + Differential Oracle | 5/5 | Complete    | 2026-06-10 |
-| 2. Renderer Core + Embedded Loopback Mirror | 0/TBD | Not started | - |
+| 2. Renderer Core + Embedded Loopback Mirror | 0/6 | Planned | - |
 | 3. Security Pipeline — Sanitization + Privacy Masking | 0/TBD | Not started | - |
 | 4. Relay, WS Transport & Two-Tab Demo | 0/TBD | Not started | - |
 | 5. Playwright/CDP Adapter, Remote Control & Agent Demo | 0/TBD | Not started | - |
