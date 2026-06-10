@@ -1,13 +1,21 @@
-// tests/differential/oracle.test.js -- differential oracle matrix (CAPT-04).
-// Runs every frozen fixture x scripted scenario pair reference-vs-reference
-// and proves zero divergences, so each reliability defense (truncation budget
-// overflow, mutation bursts, add/rm/attr/text ops, scroll throttle, dialog
-// interception, pause/resume lifecycle) has an oracle pair guarding it before
-// the extraction lands (D-09 gate). Two explicit guards prevent
-// identical-but-empty false confidence: the truncation pair must actually
-// truncate, and the dialog pair must actually carry dialog messages. A
-// negative control proves the oracle can FAIL loudly with fixture, scenario,
-// and message index in the error.
+// tests/differential/oracle.test.js -- dual-mode differential oracle
+// (CAPT-04, CAPT-01).
+//
+// Mode 1 (ref-vs-ref, permanent harness self-test, FIRST in the file): every
+// frozen fixture x scripted scenario pair runs as two independent reference
+// captures and proves zero divergences -- if the harness itself drifts,
+// these fail before any flipped test can misattribute the drift to the
+// extraction. Two explicit guards prevent identical-but-empty false
+// confidence (the truncation pair must actually truncate; the dialog pair
+// must actually carry dialog messages), and a negative control proves the
+// oracle can FAIL loudly with fixture, scenario, and message index.
+//
+// Mode 2 (ref-vs-EXTRACTED, the phase exit bar): the same matrix with side B
+// flipped to src/capture/index.js behind a flush-less loopback transport.
+// Every intentional divergence must be a declared ledger entry (only D1, in
+// pause-resume); any undeclared divergence fails the suite, and stale-entry
+// detection (LAST test in the file) proves every mismatch-kind ledger entry
+// actually matched a real divergence.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -181,15 +189,122 @@ test('tampering one payload field reports UNDECLARED DIVERGENCE with fixture, sc
 // test can misattribute the drift to the extraction.
 // ===========================================================================
 
-test('reference and extracted captures emit equivalent streams for basic-mutations on basic.html', async () => {
-  const refStream = await captureNormalizedStream('basic.html', basicMutations, {});
-  const extStream = await captureExtractedStream('basic.html', basicMutations, {});
+/**
+ * Capture the flipped (reference, extracted) stream pair for one matrix
+ * entry, memoized like capturePair so the flipped guards reuse the matrix
+ * run. Side A (reference) runs to FULL completion before side B (extracted)
+ * is even constructed (Pitfall 10) -- which also means the extracted side's
+ * globalThis swap window never overlaps a live reference side.
+ */
+const flippedCache = new Map();
+function captureFlippedPair(entry) {
+  const key = entry.fixture + '::' + entry.scenario.name;
+  if (!flippedCache.has(key)) {
+    flippedCache.set(key, (async () => {
+      const refStream = await captureNormalizedStream(entry.fixture, entry.scenario, entry.config);
+      const extStream = await captureExtractedStream(entry.fixture, entry.scenario, entry.config);
+      return { refStream, extStream };
+    })());
+  }
+  return flippedCache.get(key);
+}
 
-  assert.ok(refStream.length >= 3, `reference stream is non-trivial (got ${refStream.length} messages)`);
-  assert.ok(extStream.length >= 3, `extracted stream is non-trivial (got ${extStream.length} messages)`);
+// Ledger-entry ids matched across ALL flipped matrix runs. node:test runs
+// the tests in this file sequentially in definition order, so the
+// stale-entry detection test at the END of the file sees the fully
+// accumulated set.
+const matchedMismatchIds = new Set();
 
-  // Plain mutation scenarios have NO intentional divergences: the comparison
-  // must pass without consulting a single ledger entry.
-  const matched = compareStreams(refStream, extStream, 'basic.html', 'basic-mutations', DIVERGENCES);
-  assert.equal(matched.size, 0, 'plain mutation scenarios consult zero ledger entries');
+for (const entry of MATRIX) {
+  test(`reference and extracted captures emit equivalent streams for ${entry.scenario.name} on ${entry.fixture}`, async () => {
+    const { refStream, extStream } = await captureFlippedPair(entry);
+
+    assert.ok(refStream.length >= 3, `reference stream is non-trivial (got ${refStream.length} messages)`);
+    assert.ok(extStream.length >= 3, `extracted stream is non-trivial (got ${extStream.length} messages)`);
+
+    const matched = compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, DIVERGENCES);
+    for (const id of matched) matchedMismatchIds.add(id);
+
+    if (entry.scenario.name === 'pause-resume') {
+      // D1 territory: the reference's post-resume fresh-session SNAPSHOT and
+      // forced OVERLAY broadcast diverge from the extracted core's
+      // continue-same-session resume (USER OVERRIDE, 01-CONTEXT.md).
+      assert.ok(
+        matched.has('D1-resume-no-resnapshot'),
+        'pause-resume exercises ledger entry D1'
+      );
+    } else {
+      // D1 (and any future mismatch entry) must stay scoped: every scenario
+      // other than pause-resume compares clean with ZERO ledger
+      // consultations.
+      assert.equal(
+        matched.size, 0,
+        `no ledger consultation outside pause-resume (matched: ${[...matched].join(', ') || 'none'})`
+      );
+    }
+  });
+}
+
+test('flipped truncation guard: reference AND extracted snapshots report truncated === true with equal missingDescendants', async () => {
+  const entry = MATRIX.find((p) => p.fixture === 'truncation-overflow.html');
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
+  const snapRef = refStream.find((msg) => msg.type === STREAM.SNAPSHOT);
+  const snapExt = extStream.find((msg) => msg.type === STREAM.SNAPSHOT);
+  assert.ok(snapRef, 'reference stream contains a snapshot message');
+  assert.ok(snapExt, 'extracted stream contains a snapshot message');
+
+  // Explicit, not just deep-equal (same rationale as the ref-vs-ref guard):
+  // identical-but-untruncated snapshots would deep-equal while silently
+  // never exercising the truncation defense in the EXTRACTED core.
+  assert.equal(snapRef.payload.truncated, true, 'reference snapshot is truncated');
+  assert.equal(snapExt.payload.truncated, true, 'extracted snapshot is truncated');
+  assert.ok(snapRef.payload.missingDescendants > 0, 'reference dropped at least one subtree');
+  assert.equal(
+    snapExt.payload.missingDescendants,
+    snapRef.payload.missingDescendants,
+    'both implementations dropped the same number of subtrees'
+  );
+});
+
+test('flipped dialog guard: reference AND extracted record at least one dialog message on the dialog fixture', async () => {
+  const entry = MATRIX.find((p) => p.fixture === 'dialog.html');
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
+  // Identical-but-empty false confidence (Pitfall 5), flipped edition: if
+  // the EXTRACTED core's injected interceptor never installed, both sides
+  // could still deep-equal green with zero dialog traffic.
+  const dialogsRef = refStream.filter((msg) => msg.type === STREAM.DIALOG);
+  const dialogsExt = extStream.filter((msg) => msg.type === STREAM.DIALOG);
+  assert.ok(dialogsRef.length >= 1, `reference recorded dialog messages (got ${dialogsRef.length})`);
+  assert.ok(dialogsExt.length >= 1, `extracted recorded dialog messages (got ${dialogsExt.length})`);
+});
+
+test('pause-resume with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D1 is load-bearing, not decorative', async () => {
+  const entry = MATRIX.find((p) => p.scenario === pauseResume);
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
+  // The divergence is REAL: without the ledger, the exact same stream pair
+  // that passes above must fail loudly. This proves D1 is the thing
+  // permitting it, not a comparison blind spot.
+  assert.throws(
+    () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
+    /UNDECLARED DIVERGENCE/
+  );
+});
+
+// MUST run last in the file (node:test preserves in-file definition order):
+// consumes the matched-id set accumulated by every flipped matrix test.
+test('every declared mismatch divergence matched at least one real divergence', () => {
+  const mismatchEntries = DIVERGENCES.filter((entry) => entry.kind === 'mismatch');
+  assert.ok(
+    mismatchEntries.length >= 1,
+    'the ledger declares at least one mismatch-kind entry (D1)'
+  );
+  for (const entry of mismatchEntries) {
+    assert.ok(
+      matchedMismatchIds.has(entry.id),
+      `stale ledger entry: ${entry.id} never matched a real divergence (stale-entry detection, D-03)`
+    );
+  }
 });
