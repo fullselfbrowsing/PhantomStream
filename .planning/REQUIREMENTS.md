@@ -9,10 +9,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Capture Core (CAPT)
 
-- [ ] **CAPT-01**: Host can run the capture core in any injection context via an injected `Transport` interface (`send`/`flush`) — zero `chrome.runtime` / `window.FSB` references in core
-- [ ] **CAPT-02**: Host can control capture lifecycle (`start`/`stop`/`pause`/`resume`) with fresh-session semantics matching the reference implementation
-- [ ] **CAPT-03**: Extracted capture preserves the reference reliability defenses: rAF-batched diffs, self-watchdog force-flush, session/snapshot identity stamping, budgeted whole-subtree truncation with single-pass layout reads
-- [ ] **CAPT-04**: Extracted capture output is verified against `reference/` via a differential test harness on frozen fixtures, with an intentional-divergence ledger
+- [x] **CAPT-01**: Host can run the capture core in any injection context via an injected `Transport` interface (`send`/`flush`) — zero `chrome.runtime` / `window.FSB` references in core
+- [x] **CAPT-02**: Host can control capture lifecycle (`start`/`stop`/`pause`/`resume`) with fresh-session semantics matching the reference implementation
+- [x] **CAPT-03**: Extracted capture preserves the reference reliability defenses: rAF-batched diffs, self-watchdog force-flush, session/snapshot identity stamping, budgeted whole-subtree truncation with single-pass layout reads
+- [x] **CAPT-04**: Extracted capture output is verified against `reference/` via a differential test harness on frozen fixtures, with an intentional-divergence ledger
 - [ ] **CAPT-05**: Typed text in form fields is mirrored — explicit input-event capture beyond MutationObserver (`value` property changes)
 - [ ] **CAPT-06**: Nodes added after the snapshot carry computed styles consistent with snapshot-era siblings
 - [ ] **CAPT-07**: Node identity is WeakMap-based — the observed page is no longer mutated with `data-fsb-nid` attributes, while the wire-addressing contract (diff ops, overlays, remote control) is preserved
@@ -111,10 +111,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CAPT-01 | Phase 1 | Pending |
-| CAPT-02 | Phase 1 | Pending |
-| CAPT-03 | Phase 1 | Pending |
-| CAPT-04 | Phase 1 | Pending |
+| CAPT-01 | Phase 1 | Complete |
+| CAPT-02 | Phase 1 | Complete |
+| CAPT-03 | Phase 1 | Complete |
+| CAPT-04 | Phase 1 | Complete |
 | CAPT-05 | Phase 8 | Pending |
 | CAPT-06 | Phase 8 | Pending |
 | CAPT-07 | Phase 7 | Pending |
