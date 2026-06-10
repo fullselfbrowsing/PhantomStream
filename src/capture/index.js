@@ -187,6 +187,11 @@ var SHELL_PROPS = [
  * @property {(el: Element) => boolean} [skipElement]
  *   Optional. Predicate marking elements the host wants excluded from
  *   capture (its own UI). Default returns false (nothing skipped).
+ *   Applied ancestor-inclusively (closest()-like, reference parity): an
+ *   element is excluded when the predicate matches it OR any of its
+ *   ancestors, and skipped subtrees receive NO node-id assignment during
+ *   serialization -- a root-only predicate (e.g. el.id === 'my-overlay')
+ *   therefore excludes its whole subtree from both snapshots and diffs.
  */
 
 /**
@@ -222,9 +227,33 @@ export function createCapture(config) {
     error: function () { console.error.apply(console, arguments); }
   };
   var overlayProvider = cfg.overlayProvider || null;
-  var skipElement = (typeof cfg.skipElement === 'function')
+  var hostSkipElement = (typeof cfg.skipElement === 'function')
     ? cfg.skipElement
-    : function () { return false; };
+    : null;
+  var skipElement = hostSkipElement || function () { return false; };
+
+  /**
+   * Ancestor-inclusive form of the skipElement seam (reference parity:
+   * isFsbOverlay in reference/extension/dom-stream.js 266-276 used
+   * closest('[data-fsb-overlay]'), so descendants of a skipped element were
+   * excluded WITHOUT node-id assignment). Returns true when the host
+   * predicate matches el or any of its ancestor elements, so a root-only
+   * host predicate (e.g. el.id === 'my-overlay') excludes the whole subtree
+   * exactly like the reference. With no host predicate this returns false
+   * without walking -- wire-identical to the default seam.
+   *
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function skipElementWithAncestors(el) {
+    if (!hostSkipElement) return false;
+    var node = el;
+    while (node) {
+      if (hostSkipElement(node)) return true;
+      node = node.parentElement;
+    }
+    return false;
+  }
 
   /**
    * Deliver one message through the injected transport. Mirrors the
@@ -570,6 +599,13 @@ export function createCapture(config) {
         toRemove.push(cl);
         continue;
       }
+      // Reference parity (dom-stream.js 420-424): descendants of a
+      // host-skipped element are skipped too, with NO node-id assignment --
+      // removing the skipped root above already drops the whole subtree
+      // from the clone.
+      if (skipElementWithAncestors(cl)) {
+        continue;
+      }
 
       // Keep iframes live with absolutified src (D-04)
       if (tag === 'iframe') {
@@ -809,12 +845,14 @@ export function createCapture(config) {
     for (var i = 0; i < mutations.length; i++) {
       var m = mutations[i];
 
-      // Skip mutations on host-flagged elements (skipElement seam)
-      if (m.target && m.target.nodeType === Node.ELEMENT_NODE && skipElement(m.target)) {
+      // Skip mutations on host-flagged elements (skipElement seam).
+      // Ancestor-inclusive, matching the reference's isFsbOverlay closest()
+      // semantics: mutations anywhere inside a skipped subtree are dropped.
+      if (m.target && m.target.nodeType === Node.ELEMENT_NODE && skipElementWithAncestors(m.target)) {
         continue;
       }
       if (m.target && m.target.nodeType === Node.TEXT_NODE &&
-          m.target.parentElement && skipElement(m.target.parentElement)) {
+          m.target.parentElement && skipElementWithAncestors(m.target.parentElement)) {
         continue;
       }
 
@@ -823,7 +861,7 @@ export function createCapture(config) {
         for (var a = 0; a < m.addedNodes.length; a++) {
           var added = m.addedNodes[a];
           if (added.nodeType === Node.ELEMENT_NODE) {
-            if (skipElement(added)) continue;
+            if (skipElementWithAncestors(added)) continue;
 
             var parentNid = m.target.dataset ? m.target.dataset.fsbNid : null;
             if (!parentNid) continue; // Parent not tracked

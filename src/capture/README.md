@@ -26,7 +26,7 @@ const capture = createCapture({ transport, logger, overlayProvider, skipElement 
 | `transport` | yes | — | Message sink: `{ send(type, payload), flush?() }`. The factory throws `Error('transport-send-required')` when `transport.send` is not a function — factory-time validation is the only place the capture may throw. |
 | `logger` | no | console-backed (`info`/`warn`/`error`) | Receives lifecycle logs and every contained transport error. |
 | `overlayProvider` | no | `null` | `() => ({ glow, progress })` — read host overlay state for the overlay side channel. With no provider, overlay messages carry `{ glow: null, progress: null }` (reference wire shape for an overlay-free page). |
-| `skipElement` | no | `() => false` | `(el) => boolean` — predicate marking elements the host wants excluded from capture (its own UI). Applied to clone elements during serialization and to mutation targets during diffing. |
+| `skipElement` | no | `() => false` | `(el) => boolean` — predicate marking elements the host wants excluded from capture (its own UI). Applied **ancestor-inclusively** (like `closest()`, matching the reference's overlay handling): an element is excluded when the predicate matches it or any of its ancestors, so a root-only predicate (e.g. `el.id === 'my-overlay'`) excludes its whole subtree. Skipped subtrees receive no node-id assignment during serialization, and mutations anywhere inside them are dropped during diffing. |
 
 A readiness ping (`STREAM.READY`) is emitted once, at factory creation
 (divergence-ledger entry D3 — the reference pinged at script-load time).
