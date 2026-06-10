@@ -1,7 +1,8 @@
 ---
 phase: 2
 slug: renderer-core-embedded-loopback-mirror
-status: draft
+status: approved
+reviewed_at: 2026-06-10
 shadcn_initialized: false
 preset: none
 created: 2026-06-10
@@ -284,6 +285,8 @@ Self-healing behavior visible to users: ≥3 stale-target misses or ≥2 apply f
 ## Demo Page Contract (`examples/loopback-mirror.html`) `[NEW]`
 
 The project's "first light" demo. One HTML file, native ES module imports, zero dependencies, dark, clean.
+
+**Focal point:** the MIRROR pane (live mirror) is the primary visual anchor; the pulsing LIVE badge is the secondary attention cue.
 
 **Layout:**
 - Page: `background: #0f1117; color: #e0e0e0;` padding 24px; `max-width: 1200px; margin: 0 auto`
