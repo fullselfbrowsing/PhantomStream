@@ -41,9 +41,16 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 5 plans (4 waves)
 
 Plans:
+**Wave 1**
 - [ ] 01-01-PLAN.md — Walking skeleton: jsdom infra + differential harness self-test (ref-vs-ref) + CI workflow
+
+**Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 01-02-PLAN.md — Frozen fixture matrix + scripted scenarios covering every defense, ref-vs-ref green
+
+**Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 01-03-PLAN.md — Single-file capture core extraction behind the Transport seam + purity gate
+
+**Wave 4** *(blocked on Wave 3 completion)*
 - [ ] 01-04-PLAN.md — Oracle flip: reference-vs-extracted equivalence + divergence ledger finalization
 - [ ] 01-05-PLAN.md — Lifecycle + reliability defense test suite (rAF, watchdog, identity, truncation)
 
