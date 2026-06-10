@@ -863,12 +863,15 @@ export function createCapture(config) {
           if (added.nodeType === Node.ELEMENT_NODE) {
             if (skipElementWithAncestors(added)) continue;
 
-            var parentNid = m.target.dataset ? m.target.dataset.fsbNid : null;
+            // Node identity is read through the NID_ATTR protocol constant
+            // (single source of truth, src/protocol/messages.js) -- never a
+            // hardcoded dataset-key mirror that could silently desync.
+            var parentNid = m.target.getAttribute ? m.target.getAttribute(NID_ATTR) : null;
             if (!parentNid) continue; // Parent not tracked
 
             var html = processAddedNode(added);
             var nextSib = added.nextElementSibling;
-            var beforeNid = (nextSib && nextSib.dataset) ? nextSib.dataset.fsbNid || null : null;
+            var beforeNid = (nextSib && nextSib.getAttribute) ? nextSib.getAttribute(NID_ATTR) || null : null;
 
             diffs.push({
               op: 'add',
@@ -883,13 +886,13 @@ export function createCapture(config) {
         for (var r = 0; r < m.removedNodes.length; r++) {
           var removed = m.removedNodes[r];
           if (removed.nodeType === Node.ELEMENT_NODE) {
-            var nid = removed.dataset ? removed.dataset.fsbNid : null;
+            var nid = removed.getAttribute ? removed.getAttribute(NID_ATTR) : null;
             if (!nid) continue; // Not tracked
             diffs.push({ op: 'rm', nid: nid });
           }
         }
       } else if (m.type === 'attributes') {
-        var targetNid = m.target.dataset ? m.target.dataset.fsbNid : null;
+        var targetNid = m.target.getAttribute ? m.target.getAttribute(NID_ATTR) : null;
         if (!targetNid) continue;
 
         var attrVal = m.target.getAttribute(m.attributeName);
@@ -909,7 +912,7 @@ export function createCapture(config) {
         });
       } else if (m.type === 'characterData') {
         var parentEl = m.target.parentElement;
-        var textNid = parentEl && parentEl.dataset ? parentEl.dataset.fsbNid : null;
+        var textNid = (parentEl && parentEl.getAttribute) ? parentEl.getAttribute(NID_ATTR) : null;
         if (!textNid) continue;
 
         diffs.push({
