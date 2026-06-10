@@ -248,6 +248,21 @@ for (const entry of MATRIX) {
         postResume.length, 1,
         'extracted stream carries the post-resume mutation in the continued session'
       );
+
+      // Pause containment (iteration-2 WR-03): the during-pause mutation
+      // must never reach the wire ("missed by design", pause-resume.js).
+      // Proven blind spot: a pause() that fails to disconnect the observer
+      // leaks the during-pause op as an extra MUTATIONS(SESSION_1) message
+      // that D1's clauses (a)/(b) would excuse AND that still satisfies the
+      // postResume assertion above -- only this direct absence check
+      // hard-fails the broken-pause regression.
+      const leaked = extStream.filter((msg) => msg.type === STREAM.MUTATIONS
+        && Array.isArray(msg.payload.mutations)
+        && msg.payload.mutations.some((op) => op.op === DIFF_OP.ATTR && op.val === 'during-pause'));
+      assert.equal(
+        leaked.length, 0,
+        'paused mutations never appear on the extracted wire'
+      );
     } else {
       // D1 (and any future mismatch entry) must stay scoped: every scenario
       // other than pause-resume compares clean with ZERO ledger
