@@ -511,24 +511,30 @@ function compareStreams(refMsgs, extMsgs, fixture, scenario, ledger) {
 | A3 | Sending `{glow: null, progress: null}` overlay messages when no `overlayProvider` is configured preserves wire parity with FSB-absent reference state | Reference Source Map (overlay) | Low — oracle catches any mismatch immediately; alternative (skip send) becomes a ledger entry |
 | A4 | GitHub Actions `ubuntu-latest` runners include all needed Node versions via setup-node (no browser deps needed) | CI | Very low — standard; jsdom needs no system packages without `canvas` |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All four questions were resolved by plan decisions during Phase 1 planning — resolution pointers added per checker feedback.
 
 1. **Does the extracted core emit `ext:dom-ready` and when?**
    - What we know: reference pings `domStreamReady` at module load (script-injection time); the extracted factory has no "load" moment — hosts call `createCapture` explicitly.
    - What's unclear: whether READY belongs in `start()`, in the factory, or becomes an FSB-adapter concern (Phase 6).
    - Recommendation: emit `STREAM.READY` from the factory or on first `start()` and record the timing difference as a ledger entry; planner decides placement. The oracle should exclude or map the ready message explicitly either way.
+   - **RESOLVED:** `STREAM.READY` is emitted once at factory creation (Plan 01-03 Task 2); the timing difference is ledger entry D3 (documented-mapping, Plan 01-04 Task 2).
 
 2. **Should `pingDomStream`/readiness probing survive extraction?**
    - What we know: it exists for MV3 service-worker → content-script polling; direct function calls make it moot.
    - Recommendation: drop from core; note in ledger; the MV3 adapter (Phase 6, ADPT-01) reintroduces it host-side.
+   - **RESOLVED:** dropped from the core (Plan 01-03 Task 2); ledger entry D4 (Plan 01-04 Task 2). The sibling `domStreamRequestOverlay` control path is likewise dropped and ledgered as D5 — both reintroduced host-side by the Phase 6 MV3 adapter (ADPT-01).
 
 3. **Exact `Math.random` handling for session IDs.**
    - What we know: normalization canonicalizes session IDs (locked), so entropy never needs faking for the oracle. Defense tests asserting ID FORMAT can regex-match `^stream_[a-z0-9]+_[a-z0-9]{6}$`.
    - Recommendation: normalize, don't fake. Only revisit if a scenario needs cross-side ID equality (none identified).
+   - **RESOLVED:** normalize-don't-fake adopted — ordinal `SESSION_n`/`SNAPSHOT_n` canonicalization in `tests/differential/normalize.js` (Plan 01-01 Task 2); format regex assertions in the lifecycle tests (Plan 01-05 Task 1).
 
 4. **CI Node matrix.**
    - What we know: jsdom 29 floor is 20.19/22.13/24; local dev is 24.14.1; repo docs say library targets Node 18+.
    - Recommendation (Claude's discretion granted): matrix `[20, 22, 24]` with setup-node@v6 + checkout@v6; optionally add an `engines`/docs note that tests require Node ≥ 20.19 while `src/` remains 18-compatible.
+   - **RESOLVED:** matrix `[20, 22, 24]` in `.github/workflows/ci.yml` (Plan 01-01 Task 3); the Node-floor docs note ("tests require Node ≥ 20.19; `src/` remains Node 18+") lands in `src/capture/README.md` (Plan 01-05 Task 3).
 
 ## Environment Availability
 
