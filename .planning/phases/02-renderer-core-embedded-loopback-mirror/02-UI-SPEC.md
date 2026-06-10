@@ -278,7 +278,7 @@ Behavior `[PARITY dashboard.js:3405-3443]`:
 | Dialog open/close | instant show/hide (no animation) | `[PARITY — reference has none; do not add]` |
 | Reduced motion | wrap pulse + glow transitions in `@media (prefers-reduced-motion: no-preference)` (demo + viewer) | `[NEW, additive]` |
 
-Self-healing behavior visible to users: ≥3 stale-target misses or ≥2 apply failures trigger a `dash:request-snapshot` re-sync — the mirror repaints rather than drifting `[PARITY dashboard.js:3224-3335; CONTEXT decision]`. Miss accounting goes to the injected logger this phase (no UI surface — VIEW-02 is Phase 4).
+Self-healing behavior visible to users: ≥3 stale-target misses or ≥2 apply failures trigger a re-sync via `CONTROL.START` (`dash:dom-stream-start` — `dash:request-snapshot` does not exist in the protocol; see 02-RESEARCH.md Pattern 2) — the mirror repaints rather than drifting `[PARITY dashboard.js:3224-3335; CONTEXT decision]`. Miss accounting goes to the injected logger this phase (no UI surface — VIEW-02 is Phase 4).
 
 ---
 

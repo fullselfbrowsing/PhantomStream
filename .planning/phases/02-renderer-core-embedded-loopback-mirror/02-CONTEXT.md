@@ -16,7 +16,7 @@ Sandbox backstop from day one: viewer iframe created with `sandbox="allow-same-o
 ## Implementation Decisions
 
 ### Viewer API & Embedding Surface
-- **Factory shape:** `createViewer({ container, transport })` **auto-attaches on creation** and returns a minimal handle `{ detach, destroy }` — criterion 1 says calling it yields a live mirror. No events surface yet (Phase 4), no addressing API yet (Phase 7). Keep the handle minimal; extend later phases.
+- **Factory shape:** `createViewer({ container, transport })` **auto-attaches on creation** and returns a minimal handle `{ detach, destroy, registerOverlay }` — criterion 1 says calling it yields a live mirror. No events surface yet (Phase 4), no addressing API yet (Phase 7). Keep the handle minimal; extend later phases. *(Ratified during planning: `registerOverlay` lives on the handle because the overlay registry is per-viewer-instance — this reconciles the minimal-handle decision with the locked `registerOverlay(kind, renderFn)` extension mechanism below.)*
 - **Scaling:** reference-parity scale-to-fit — the mirror scales to the container while preserving the captured viewport aspect ratio, driven by `ResizeObserver` on the container.
 - **Layout modes DROPPED from the framework:** inline/maximized/pip/fullscreen are FSB dashboard UI, not framework concerns. The viewer always fills its container; layout is the host's responsibility. Document this explicitly (the `layout.js` module from `src/renderer/README.md`'s planned split is NOT extracted).
 - **Loopback demo:** `examples/loopback-mirror.html` importing capture + viewer as native ES modules, served by a dependency-free Node static-serve script (`npm run example:loopback`) since ESM imports need http. Zero external dependencies.

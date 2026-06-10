@@ -553,19 +553,19 @@ if (tokens.length !== 1 || tokens[0] !== 'allow-same-origin') {
 
 All other load-bearing claims in this document were verified by reading the cited sources or by executing jsdom experiments in this session.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Dialog visibility affordance in the one-page demo (Pitfall 3)**
+1. **Dialog visibility affordance in the one-page demo (Pitfall 3)** — **RESOLVED:** log-line affordance adopted (plan 02-05 T2; verified in 02-06 step 7); linger divergence not taken.
    - What we know: open+closed both apply inside the alert-blocked task; two-context deployments are unaffected.
    - What's unclear: whether the user wants the log-line proof (parity-clean) or a minimum-visible linger (better demo, ledger divergence).
    - Recommendation: plan the log-line; offer the linger as an explicitly-flagged optional divergence.
 
-2. **Capture edit to forward custom overlay kinds (Pattern 5)**
+2. **Capture edit to forward custom overlay kinds (Pattern 5)** — **RESOLVED:** edit adopted in plan 02-02 T2 (additive, default-off, full oracle re-run pins safety).
    - What we know: `broadcastOverlayState` drops all provider keys except glow/progress; VIEW-04 requires custom overlays "through the documented message type"; the edit is oracle-safe (no fixture uses an overlayProvider).
    - What's unclear: whether touching the Phase-1 capture module is acceptable in this phase's scope.
    - Recommendation: make the edit (few lines, wire-compatible, oracle re-run via `npm test` proves safety) and document in the capture README; the alternative — viewer-only `registerOverlay` with no wire path for custom kinds — under-delivers VIEW-04's "hosts can send custom DOM-anchored overlays."
 
-3. **`detach` vs `destroy` exact semantics**
+3. **`detach` vs `destroy` exact semantics** — **RESOLVED:** recommendation adopted verbatim in plan 02-03 T1 (detach = unsubscribe + remove DOM; destroy = detach + disconnect ResizeObserver + clear registry, idempotent); registerOverlay ratified onto the handle (CONTEXT.md amended).
    - What we know: handle is `{ detach, destroy }` (CONTEXT-locked); no events surface.
    - Recommendation (planner detail): `detach()` = unsubscribe transport + remove viewer DOM (re-attachable not required this phase); `destroy()` = detach + disconnect ResizeObserver + clear registry/state, idempotent.
 
