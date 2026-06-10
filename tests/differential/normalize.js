@@ -44,6 +44,36 @@ export function normalizeReference(msgs) {
   });
 }
 
+// Valid protocol type strings the extracted core may emit through the
+// Transport seam -- anything else is a corrupted loopback record, not a
+// divergence, and must fail loudly here rather than slide into comparison.
+const STREAM_TYPES = new Set(Object.values(STREAM));
+
+/**
+ * Map raw extracted-side loopback records ({ type, payload } as pushed by
+ * the harness loopback transport) into the same canonical { type, payload }
+ * shape normalizeReference produces. Types are already protocol STREAM
+ * values, so they pass through (after a sanity check); payloads pass through
+ * untouched. READY normalizes to an empty payload on BOTH sides, so the
+ * reference's script-load ping (an { action }-only message) and the extracted
+ * core's factory-creation ping compare equal (the residual timing-contract
+ * difference is ledger entry D3).
+ *
+ * @param {{ type: string, payload: object }[]} msgs  loopback transport records
+ * @returns {{ type: string, payload: object }[]}
+ */
+export function normalizeExtracted(msgs) {
+  return msgs.map((msg) => {
+    if (!STREAM_TYPES.has(msg.type)) {
+      throw new Error('unknown-extracted-type: ' + String(msg.type));
+    }
+    if (msg.type === STREAM.READY) {
+      return { type: STREAM.READY, payload: {} };
+    }
+    return { type: msg.type, payload: msg.payload };
+  });
+}
+
 /**
  * Replace nondeterministic identity values with ordinal placeholders by
  * first occurrence: streamSessionId strings become SESSION_1, SESSION_2, ...
