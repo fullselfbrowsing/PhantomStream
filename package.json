@@ -5,7 +5,8 @@
   "type": "module",
   "main": "src/protocol/index.js",
   "exports": {
-    "./protocol": "./src/protocol/index.js"
+    "./protocol": "./src/protocol/index.js",
+    "./capture": "./src/capture/index.js"
   },
   "scripts": {
     "test": "node --test \"tests/**/*.test.js\""
