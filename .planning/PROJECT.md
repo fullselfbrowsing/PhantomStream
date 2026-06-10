@@ -33,13 +33,14 @@ standalone framework.
 - ✓ Viewer reconstruction in sandboxed iframe with scaling, layout modes, overlays, dialog mirroring — existing (`reference/dashboard/dashboard.js`)
 - ✓ Remote control reverse path (click/type/scroll with coordinate reverse-mapping) — existing
 - ✓ Clean dependency-free protocol module — existing (`src/protocol/`)
+- ✓ Capture core decoupled from `chrome.runtime`/`window.FSB` behind an injected `Transport` interface — runs in any injection context, with lifecycle (`start`/`stop`/`pause`/`resume`), purity grep-enforced in CI, and reliability defenses test-pinned — Validated in Phase 1 (CAPT-01, CAPT-02, CAPT-03)
+- ✓ Extracted capture verified against `reference/` via a dual-jsdom differential oracle on frozen fixtures, with machine-enforced divergence ledger (D1 mismatch + D2–D5 mappings) — Validated in Phase 1 (CAPT-04)
 
 ### Active
 
 <!-- Current scope. Building toward these. -->
 
 **Framework extraction (first priority):**
-- [ ] Capture core decoupled from `chrome.runtime`/`window.FSB` behind an injected `Transport` interface — runs in any injection context
 - [ ] Transport-agnostic relay with pluggable backends (WebSocket reference implementation)
 - [ ] Renderer decoupled from the FSB dashboard into an embeddable viewer component
 - [ ] All six inherited limitations fixed in the standalone v1:
@@ -135,4 +136,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-09 after initialization*
+*Last updated: 2026-06-10 after Phase 1 completion (capture core extracted; differential oracle green ref-vs-extracted; CI live on Node 20/22/24)*
