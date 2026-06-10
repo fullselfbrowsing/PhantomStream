@@ -86,29 +86,57 @@ export const DIVERGENCES = [
       // scenario.
       if (scenarioName !== 'pause-resume') return false;
 
-      // (a) Ref-only trailing message: the reference stream is longer once
-      // its two extra post-resume messages (SNAPSHOT + forced OVERLAY) shift
-      // every later index past the extracted stream's end.
-      if (refMsg !== undefined && extMsg === undefined) return true;
+      // Every shape D1 excuses traces back to the reference's post-resume
+      // re-snapshot, whose messages by construction carry the FRESH minted
+      // identity (ordinal >= 2). A reference message still on the original
+      // SESSION_1/SNAPSHOT_1 identity can never be a D1 artifact, so it is
+      // never excused (WR-02 tightening: the predicate claims D1's exact
+      // shape, not "any mismatch inside pause-resume").
+      const refPayload = (refMsg && refMsg.payload) || {};
+      const refSession = placeholderOrdinal(refPayload.streamSessionId, 'SESSION');
+      const refSnapshot = placeholderOrdinal(refPayload.snapshotId, 'SNAPSHOT');
+      const refHasFreshIdentity = (refSession !== null && refSession >= 2)
+        || (refSnapshot !== null && refSnapshot >= 2);
+
+      // (a) Ref-only trailing message: the reference's two extra post-resume
+      // messages shift every later index past the extracted stream's end.
+      // In the healthy alignment the trailing region is exactly the forced
+      // OVERLAY plus the re-stamped post-resume MUTATIONS (the post-resume
+      // SNAPSHOT aligns against the extracted MUTATIONS as the type mismatch
+      // in clause b). A trailing SNAPSHOT therefore means the extracted side
+      // FAILED to emit its post-resume MUTATIONS (e.g. resume() never
+      // re-armed the observer) -- that regression must hard-fail, so
+      // SNAPSHOT is deliberately NOT excusable here.
+      if (refMsg !== undefined && extMsg === undefined) {
+        return refHasFreshIdentity
+          && (refMsg.type === STREAM.OVERLAY || refMsg.type === STREAM.MUTATIONS);
+      }
       if (refMsg === undefined || extMsg === undefined) return false;
 
-      // (b) Shifted-index TYPE mismatch: e.g. the reference's post-resume
-      // SNAPSHOT or OVERLAY aligned against the extracted side's post-resume
-      // MUTATIONS.
-      if (refMsg.type !== extMsg.type) return true;
+      const extPayload = extMsg.payload || {};
+      const extSession = placeholderOrdinal(extPayload.streamSessionId, 'SESSION');
+      const extSnapshot = placeholderOrdinal(extPayload.snapshotId, 'SNAPSHOT');
+
+      // (b) Shifted-index TYPE mismatch: the reference's post-resume
+      // SNAPSHOT or forced OVERLAY (fresh identity) aligned against the
+      // extracted side's post-resume MUTATIONS, which must continue the
+      // ORIGINAL session (SESSION_1/SNAPSHOT_1 -- the thing D1 says still
+      // happens). Any other type pairing (e.g. the extracted side emitting
+      // the wrong message type after resume) stays an undeclared divergence.
+      if (refMsg.type !== extMsg.type) {
+        return refHasFreshIdentity
+          && (refMsg.type === STREAM.SNAPSHOT || refMsg.type === STREAM.OVERLAY)
+          && extMsg.type === STREAM.MUTATIONS
+          && extSession === 1
+          && extSnapshot === 1;
+      }
 
       // (c) Identity-placeholder mismatch: same type, but the reference
       // payload carries the FRESH post-resume identity (SESSION_2 /
       // SNAPSHOT_2) where the extracted payload continues SESSION_1 /
       // SNAPSHOT_1 -- exactly the same-vs-fresh structure that ordinal
       // canonicalization deliberately preserves (D-02 signal).
-      const refPayload = refMsg.payload || {};
-      const extPayload = extMsg.payload || {};
-      const refSession = placeholderOrdinal(refPayload.streamSessionId, 'SESSION');
-      const extSession = placeholderOrdinal(extPayload.streamSessionId, 'SESSION');
       if (refSession !== null && extSession !== null && refSession > extSession) return true;
-      const refSnapshot = placeholderOrdinal(refPayload.snapshotId, 'SNAPSHOT');
-      const extSnapshot = placeholderOrdinal(extPayload.snapshotId, 'SNAPSHOT');
       if (refSnapshot !== null && extSnapshot !== null && refSnapshot > extSnapshot) return true;
 
       return false;

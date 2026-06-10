@@ -233,6 +233,21 @@ for (const entry of MATRIX) {
         matched.has('D1-resume-no-resnapshot'),
         'pause-resume exercises ledger entry D1'
       );
+
+      // Belt-and-braces (WR-02): D1 excuses the REFERENCE's post-resume
+      // re-snapshot, never a silent extracted-side resume failure. Assert
+      // directly that the thing D1 says must still happen, happened: the
+      // extracted core streamed the post-resume mutation in the CONTINUED
+      // session (the after-resume attr op from the scenario, stamped
+      // SESSION_1 -- not a fresh identity, not missing).
+      const postResume = extStream.filter((msg) => msg.type === STREAM.MUTATIONS
+        && msg.payload.streamSessionId === 'SESSION_1'
+        && Array.isArray(msg.payload.mutations)
+        && msg.payload.mutations.some((op) => op.op === DIFF_OP.ATTR && op.val === 'after-resume'));
+      assert.equal(
+        postResume.length, 1,
+        'extracted stream carries the post-resume mutation in the continued session'
+      );
     } else {
       // D1 (and any future mismatch entry) must stay scoped: every scenario
       // other than pause-resume compares clean with ZERO ledger
@@ -289,6 +304,26 @@ test('pause-resume with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D1 is lo
   // permitting it, not a comparison blind spot.
   assert.throws(
     () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
+    /UNDECLARED DIVERGENCE/
+  );
+});
+
+test('a broken resume (post-resume MUTATIONS missing) is NOT excused by D1 -- the tightened ledger fails loudly', async () => {
+  const entry = MATRIX.find((p) => p.scenario === pauseResume);
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
+  // Synthesize the regression WR-02 warned about: resume() silently failing
+  // to re-arm the observer would drop the extracted side's post-resume
+  // MUTATIONS message. Before the predicate was tightened, clause (a)
+  // excused EVERY ref-only trailing message -- including the now-trailing
+  // post-resume SNAPSHOT -- so this exact stream pair compared green.
+  const lastMutationsIndex = extStream.map((msg) => msg.type).lastIndexOf(STREAM.MUTATIONS);
+  assert.ok(lastMutationsIndex >= 0, 'extracted stream contains a MUTATIONS message to drop');
+  const broken = extStream.slice(0, lastMutationsIndex)
+    .concat(extStream.slice(lastMutationsIndex + 1));
+
+  assert.throws(
+    () => compareStreams(refStream, broken, entry.fixture, entry.scenario.name, DIVERGENCES),
     /UNDECLARED DIVERGENCE/
   );
 });
