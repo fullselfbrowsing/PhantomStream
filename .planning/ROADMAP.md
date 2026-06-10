@@ -38,7 +38,14 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. The extracted capture core contains zero `chrome.runtime`/`window.FSB` references (grep-enforced in CI) and emits through any injected `Transport` (`send`/`flush`), proven with a loopback transport
   3. Host can `start`/`stop`/`pause`/`resume` capture with fresh-session semantics (new session ID + snapshot ID per session) matching the reference implementation
   4. The reference reliability defenses survive extraction and are enforced by tests: rAF-batched diffs, self-watchdog force-flush, session/snapshot identity stamping, and budgeted whole-subtree truncation with single-pass layout reads
-**Plans**: TBD
+**Plans**: 5 plans (4 waves)
+
+Plans:
+- [ ] 01-01-PLAN.md — Walking skeleton: jsdom infra + differential harness self-test (ref-vs-ref) + CI workflow
+- [ ] 01-02-PLAN.md — Frozen fixture matrix + scripted scenarios covering every defense, ref-vs-ref green
+- [ ] 01-03-PLAN.md — Single-file capture core extraction behind the Transport seam + purity gate
+- [ ] 01-04-PLAN.md — Oracle flip: reference-vs-extracted equivalence + divergence ledger finalization
+- [ ] 01-05-PLAN.md — Lifecycle + reliability defense test suite (rAF, watchdog, identity, truncation)
 
 ### Phase 2: Renderer Core + Embedded Loopback Mirror
 **Goal**: A page can mirror itself live — capture core plus embeddable viewer running end-to-end in one page with zero infrastructure
@@ -192,7 +199,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Capture Core Extraction + Differential Oracle | 0/TBD | Not started | - |
+| 1. Capture Core Extraction + Differential Oracle | 0/5 | Not started | - |
 | 2. Renderer Core + Embedded Loopback Mirror | 0/TBD | Not started | - |
 | 3. Security Pipeline — Sanitization + Privacy Masking | 0/TBD | Not started | - |
 | 4. Relay, WS Transport & Two-Tab Demo | 0/TBD | Not started | - |
