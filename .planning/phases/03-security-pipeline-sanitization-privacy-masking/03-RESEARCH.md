@@ -585,25 +585,29 @@ const mXssCases = [
 | A3 | The Phase 8 input-event capture (CAPT-05 typed-text) will use the same `maskInputFn` seam introduced here | Pattern 3 / Pitfall 10 | Low: noted as a forward compat hook for Phase 8; Phase 3 doesn't depend on CAPT-05 landing |
 | A4 | Render-side CSS sanitization (defense-in-depth) is a duplicate of capture-side CSS scrub, not a stricter pass | Pattern 4 | Low: same regex on both sides is fine and CONTEXT does not lock different policies per side |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Where should `sanitizeForWire` live — inner function in `createCapture` (single-file precedent like Phase 1) or sibling `src/capture/sanitize.js` (clearer naming, easier static-scan)?**
    - What we know: CONTEXT explicitly leaves "Module layout" to Claude's discretion; chokepoint NAMING is what's required.
    - What's unclear: closure-vs-module tradeoff is a planner judgment call given the static-scan purity test will work either way.
    - Recommendation: **single-file inner function** for parity with Phase 1's deliberate single-file extraction (D-10), unless the planner finds the file is now over a soft size threshold; the static-scan purity test in either case checks call-site coverage of the name.
+   - **RESOLVED (plan 03-01):** Adopted as recommended — sanitizeForWire is a named inner function of createCapture; the 03-05 static-scan purity test pins call-site coverage of the name.
 
 2. **Does the planner adopt the `<template>` parsing upgrade now (CONTEXT deferred-list says "MAY take it")?**
    - What we know: jsdom 29 verified this session as parsing correctly with `<template>`. The renderer README has it queued for "Phase 3+".
    - What's unclear: scope. Adopting the template upgrade simultaneously gives the render-side sanitizer a much cleaner walker target (DocumentFragment with full element coverage), AND fixes the WR-02 stale-miss counted drop. It's an obviously synergistic pick.
    - Recommendation: **adopt now.** Pair the chokepoint and the parser upgrade in the same plan.
+   - **RESOLVED (plan 03-02 Task 2):** Adopted — the diff ADD branch parses via template-context + sanitizeFragment + importNode; the WR-02 tr/td drop pin deliberately flips to successful insertion.
 
 3. **Should counters and ledger entry be one or many?**
    - What we know: parity with D6 = single ledger entry, scenario-pinned. Phase 2 has multiple counters but ONE miss accumulator.
    - Recommendation: ONE ledger entry (sanitization-strip divergence, scoped to the new `sanitize-corpus.html` fixture); multiple counters per strip category for observability (`strippedHandlers`, `blockedUrlSchemes`, `maskedTextNodes`, `maskedInputs`, `blockedSubtrees`, `cssScrubs`).
+   - **RESOLVED (plans 03-01 + 03-04):** Adopted — ONE ledger entry (D7-capture-sanitization, scenario-pinned to sanitize-divergence) and the six per-category counters declared in createCapture.
 
 4. **`<object>`/`<embed>` neutralization rendering — placeholder vs full removal?**
    - What we know: CONTEXT leaves "How `<object>`/`<embed>` neutralization renders viewer-side" to discretion.
    - Recommendation: **drop entirely** (consistent with `<script>`/`<noscript>` reference parity) since these elements are nearly always third-party plugin shells that won't render under sandbox anyway. Document in `docs/SECURITY.md`.
+   - **RESOLVED (plans 03-01/03-02/03-05):** Adopted — object/embed subtrees are dropped entirely at both chokepoints (script/noscript parity); documented in docs/SECURITY.md.
 
 ## Environment Availability
 
