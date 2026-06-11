@@ -1,8 +1,8 @@
 ---
 phase: 02-renderer-core-embedded-loopback-mirror
-reviewed: 2026-06-11T18:24:02Z
+reviewed: 2026-06-11T21:14:46Z
 depth: standard
-files_reviewed: 20
+files_reviewed: 16
 files_reviewed_list:
   - examples/loopback-mirror.html
   - examples/loopback-transport.js
@@ -14,282 +14,194 @@ files_reviewed_list:
   - src/renderer/index.js
   - src/renderer/overlays.js
   - src/renderer/snapshot.js
-  - tests/capture-overlay-forward.test.js
   - tests/renderer-diff.test.js
   - tests/renderer-loopback.test.js
-  - tests/renderer-overlays.test.js
-  - tests/renderer-purity.test.js
   - tests/renderer-snapshot.test.js
-  - tests/renderer-viewer.test.js
   - tests/differential/divergence-ledger.js
   - tests/differential/oracle.test.js
   - tests/differential/scenarios/text-childlist.js
 findings:
-  critical: 1
-  warning: 3
-  info: 4
-  total: 8
-status: issues_found
+  critical: 0
+  warning: 0
+  info: 6
+  total: 6
+status: clean
 ---
 
-# Phase 2: Code Review Report
+# Phase 2: Code Review Report (iteration 2 — fix verification)
 
-**Reviewed:** 2026-06-11T18:24:02Z
+**Reviewed:** 2026-06-11T21:14:46Z
 **Depth:** standard
-**Files Reviewed:** 20
-**Status:** issues_found
+**Files Reviewed:** 16
+**Status:** clean (info-only backlog remains)
 
 ## Summary
 
-Reviewed the Phase 2 renderer core extraction (`src/renderer/*`), the two capture
-extensions (E1 overlay forwarding, E2 text-childlist fidelity fix), the loopback
-demo (`examples/*`), and the test/oracle additions. Parity claims were verified
-against the reference (`reference/dashboard/dashboard.js:2831-2869` scale math
-and `:3209-3356` mutation handler both match the extraction, including the
-`viewportHeight || 1080` asymmetry that looks like a typo but is exact parity).
-The documented Phase 3 deferrals (raw `inlineStyles`/`html`, `on*` survival,
-sandbox-as-control) were treated as accepted and are not re-flagged here.
+Re-review after the iteration-1 fix pass (CR-01, WR-01, WR-02, WR-03). All
+four fixes were verified as correct and complete — three by executable probe,
+all four against their pinned tests — and no new Critical or Warning defects
+were found. Full suite re-run during review: **130/130 pass**
+(`node --test tests/*.test.js tests/differential/*.test.js`).
 
-Two findings were verified by executable probe rather than inspection:
+### Fix verification
 
-1. **The E2 extension has a structural data-loss bug** (CR-01): any childList
-   record containing a bare text node emits a flattening `text` op for the
-   target, which destroys mirrored element children that still exist in the
-   live DOM. `el.innerHTML = 'hello <b>world</b>'` and
-   `el.appendChild(textNode)` on a mixed-content element both corrupt the
-   mirror with little or no self-heal signal. The D6 oracle scenario and the
-   loopback tests only exercise pure-text targets, so the suite is green
-   around the bug.
-2. **The demo server can be crashed by one request** (WR-01): a read-stream
-   error after a successful `stat` (unreadable file, stat/open race) is an
-   unhandled `'error'` event — probe-confirmed uncaught exception.
+**CR-01 (mixed-content flattening) — FIXED, verified by test + fresh probe.**
+The gate at `src/capture/index.js:974`
+(`if (sawBareTextNode && !m.target.firstElementChild)`) closes BOTH
+iteration-1 probe shapes, and both are now pinned end-to-end:
 
-The remainder of the extraction is solid: containment discipline is consistent
-(every post-factory error routes to the injected logger), the sandbox assertion
-is correct and pinned, identity reservation in E1 is enforced last-write, the
-resync latch has exactly one release site, and the differential-ledger D1/D6
-predicates are tightly scoped with stale-entry detection. Test coverage is
-unusually rigorous (negative controls, empty-ledger guards, both-direction
-belt-and-braces assertions).
+- Shape A (`appendChild(textNode)` into a mixed container) — pinned at
+  `tests/renderer-loopback.test.js:469`: zero wire signal, mirrored span
+  survives intact.
+- Shape B (`innerHTML = 'hello <b>world</b>'`) — pinned at
+  `tests/renderer-loopback.test.js:522`: the `<b>` add op applies, no
+  flattening text op is ever emitted for the mixed target.
 
-## Critical Issues
+Beyond the pinned shapes, the gate was probed against the two intra-batch
+interleavings where the target's element-children state CHANGES between the
+mutation and the flush (the gate reads the flush-time live DOM, so these are
+the only places it could mis-decide):
 
-### CR-01: E2 text op flattens mixed-content targets, destroying live mirrored elements
+- **Mixed → empty inside one batch** (`box.appendChild(text)` then
+  `box.removeChild(span)`): the gate sees empty and EMITS. Probe-verified
+  convergent: the text op carries the flush-time live text, the mirror ends
+  byte-identical to the live target, and the trailing `rm` for the
+  already-flattened span lands as a *counted, warned* stale miss (feeds the
+  self-heal threshold — conservative direction, never silent). See IN-05.
+- **Empty → mixed inside one batch** (`box.textContent = 'x'` then
+  `box.appendChild(em)`): the gate sees mixed and SUPPRESSES. Probe-verified:
+  the `em` add op applies, mirror structure intact, residual is text-only
+  drift — exactly the documented residual class.
 
-**File:** `src/capture/index.js:959-971` (emission), `src/renderer/diff.js:134-142` (applier side of the interaction)
-**Severity:** BLOCKER
+There is **no remaining shape where mixed-content drift is silent AND
+unaccounted**: every suppression path is the documented residual (text drift,
+structure intact — `src/capture/README.md` entry E2 and the D6 ledger
+rationale at `tests/differential/divergence-ledger.js:162-173` both document
+it), and every emission path is convergent with the live DOM. The D6 ledger
+predicate (extracted-only trailing MUTATIONS of pure text ops) still matches
+the text-only `text-childlist` scenario, the empty-ledger negative control
+(`oracle.test.js:360`) keeps D6 load-bearing, and stale-entry detection keeps
+it from going decorative.
 
-**Issue:** The E2 fidelity fix emits `{ op: 'text', nid: targetNid, text: m.target.textContent }`
-whenever a childList record contains **any** bare TEXT/CDATA node among its
-added/removed nodes. The renderer applies this via `textContent = m.text`,
-which **replaces all children** of the mirrored target. For the pure case
-(`el.textContent = '...'` on a text-only element — the only shape D6, the
-`text-childlist` oracle scenario, and the loopback tests cover) this is
-correct. For mixed-content records it destroys mirrored structure that still
-exists in the live DOM.
+**WR-01 (serve.js crash) — FIXED, verified by probe.**
+`examples/serve.js:73-77` rejects non-files (404, covers FIFO/socket/device
+hang), and `:87` attaches the stream `'error'` handler before `pipe`
+(`res.destroy()` — headers already sent, abort the socket). Re-ran the exact
+iteration-1 crash probe: a mode-000 file now yields an aborted socket
+(`UND_ERR_SOCKET` client-side), the process survives, and the very next
+request serves 200. Traversal guard unchanged and still effective.
 
-Probe-verified (jsdom, capture → `applyMutations` end-to-end):
+**WR-02 (silent add-op parse drop) — FIXED.**
+`src/renderer/diff.js:103-117`: a div-context parse drop now emits a dedicated
+`logger.warn` naming the real cause AND counts through `recordStaleMiss`, so
+the ≥ 3 threshold self-heals via `CONTROL.START`. Pinned by
+`tests/renderer-diff.test.js:133` (single drop counted, third accumulated drop
+fires `stale-mutation-parent`). The queued proper fix (template-context
+parsing) is recorded in `src/renderer/README.md` "Behavioral changes queued
+for Phase 3+" as required.
 
-- **Shape A — `box.appendChild(document.createTextNode('!'))`** where `box`
-  contains `<span data-fsb-nid="2">a</span>`:
-  emitted ops = `[{op:'text', nid:'1', text:'a!'}]` only.
-  Live: `<div nid=1><span nid=2>a</span>!</div>`. Mirror: `<div nid=1>a!</div>`
-  — the span (its element, id, inline styles) is gone from the mirror,
-  **zero stale misses counted**, no resync trigger. Silent permanent drift.
-- **Shape B — `box.innerHTML = 'hello <b>world</b>'`**:
-  emitted ops = `add(<b nid=2>)`, then `text(nid 1, 'hello world')` — the
-  trailing text op destroys the `<b>` the add op just inserted.
-  Live: `hello <b>world</b>`. Mirror: `hello world` flat. Only 1 stale miss
-  accrues (the follow-up nid-attr echo op), below the 3-miss resync threshold.
+**WR-03 (raw viewportWidth interpolation) — FIXED.**
+`src/renderer/snapshot.js:104` coerces via `parseInt(p.viewportWidth, 10) ||
+1920`; the file-header insertion inventory (`:18-28`) now lists all five
+wire-value insertion points including this one. Pinned by
+`tests/renderer-snapshot.test.js:60` with both a leading-digit breakout probe
+and a fully non-numeric fallback probe. parseInt edge cases checked: `0`,
+negative, `'0x10'`, non-string — none produce markup breakout.
 
-These are extremely common mutation shapes (`innerHTML` with mixed content,
-text-node appends to mixed containers), so the "trustworthy mirror" core value
-is violated in a way the reference never was — the reference dropped the text
-(drift in text only); E2 trades that for **destruction of mirrored element
-subtrees plus stale nids**. The comment at `src/capture/index.js:955-958`
-("orders its rm ops before the text op ... matching the live DOM end state")
-only reasons about the removal case; the mixed-add and append cases were not
-considered.
-
-**Fix:** Gate the emission on the live target having no element children at
-process time. For `textContent = '...'` (the D6 case) the element children were
-just removed, so `firstElementChild` is null and the op still emits; for mixed
-content the flattening op is suppressed:
-
-```js
-if (sawBareTextNode) {
-  var textTargetNid = m.target.getAttribute ? m.target.getAttribute(NID_ATTR) : null;
-  if (textTargetNid && !textOpNids[textTargetNid]
-      && !m.target.firstElementChild) {   // never flatten a target that still
-    textOpNids[textTargetNid] = true;     // has live element children
-    diffs.push({ op: 'text', nid: textTargetNid, text: m.target.textContent });
-  }
-}
-```
-
-This reverts mixed-content text changes to the reference's drop behavior
-(text drift, structure intact) — strictly better than structural destruction.
-Document the residual gap in the E2 README entry and the D6 ledger rationale,
-or close it properly with a target-subtree re-serialization op. Add oracle/
-loopback coverage for both probe shapes (the current `text-childlist` scenario
-and `tests/renderer-loopback.test.js` rows are all text-only elements, which
-is why 126/126 stays green around this bug).
-
-## Warnings
-
-### WR-01: One request can crash the demo server (unhandled read-stream error)
-
-**File:** `examples/serve.js:76`
-**Severity:** WARNING
-
-**Issue:** `createReadStream(filePath).pipe(res)` attaches no `'error'`
-handler, and `pipe()` does not forward source errors. If `stat` succeeds but
-the stream open/read fails — unreadable file (mode 000), file deleted between
-`stat` and open (TOCTOU), special file — the `'error'` event is unhandled and
-the whole Node process dies. Probe-confirmed: a mode-000 file produces
-`UNCAUGHT EXCEPTION ... EACCES` and process exit with the exact handler shape
-from this file. The security-posture header (T-02-16/T-02-17) covers traversal
-and binding, but a single-request full-process DoS is outside that accepted
-register. Also related: `stats.isFile()` is never checked, so a FIFO/socket in
-the tree would hang the response.
-
-**Fix:**
-```js
-if (!stats.isFile()) { res.writeHead(404, ...); res.end('not found'); return; }
-res.writeHead(200, { 'content-type': MIME[extname(filePath)] || 'application/octet-stream' });
-const stream = createReadStream(filePath);
-stream.on('error', () => res.destroy()); // headers already sent; abort the socket
-stream.pipe(res);
-```
-
-### WR-02: Add-op parse-drop is silent — context-dependent elements vanish from the mirror with no self-heal signal
-
-**File:** `src/renderer/diff.js:100-103`
-**Severity:** WARNING
-
-**Issue:** The add op parses `m.html` via a `<div>` fragment
-(`temp.innerHTML = m.html; var newNode = temp.firstElementChild;`). HTML
-parsing is context-sensitive: `<tr>`, `<td>`, `<tbody>`, `<col>`, `<option>`
-etc. are discarded when parsed in a div context, so `newNode` is null and the
-op is dropped via `if (!newNode) break;` — **no stale miss, no apply failure,
-no log line**. A live table-row insertion (a very common dynamic-page
-mutation) silently never reaches the mirror, and because nothing is counted,
-the resync threshold never engages — the same "silent drift, no self-heal"
-class the E2 fix exists to eliminate. This is verified reference parity
-(`dashboard.js:3241-3244` is byte-identical), but unlike the other inherited
-gaps it appears in neither the renderer README's Phase 3+ queue nor the
-divergence ledger, so it is currently untracked.
-
-**Fix:** Parse through a `<template>` element, which accepts any content
-context:
-```js
-var temp = doc.createElement('template');
-temp.innerHTML = m.html;
-var newNode = temp.content ? temp.content.firstElementChild : null;
-```
-At minimum, count the parse-drop (`recordStaleMiss(DIFF_OP.ADD, m.parentNid)`
-or an applyFailure) and add a logger.warn so the miss-accounting resync path
-can self-heal — and record the gap in the README's queued-changes list if the
-fix is deferred.
-
-### WR-03: `viewportWidth` interpolated raw into srcdoc markup — undocumented injection point in the future sanitizer chokepoint
-
-**File:** `src/renderer/snapshot.js:91`
-**Severity:** WARNING
-
-**Issue:** `'<meta name="viewport" content="width=' + (p.viewportWidth || 1920) + '">'`
-inserts a wire-controlled value into the srcdoc with no escaping and no
-numeric coercion. A non-numeric `viewportWidth` (e.g.
-`'1"><img src=x onerror=...>'`) breaks out of the attribute into head markup.
-Today this grants nothing beyond the already-raw `payload.html` (and the
-sandbox blocks execution), but the file header documents exactly two raw
-insertions (`inlineStyles`, `payload.html`) plus quote-escaped stylesheet
-hrefs — this third raw path is **not** in that inventory, and
-`buildSnapshotHtml` is the declared Phase 3 sanitization chokepoint. An
-unlisted injection point in the chokepoint is precisely what gets missed when
-SEC-02 lands. The typed contract (`SnapshotPayload.viewportWidth: number`)
-is not enforced anywhere on the receive side.
-
-**Fix:** Coerce to a number at the insertion site and add it to the header's
-insertion inventory:
-```js
-'<meta name="viewport" content="width=' + (parseInt(p.viewportWidth, 10) || 1920) + '">'
-```
+No regressions introduced by any of the four fixes were found.
 
 ## Info
+
+Accepted backlog — out of fix scope. IN-01 through IN-04 are re-listed
+unchanged from iteration 1 (still present, still contained); IN-05 and IN-06
+are new observations from this pass, both below Warning severity.
 
 ### IN-01: Dialog `type` flows into prototype-chain lookup and an uncoerced `charAt` call
 
 **File:** `src/renderer/overlays.js:411` and `src/renderer/overlays.js:427-428`
-**Severity:** INFO
-
-**Issue:** `ICON_SVG[type] || ICON_SVG.alert` on attacker-influenced wire data:
-`type: 'constructor'` resolves a truthy prototype member, so the fallback is
-skipped and `dialogIconEl.innerHTML` is set to the stringified native function
-(garbage text; not exploitable, since only native-function strings are
-reachable). Separately, a non-string `type` (e.g. `123`) throws at
-`type.charAt(0)` — contained by `createViewer`'s dispatch wrapper, but
-uncontained for direct consumers of the exported `createOverlays` handle.
-**Fix:** `var type = String(dialog.type || 'alert');` and guard the icon map:
-`Object.prototype.hasOwnProperty.call(ICON_SVG, type) ? ICON_SVG[type] : ICON_SVG.alert`
-(or build `ICON_SVG` with `Object.create(null)`).
+**Issue:** `ICON_SVG[type] || ICON_SVG.alert` resolves prototype members for
+`type: 'constructor'` (garbage native-function text, not exploitable); a
+non-string truthy `type` throws at `type.charAt(0)` — contained by
+`createViewer`'s dispatch wrapper, uncontained for direct `createOverlays`
+consumers.
+**Fix:** `var type = String(dialog.type || 'alert');` plus a
+`hasOwnProperty` guard (or `Object.create(null)` for `ICON_SVG`).
 
 ### IN-02: ResizeObserver resolved from the importing realm, not the host window
 
 **File:** `src/renderer/index.js:467`
-**Severity:** INFO
-
-**Issue:** The factory carefully derives `doc`/`win` from
-`container.ownerDocument` ("works in any window — host page, jsdom test,
-future multi-doc", line 148-152), but the resize wiring checks the bare global
-`typeof ResizeObserver !== 'undefined'`. In a multi-window host the observer
-is constructed from (or missed in) the wrong realm, silently disabling
-container-resize rescaling.
+**Issue:** Factory derives `doc`/`win` from `container.ownerDocument` but the
+resize wiring checks the bare global `typeof ResizeObserver`; in a
+multi-window host the observer binds to (or is missed in) the wrong realm.
 **Fix:** `if (win && typeof win.ResizeObserver === 'function') { resizeObserver = new win.ResizeObserver(...); }`
 
 ### IN-03: Null mirror document drops mutation batches with zero accounting
 
 **File:** `src/renderer/diff.js:70`
-**Severity:** INFO
+**Issue:** `if (!doc || !doc.body) return;` silently discards the batch — no
+counter, log, or resync path. Reference parity; reachable post-onload.
+**Fix:** At minimum `logger.warn('[Renderer] mutation batch skipped: no mirror document')`;
+consider counting toward `applyFailures`.
 
-**Issue:** `if (!doc || !doc.body) return;` silently discards the whole batch.
-Unlike stale misses there is no counter, log, or resync path, so a torn-down
-or inaccessible `contentDocument` after streaming begins drifts invisibly.
-Reference parity (`dashboard.js:3216`), and pre-onload drops are documented —
-but this branch is reachable post-onload too.
-**Fix:** At minimum `logger.warn('[Renderer] mutation batch skipped: no mirror document')`
-so the condition is observable; consider counting it toward `applyFailures`.
+### IN-04: Loopback fan-out lets one throwing handler starve later subscribers
 
-### IN-04: Loopback fan-out lets one throwing handler starve the rest of the subscribers
+**File:** `examples/loopback-transport.js:44-46` (duplicated at `tests/renderer-loopback.test.js:135-139`)
+**Issue:** `handlers.forEach(function (h) { h(type, payload); })` — a throwing
+handler aborts delivery to every later subscriber for that message and
+surfaces as an unhandled microtask error. The viewer's dispatch is wrapped;
+the demo's `onControl` glue and host-added handlers are not.
+**Fix:** Per-handler try/catch with a `console.error`.
 
-**File:** `examples/loopback-transport.js:44-46`
-**Severity:** INFO
+### IN-05: E2 text op can inflate the stale-miss counter when a later record in the same batch removes an element the flatten already consumed
 
-**Issue:** `handlers.forEach(function (h) { h(type, payload); })` runs all
-subscribers in one microtask: a throwing handler aborts delivery to every
-later subscriber for that message and surfaces as an unhandled microtask
-error. The viewer's dispatch is containment-wrapped, but the demo's
-`onControl` glue and any host-added handler are not. The duplicated copy in
-`tests/renderer-loopback.test.js:135-139` has the same property (benign there —
-recorder handlers never throw).
-**Fix:** Isolate per handler:
-```js
-handlers.forEach(function (h) {
-  try { h(type, payload); } catch (e) { console.error('loopback handler failed', e); }
-});
-```
+**File:** `src/capture/index.js:974-985` (emission) / `src/renderer/diff.js:127-134` (where the miss lands)
+**Issue:** New observation from the CR-01 edge probe (not a regression of the
+fix — a property of E2 itself). When one rAF batch contains a bare-text
+record on a target FOLLOWED by an element-removal record on the same target
+(e.g. `box.appendChild(text)` then `box.removeChild(span)`), the emitted op
+order is `[text(box), rm(span)]`: the flatten removes the mirrored span
+first, so the `rm` records a stale miss. Probe-verified: end state is fully
+convergent (mirror equals live), and the miss is counted and warned — the
+only cost is accounting noise that biases TOWARD self-heal (three such
+batches trigger an unnecessary but harmless re-snapshot). Below Warning
+because there is no drift, no silence, and the failure direction is
+conservative.
+**Fix (optional, if resync churn ever shows up):** order childList-derived
+text ops after all rm ops for the same flush, or skip the `rm` stale-miss
+count when the target's parent was flattened earlier in the same batch.
+
+### IN-06: serve.js `stat` follows symlinks — a symlink inside the repo escapes the ROOT-prefix guard
+
+**File:** `examples/serve.js:59-67`
+**Issue:** The ROOT containment check runs on the lexically resolved path,
+and `stat`/`createReadStream` follow symlinks, so a symlink committed or
+created inside the repo tree pointing outside ROOT would serve out-of-root
+content. Consistent with the accepted dev-demo posture (localhost-only,
+T-02-16/T-02-17; an actor able to plant symlinks in the working tree already
+has local file access), so Info-tier backlog, not a gate item.
+**Fix:** `const real = await realpath(filePath);` and re-check
+`real === ROOT || real.startsWith(ROOT + sep)` before streaming.
 
 ---
 
 ## Verification notes
 
-- Full suite re-run during review: 126/126 pass (`node --test tests/*.test.js tests/differential/*.test.js`).
-- CR-01 verified by probe: capture core + `applyMutations` end-to-end in jsdom; both shapes reproduced with exact op streams and mirror states recorded above.
-- WR-01 verified by probe: exact handler shape from `examples/serve.js` reproduced; uncaught `EACCES` exception confirmed.
-- WR-02 parity verified against `reference/dashboard/dashboard.js:3241-3244`.
-- `updateScale`'s `viewportHeight || 1080` (no `pageHeight` fallback) checked against `dashboard.js:2834-2835` — exact parity, deliberately not flagged.
-- Phase 3 deferrals (raw inlineStyles/html, `on*` survival, per-op querySelector) honored as accepted scope; not flagged.
+- Full suite re-run during review: **130/130 pass**.
+- WR-01 re-probed with the iteration-1 crash reproduction (mode-000 file
+  after successful `stat`): aborted socket, process alive, subsequent
+  requests served. Probe artifacts removed.
+- CR-01 gate probed end-to-end (capture core → `applyMutations` in jsdom)
+  against both intra-batch interleavings not covered by the pinned shape-A/B
+  tests; both convergent or documented-residual (details above, IN-05).
+- D6 ledger entry re-checked post-gate: predicate still matches the
+  text-only `text-childlist` scenario; empty-ledger negative control and
+  stale-entry detection both still load-bearing.
+- Documented residuals honored as accepted scope and not re-flagged:
+  mixed-content text drift (README E2 + D6 rationale), raw
+  `inlineStyles`/`payload.html` (Phase 3 SEC-01/SEC-02), `on*` survival,
+  div-context parsing (now tracked in the Phase 3+ queue), reference-parity
+  quirks (R11 dialog identity nesting, `viewportHeight || 1080` asymmetry).
 
-_Reviewed: 2026-06-11T18:24:02Z_
+_Reviewed: 2026-06-11T21:14:46Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
