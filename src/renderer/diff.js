@@ -100,7 +100,22 @@ export function applyMutations(doc, mutations, counters, hooks) {
             var temp = doc.createElement('div');
             temp.innerHTML = m.html;
             var newNode = temp.firstElementChild;
-            if (!newNode) break;
+            if (!newNode) {
+              // div-context innerHTML parsing DROPS context-dependent
+              // elements (<tr>, <td>, <tbody>, <col>, ...): the html parses
+              // to no element and the op cannot apply (reference parity,
+              // dashboard.js:3241-3244). Never silent (review WR-02): warn
+              // with the real cause, then count the drop through the
+              // stale-miss path so the >= 3 resync threshold self-heals the
+              // missing subtree via a fresh snapshot. Queued proper fix
+              // (template-context parsing) in src/renderer/README.md
+              // "Behavioral changes queued for Phase 3+".
+              logger.warn('[Renderer] add op dropped: html parsed to no element in div context', {
+                parentNid: m.parentNid || ''
+              });
+              recordStaleMiss(DIFF_OP.ADD, m.parentNid);
+              break;
+            }
             if (m.beforeNid) {
               var before = selectByNid(m.beforeNid);
               parent.insertBefore(newNode, before); // null before == appendChild

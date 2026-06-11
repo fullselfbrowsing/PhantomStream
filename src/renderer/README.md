@@ -258,6 +258,17 @@ Accepted, visible, owned — not forgotten:
   gates on streaming state). The miss accounting + `CONTROL.START` resync
   self-heals any resulting drift; do not write tests that assume zero loss
   before the first load.
+- **Div-context add-op parsing drops context-dependent elements (Phase 3).**
+  The add op parses `m.html` through a `<div>` fragment (reference parity,
+  dashboard.js:3241-3244): `<tr>`, `<td>`, `<tbody>`, `<col>` and friends
+  parse to no element in that context, so a live table-row insertion never
+  reaches the mirror. Since review WR-02 the drop is no longer silent — a
+  dedicated `logger.warn` names the cause and the drop counts through the
+  stale-miss accounting, so the ≥ 3 `CONTROL.START` resync threshold
+  self-heals the missing subtree via a fresh snapshot. The queued proper
+  fix is `<template>`-context parsing (accepts any content context),
+  allowed only with the full renderer/loopback/oracle suite green and
+  unchanged behavior for currently-passing shapes.
 - **Per-op `querySelector` nid lookups (Phase 7).** Every diff op resolves
   its target via `doc.querySelector('[data-fsb-nid="..."]')` (reference
   parity). The planned `Map<nid, Node>` index replaces the hot path when the

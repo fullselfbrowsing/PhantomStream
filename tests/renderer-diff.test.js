@@ -130,6 +130,41 @@ test("'add' with beforeNid uses insertBefore; a missing beforeNid lookup behaves
   }
 });
 
+test("an 'add' whose html parses to no element in the div context warns and counts a stale miss (WR-02)", () => {
+  const env = setupEnv();
+  try {
+    const doc = env.makeDoc(BODY_HTML);
+    const rec = recordingHooks();
+    const counters = freshCounters();
+    // <tr> is context-dependent: div-context innerHTML parsing discards it
+    // (verified against jsdom), so firstElementChild is null and the op
+    // cannot apply. The drop must feed the miss accounting instead of
+    // vanishing silently (review WR-02).
+    applyMutations(doc, [
+      { op: DIFF_OP.ADD, parentNid: '1', html: '<tr><td>row</td></tr>' },
+    ], counters, rec.hooks);
+    assert.equal(counters.staleMisses, 1, 'parse-drop counted toward the resync threshold');
+    assert.equal(counters.applyFailures, 0, 'a parse-drop is not an apply failure');
+    assert.ok(
+      rec.warns.some((args) => String(args[0]).includes('parsed to no element')),
+      'dedicated warn names the real cause (not a nid miss)'
+    );
+    assert.equal(rec.resyncs.length, 0, 'one drop stays below the threshold of 3');
+
+    // Parse-drops and nid misses share the accounting: the third
+    // accumulated miss fires the standard self-heal resync.
+    applyMutations(doc, [
+      { op: DIFF_OP.ADD, parentNid: '1', html: '<td>cell</td>' },
+      { op: DIFF_OP.ADD, parentNid: '1', html: '<tbody></tbody>' },
+    ], counters, rec.hooks);
+    assert.equal(counters.staleMisses, 3, 'every parse-drop accumulates');
+    assert.ok(rec.resyncs.length >= 1, 'threshold reached: self-heal resync requested');
+    assert.equal(rec.resyncs[0].reason, 'stale-mutation-parent', 'shared miss-path reason string');
+  } finally {
+    env.teardown();
+  }
+});
+
 test("'rm' removes the nid-addressed element", () => {
   const env = setupEnv();
   try {
