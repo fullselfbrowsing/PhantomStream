@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhantomStream — Loopback Mirror</title>
+<!--
+  PhantomStream "first light" demo: one page mirroring itself live through
+  an in-page loopback transport. Zero network, zero servers, zero deps —
+  capture and viewer are imported directly as native ES modules (the
+  embedded-SDK adapter, ADPT-04). Serve with: npm run example:loopback
+  Design contract: .planning/phases/02-.../02-UI-SPEC.md (locked).
+-->
+<style>
+  * { box-sizing: border-box; }
+  body {
+    background: #0f1117;
+    color: #e0e0e0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    padding: 24px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  /* ---- header ------------------------------------------------------- */
+  header { margin-bottom: 24px; }
+  .header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  h1 {
+    font-size: 28px;
+    font-weight: 600;
+    line-height: 1.2;
+    margin: 0;
+  }
+  .subtitle {
+    font-size: 15px;
+    font-weight: 400;
+    line-height: 1.5;
+    color: #888;
+    margin: 8px 0 0;
+  }
+
+  /* ---- LIVE badge ---------------------------------------------------- */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.2;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .badge-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #22c55e;
+  }
+  .badge.paused .badge-dot {
+    background: #6b7280;
+    animation: none; /* solid when paused */
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .badge-dot { animation: pulse 2000ms ease-in-out infinite; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+  }
+
+  /* ---- two-pane grid -------------------------------------------------- */
+  .panes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 900px) {
+    .panes { grid-template-columns: 1fr; }
+  }
+  .pane {
+    background: #1e1e2e;
+    border: 1px solid #333;
+    border-radius: 12px;
+    padding: 16px;
+  }
+  .pane-header {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.2;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #888;
+    margin-bottom: 8px;
+  }
+
+  /* ---- controls -------------------------------------------------------
+     Accent #f59e0b is reserved for the primary CTA only (UI-SPEC). */
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .controls button {
+    font: 600 13px/1.2 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 150ms ease, filter 150ms ease;
+  }
+  .btn-primary {
+    background: #f59e0b;
+    color: #0f1117;
+    border: 1px solid transparent;
+  }
+  .btn-primary:hover { filter: brightness(1.1); }
+  .btn-secondary {
+    background: transparent;
+    border: 1px solid #333;
+    color: #e0e0e0;
+  }
+  .btn-secondary:hover { background: rgba(255, 255, 255, 0.06); }
+
+  /* ---- playground rows ------------------------------------------------ */
+  .rows {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+  }
+  .rows li {
+    background: #0f1117;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 8px 16px;
+    font-size: 15px;
+  }
+
+  /* ---- mirror stage ---------------------------------------------------
+     The viewer auto-attaches its root (stamped data-phantomstream-ui)
+     into this stage; the empty state sits behind it and shows through
+     until the first snapshot loads. */
+  .stage {
+    position: relative;
+    aspect-ratio: 16 / 10;
+    min-height: 200px;
+  }
+  .empty-state {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    text-align: center;
+    color: #888;
+  }
+  .empty-state h2 {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.2;
+    margin: 0;
+  }
+  .empty-state p {
+    font-size: 13px;
+    font-weight: 400;
+    margin: 0;
+  }
+
+  /* ---- footer + channel log ------------------------------------------- */
+  footer {
+    margin-top: 24px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #888;
+  }
+  .log { margin-top: 8px; }
+  .log div { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-row">
+    <h1>PhantomStream — Loopback Mirror</h1>
+    <span class="badge" id="badge"><span class="badge-dot"></span><span id="badge-label">LIVE</span></span>
+  </div>
+  <p class="subtitle">A page mirroring itself live. No network, no server — one document, two DOMs.</p>
+</header>
+
+<main class="panes">
+  <section class="pane">
+    <div class="pane-header">SOURCE</div>
+    <div class="controls">
+      <button type="button" class="btn-primary" id="btn-add">Add row</button>
+      <button type="button" class="btn-secondary" id="btn-remove">Remove row</button>
+      <button type="button" class="btn-secondary" id="btn-edit">Edit text</button>
+      <!--
+        Pitfall 3 (02-RESEARCH.md): a native alert() blocks paint, so in this
+        one-page loopback the mirrored dialog card opens and closes inside the
+        same blocked task window — the browser typically never paints it. The
+        footer log line ("dialog mirrored: alert open → closed") is the
+        visible proof that the dialog channel round-tripped. In a two-context
+        deployment (remote viewer over a real transport) the card IS visible
+        while the alert stays open.
+      -->
+      <button type="button" class="btn-secondary" id="btn-dialog">Show dialog</button>
+      <button type="button" class="btn-secondary" id="btn-auto" aria-pressed="true">Auto-mutate</button>
+    </div>
+    <ul class="rows" id="rows"></ul>
+  </section>
+
+  <section class="pane">
+    <div class="pane-header">MIRROR</div>
+    <div class="stage" id="mirror-stage">
+      <div class="empty-state">
+        <h2>Waiting for first snapshot…</h2>
+        <p>The mirror appears as soon as capture sends its first frame.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div>Loopback transport — zero network, zero servers. Capture and viewer share this document.</div>
+  <div class="log" id="log"></div>
+</footer>
+
+<script type="module">
+  import { createLoopbackTransport } from './loopback-transport.js';
+  import { createViewer } from '../src/renderer/index.js';
+  import { createCapture } from '../src/capture/index.js';
+  import { CONTROL } from '../src/protocol/messages.js';
+
+  // ---- demo chrome refs -------------------------------------------------
+  const rowsList = document.getElementById('rows');
+  const badge = document.getElementById('badge');
+  const badgeLabel = document.getElementById('badge-label');
+  const log = document.getElementById('log');
+
+  function logLine(text) {
+    const line = document.createElement('div');
+    line.textContent = text;
+    log.appendChild(line);
+  }
+
+  // ---- playground: a small self-mutating row list -------------------------
+  const WORDS = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot',
+                 'golf', 'hotel', 'india', 'juliett', 'kilo', 'lima'];
+  let rowCount = 0;
+
+  function randomWord() {
+    return WORDS[Math.floor(Math.random() * WORDS.length)];
+  }
+
+  function addRow() {
+    rowCount += 1;
+    const li = document.createElement('li');
+    li.textContent = 'Row ' + rowCount + ' — ' + randomWord();
+    rowsList.appendChild(li);
+  }
+
+  function removeRow() {
+    if (rowsList.lastElementChild) rowsList.removeChild(rowsList.lastElementChild);
+  }
+
+  function editRow() {
+    const rows = rowsList.children;
+    if (!rows.length) return;
+    const target = rows[Math.floor(Math.random() * rows.length)];
+    const label = target.textContent.split(' — ')[0];
+    target.textContent = label + ' — ' + randomWord();
+  }
+
+  function randomMutation() {
+    const roll = Math.random();
+    if (roll < 0.4 || !rowsList.children.length) addRow();
+    else if (roll < 0.6 && rowsList.children.length > 2) removeRow();
+    else editRow();
+  }
+
+  // ---- auto-mutate toggle + LIVE/PAUSED badge -----------------------------
+  let autoTimer = null;
+
+  function setAutoMutate(on) {
+    if (on && autoTimer === null) {
+      autoTimer = setInterval(randomMutation, 1000);
+    } else if (!on && autoTimer !== null) {
+      clearInterval(autoTimer);
+      autoTimer = null;
+    }
+    document.getElementById('btn-auto').setAttribute('aria-pressed', String(on));
+    badge.classList.toggle('paused', !on);
+    badgeLabel.textContent = on ? 'LIVE' : 'PAUSED';
+  }
+
+  document.getElementById('btn-add').addEventListener('click', addRow);
+  document.getElementById('btn-remove').addEventListener('click', removeRow);
+  document.getElementById('btn-edit').addEventListener('click', editRow);
+  document.getElementById('btn-auto').addEventListener('click', () => {
+    setAutoMutate(autoTimer === null);
+  });
+  document.getElementById('btn-dialog').addEventListener('click', () => {
+    // Capture's dialog interceptor mirrors the alert open/close states; the
+    // log line after dismissal is the loopback's visible proof (Pitfall 3).
+    alert('PhantomStream mirrored this dialog.');
+    logLine('dialog mirrored: alert open → closed');
+  });
+
+  // Seed a few rows so the first snapshot has something to show.
+  addRow();
+  addRow();
+  addRow();
+
+  // ---- wiring (order is load-bearing — loopback has no buffering) ---------
+  // 1. Transport: both ends of the in-page channel.
+  const transport = createLoopbackTransport();
+
+  // 2. Viewer FIRST: it subscribes and auto-attaches its DOM (stamped with
+  //    the data-phantomstream-ui marker) BEFORE capture serializes the page.
+  //    The page never touches the iframe sandbox attribute — the viewer owns
+  //    that contract and asserts it at creation.
+  const viewer = createViewer({
+    container: document.getElementById('mirror-stage'),
+    transport: transport.viewerTransport
+  });
+
+  // 3. Capture, with the recursion guard: skip anything stamped
+  //    data-phantomstream-ui. Attribute-based — never object identity —
+  //    because serialization tests the predicate against detached clones.
+  const capture = createCapture({
+    transport: transport.captureTransport,
+    skipElement: (el) => !!(el.getAttribute && el.getAttribute('data-phantomstream-ui'))
+  });
+
+  // 4. Control glue: viewer CONTROL.* messages drive the capture handle
+  //    (the viewer's self-healing resync sends CONTROL.START).
+  transport.onControl((type) => {
+    if (type === CONTROL.START) capture.start();
+    else if (type === CONTROL.STOP) capture.stop();
+    else if (type === CONTROL.PAUSE) capture.pause();
+    else if (type === CONTROL.RESUME) capture.resume();
+    logLine('control: ' + type);
+  });
+
+  // 5. First light: the mirror starts automatically on load.
+  capture.start();
+
+  // Auto-mutate starts ON so the demo shows motion immediately (badge: LIVE).
+  setAutoMutate(true);
+
+  // Keep the handle reachable for console exploration of the demo.
+  window.__phantomstream = { viewer, capture, transport };
+</script>
+
+</body>
+</html>
