@@ -30,12 +30,12 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Viewer (VIEW)
 
-- [ ] **VIEW-01**: Host can embed the viewer as a framework-agnostic component (`createViewer({ container, transport })`) with viewport-adaptive scaling
+- [x] **VIEW-01**: Host can embed the viewer as a framework-agnostic component (`createViewer({ container, transport })`) with viewport-adaptive scaling
 - [ ] **VIEW-02**: Host can subscribe to lifecycle/connection-state events (`connecting`/`live`/`stale`/`disconnected`) and stream-health telemetry via `on()`
 - [ ] **VIEW-03**: Host can address mirrored elements semantically through a public node-identity API (e.g. highlight/query the node an agent is about to touch)
-- [ ] **VIEW-04**: Overlay channel is a documented, extensible message type — action glow and progress ship as built-ins; hosts can define custom DOM-anchored overlays
+- [x] **VIEW-04**: Overlay channel is a documented, extensible message type — action glow and progress ship as built-ins; hosts can define custom DOM-anchored overlays
 - [ ] **VIEW-05**: Remote control works through the mirror: click/type/scroll reverse-mapped from viewer coordinates and replayed in the real tab
-- [ ] **VIEW-06**: Scroll position and native `alert`/`confirm`/`prompt` dialogs are mirrored (parity with reference)
+- [x] **VIEW-06**: Scroll position and native `alert`/`confirm`/`prompt` dialogs are mirrored (parity with reference)
 
 ### Transport & Relay (RELY)
 
@@ -47,7 +47,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **ADPT-01**: Extension MV3 adapter — content-script injection + service-worker relay client including the `chrome.alarms` watchdog
 - [ ] **ADPT-02**: Playwright/CDP adapter — `addInitScript`/`Page.addScriptToEvaluateOnNewDocument` injection + binding bridge, shipped as a single-file inject artifact
 - [ ] **ADPT-03**: Bookmarklet adapter — loader stub that injects the capture bundle into the current page
-- [ ] **ADPT-04**: Embedded-SDK adapter — first-party pages can import and run capture directly (script tag / module import)
+- [x] **ADPT-04**: Embedded-SDK adapter — first-party pages can import and run capture directly (script tag / module import)
 
 ### Demos & Packaging (PKG)
 
@@ -126,18 +126,18 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SEC-02 | Phase 3 | Pending |
 | SEC-03 | Phase 3 | Pending |
 | SEC-04 | Phase 5 | Pending |
-| VIEW-01 | Phase 2 | Pending |
+| VIEW-01 | Phase 2 | Complete |
 | VIEW-02 | Phase 4 | Pending |
 | VIEW-03 | Phase 7 | Pending |
-| VIEW-04 | Phase 2 | Pending |
+| VIEW-04 | Phase 2 | Complete |
 | VIEW-05 | Phase 5 | Pending |
-| VIEW-06 | Phase 2 | Pending |
+| VIEW-06 | Phase 2 | Complete |
 | RELY-01 | Phase 4 | Pending |
 | RELY-02 | Phase 4 | Pending |
 | ADPT-01 | Phase 6 | Pending |
 | ADPT-02 | Phase 5 | Pending |
 | ADPT-03 | Phase 6 | Pending |
-| ADPT-04 | Phase 2 | Pending |
+| ADPT-04 | Phase 2 | Complete |
 | PKG-01 | Phase 4 | Pending |
 | PKG-02 | Phase 5 | Pending |
 | PKG-03 | Phase 10 | Pending |

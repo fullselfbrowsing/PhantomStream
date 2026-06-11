@@ -222,7 +222,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Capture Core Extraction + Differential Oracle | 5/5 | Complete    | 2026-06-10 |
-| 2. Renderer Core + Embedded Loopback Mirror | 6/6 | Complete   | 2026-06-11 |
+| 2. Renderer Core + Embedded Loopback Mirror | 6/6 | Complete    | 2026-06-11 |
 | 3. Security Pipeline — Sanitization + Privacy Masking | 0/TBD | Not started | - |
 | 4. Relay, WS Transport & Two-Tab Demo | 0/TBD | Not started | - |
 | 5. Playwright/CDP Adapter, Remote Control & Agent Demo | 0/TBD | Not started | - |
