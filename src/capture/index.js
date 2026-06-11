@@ -879,6 +879,13 @@ export function createCapture(config) {
    */
   function processMutationBatch(mutations) {
     var diffs = [];
+    // Dedup registry for childList-derived text ops (fidelity fix, ledger
+    // D6): multiple childList records in one batch targeting the same
+    // element (e.g. two textContent= writes between flushes) collapse to a
+    // single op. The op text is read LIVE from the target at process time,
+    // so every record for the same element yields the same final value --
+    // dedup loses nothing.
+    var textOpNids = {};
 
     for (var i = 0; i < mutations.length; i++) {
       var m = mutations[i];
@@ -895,6 +902,17 @@ export function createCapture(config) {
       }
 
       if (m.type === 'childList') {
+        // Bare text-node add/remove detection (fidelity fix, differential
+        // ledger D6): el.textContent = '...' REPLACES the text child, which
+        // the observer reports as a childList record with a TEXT-node
+        // removal+addition. The reference's element-only loops drop it --
+        // silent mirror drift with no stale-miss and no self-heal (Phase 2
+        // real-browser checkpoint finding). When any added/removed node is
+        // a TEXT or CDATA node, a text op for the mutation TARGET (the
+        // parent element) is emitted below, mirroring the characterData
+        // branch's shape. Comment nodes stay excluded: they never render.
+        var sawBareTextNode = false;
+
         // Added nodes
         for (var a = 0; a < m.addedNodes.length; a++) {
           var added = m.addedNodes[a];
@@ -917,6 +935,8 @@ export function createCapture(config) {
               html: html,
               beforeNid: beforeNid
             });
+          } else if (added.nodeType === Node.TEXT_NODE || added.nodeType === Node.CDATA_SECTION_NODE) {
+            sawBareTextNode = true;
           }
         }
 
@@ -927,6 +947,26 @@ export function createCapture(config) {
             var nid = removed.getAttribute ? removed.getAttribute(NID_ATTR) : null;
             if (!nid) continue; // Not tracked
             diffs.push({ op: 'rm', nid: nid });
+          } else if (removed.nodeType === Node.TEXT_NODE || removed.nodeType === Node.CDATA_SECTION_NODE) {
+            sawBareTextNode = true;
+          }
+        }
+
+        // Emit AFTER both loops so a textContent= that also removed element
+        // children orders its rm ops before the text op -- the renderer then
+        // removes the elements and sets the final flat text, matching the
+        // live DOM end state.
+        if (sawBareTextNode) {
+          var textTargetNid = m.target.getAttribute ? m.target.getAttribute(NID_ATTR) : null;
+          if (textTargetNid && !textOpNids[textTargetNid]) {
+            textOpNids[textTargetNid] = true;
+            // Same wire shape as the characterData branch: the renderer's
+            // DIFF_OP.TEXT applier sets textContent on the nid target.
+            diffs.push({
+              op: 'text',
+              nid: textTargetNid,
+              text: m.target.textContent
+            });
           }
         }
       } else if (m.type === 'attributes') {

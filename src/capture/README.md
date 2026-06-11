@@ -99,6 +99,13 @@ divergence, so it lives here rather than in the differential ledger):
   `{ glow: null, progress: null, streamSessionId, snapshotId }` — re-proven
   oracle-safe by the full differential suite (no fixture configures an
   overlayProvider). Pinned by `tests/capture-overlay-forward.test.js`.
+- **E2 (Phase 2, fidelity fix)** — bare text-node childList mutations
+  (`el.textContent = '...'` replaces the text child as a childList record,
+  not characterData) now emit a `text` op for the mutation target element,
+  deduplicated per batch; the reference drops them entirely (silent mirror
+  text drift, found at the Phase 2 real-browser checkpoint). Declared as
+  differential ledger entry D6 (pinned by the `text-childlist` oracle
+  scenario) and covered end-to-end in `tests/renderer-loopback.test.js`.
 
 ## Behavioral changes queued for the standalone version
 
