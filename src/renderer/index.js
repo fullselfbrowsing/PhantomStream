@@ -1,0 +1,540 @@
+// PhantomStream renderer: createViewer -- the embeddable viewer component.
+//
+// Wires the pure renderer pieces (snapshot.js srcdoc builder, diff.js
+// Document-parameterized applier, overlays.js registry + parity built-ins)
+// into the auto-attaching viewer factory. Behavioral port of the FSB
+// reference viewer's stream plumbing (reference/dashboard/dashboard.js,
+// shipped as FSB milestone v0.9.9.1):
+//
+//   - identity guard, generation-state reset, latched resync: 185-278
+//   - snapshot handler sequence (srcdoc write + onload): 2723-2829
+//   - scale-to-fit math: 2831-2869 (single fill-container mode)
+//   - resize wiring (window listener + guarded ResizeObserver): 3194-3207
+//   - mutation dispatch + post-batch scroll re-apply: 3209-3356
+//   - scroll handler (store first, gated smooth follow): 3358-3372
+//
+// Intentional divergences (renderer divergence ledger, plan 02-04):
+//   - FSB 9-state preview machine -> minimal 'waiting' | 'streaming' gate;
+//     the formal state/event surface (VIEW-02) arrives in Phase 4.
+//   - tabId identity checks dropped (FSB extension concern); staleness goes
+//     through the protocol's isCurrentStream instead.
+//   - dash:request-status send dropped from the resync path -- the resync
+//     message is CONTROL.START alone (02-RESEARCH Pattern 2; a message named
+//     dash:request-snapshot does not exist anywhere in the protocol).
+//   - recordDashboardTransportEvent/-Error ring buffers dropped; renderer
+//     diagnostics go to the injected logger with the '[Renderer]' prefix.
+//   - Layout modes (inline/maximized/pip/fullscreen) dropped (D-03): the
+//     viewer always fills its container; layout belongs to the host.
+//   - Dialog identity-nesting quirk ported as-is (Pitfall 8): capture nests
+//     stream identity INSIDE payload.dialog, so the top-level isCurrentStream
+//     check finds no identity and always accepts dialogs. Explicit parity
+//     choice -- revisit when Phase 4 introduces multi-stream transports.
+//
+// Cross-runtime style per the capture-core precedent: var declarations,
+// || inline defaulting, function expressions, named exports, explicit .js
+// import extensions, factory-time validation as the ONLY throwing site.
+
+import { buildSnapshotHtml } from './snapshot.js';
+import { applyMutations } from './diff.js';
+import { createOverlays, mapRectToHost, OVERLAY_CSS } from './overlays.js';
+import { STREAM, CONTROL, NID_ATTR, isCurrentStream } from '../protocol/messages.js';
+
+/**
+ * The host-injected viewer transport. Mirrors the capture Transport's
+ * fire-and-forget send contract and adds the receive side; Phase 4's
+ * WebSocket transport implements this same interface by encoding/decoding
+ * envelopes, so the viewer never changes.
+ *
+ * @typedef {Object} ViewerTransport
+ * @property {(type: string, payload: Object) => void} send
+ *   Viewer -> capture host (CONTROL.* messages). Fire-and-forget; errors
+ *   are contained to the injected logger, never thrown into the viewer.
+ * @property {(handler: (type: string, payload: Object) => void) => (() => void)} onMessage
+ *   Subscribe to capture-host -> viewer (STREAM.*) messages. Returns an
+ *   unsubscribe function; detach() invokes it.
+ */
+
+/**
+ * @typedef {Object} ViewerLogger
+ * @property {(...args: *) => void} info
+ * @property {(...args: *) => void} warn
+ * @property {(...args: *) => void} error
+ */
+
+/**
+ * @typedef {Object} ViewerOptions
+ * @property {Element} container
+ *   Required. Host element the viewer root is appended into (auto-attach,
+ *   D-01). Factory throws Error('viewer-container-required') otherwise.
+ * @property {ViewerTransport} transport
+ *   Required. Factory throws Error('viewer-transport-required') when send
+ *   or onMessage is not a function.
+ * @property {ViewerLogger} [logger]
+ *   Optional. Defaults to a console-backed logger.
+ */
+
+/**
+ * @typedef {Object} ViewerHandle
+ * @property {() => void} detach
+ *   Unsubscribe from the transport, remove the resize listeners, and remove
+ *   the viewer root from the container. Idempotent.
+ * @property {() => void} destroy
+ *   detach() plus state/overlay reset. Idempotent.
+ * @property {(kind: string, renderFn: (payload: *, anchorRect: ?Object, layer: Element) => void) => void} registerOverlay
+ *   Register a custom overlay kind (delegates to the overlays registry --
+ *   the host-facing extension seam from D-10).
+ */
+
+/**
+ * Scale-to-fit math (pure). Port of dashboard.js:2859-2868 simplified to
+ * the single fill-container mode per 02-UI-SPEC "Scale-to-fit": page
+ * dimensions default to 1920x1080 and floor at 1; the scale factor is the
+ * min of the two container/page ratios with a !isFinite/<=0 clamp to 1;
+ * letterbox offsets center the scaled page and floor at 0.
+ *
+ * @param {number} pageW       Captured page width (0/undefined -> 1920)
+ * @param {number} pageH       Captured page height (0/undefined -> 1080)
+ * @param {number} containerW  Host container width in px
+ * @param {number} containerH  Host container height in px
+ * @returns {{s: number, offsetX: number, offsetY: number, pageW: number, pageH: number}}
+ */
+export function computeScale(pageW, pageH, containerW, containerH) {
+  var w = Math.max(1, pageW || 1920);
+  var h = Math.max(1, pageH || 1080);
+  var s = Math.min(containerW / w, containerH / h);
+  if (!isFinite(s) || s <= 0) s = 1;
+  return {
+    s: s,
+    offsetX: Math.max(0, (containerW - w * s) / 2),
+    offsetY: Math.max(0, (containerH - h * s) / 2),
+    pageW: w,
+    pageH: h
+  };
+}
+
+/**
+ * Create an embeddable viewer bound to a host container: sandboxed mirror
+ * iframe, host-document overlay layer, transport message dispatch, scale-
+ * to-fit, scroll mirroring, and the latched CONTROL.START resync path.
+ * Auto-attaches on creation (D-01): calling this yields a live mirror as
+ * soon as the first snapshot arrives.
+ *
+ * Factory-time validation is the ONLY place this module throws (capture
+ * precedent); after creation every error routes to the injected logger.
+ *
+ * @param {ViewerOptions} options
+ * @returns {ViewerHandle}
+ */
+export function createViewer(options) {
+  var cfg = options || {};
+
+  var container = cfg.container;
+  if (!container || typeof container.appendChild !== 'function') {
+    throw new Error('viewer-container-required');
+  }
+  var transport = cfg.transport;
+  if (!transport || typeof transport.send !== 'function'
+      || typeof transport.onMessage !== 'function') {
+    throw new Error('viewer-transport-required');
+  }
+  var logger = cfg.logger || {
+    info: function () { console.info.apply(console, arguments); },
+    warn: function () { console.warn.apply(console, arguments); },
+    error: function () { console.error.apply(console, arguments); }
+  };
+
+  // All DOM construction happens in the container's own document so the
+  // viewer works in any window (host page, jsdom test, future multi-doc).
+  var doc = container.ownerDocument;
+  var win = doc.defaultView;
+
+  // --- Viewer root: fills the container, clips the scaled mirror, and
+  // carries the loopback recursion-guard marker (02-RESEARCH Pattern 4) so
+  // a same-page capture can skipElement the entire viewer subtree. ---
+  var root = doc.createElement('div');
+  root.setAttribute('data-phantomstream-ui', 'viewer');
+  root.style.position = 'relative';
+  root.style.width = '100%';
+  root.style.height = '100%';
+  root.style.overflow = 'hidden';
+
+  // Viewer chrome styles travel as ONE injected style element (zero-dep
+  // constraint: hosts never import a stylesheet).
+  var styleEl = doc.createElement('style');
+  styleEl.textContent = OVERLAY_CSS;
+  root.appendChild(styleEl);
+
+  // --- Mirror iframe. Hidden until the first snapshot load so the host's
+  // waiting placeholder behind it stays visible (02-RESEARCH Pattern 6). ---
+  var iframe = doc.createElement('iframe');
+  iframe.setAttribute('title', 'PhantomStream live mirror');
+  iframe.style.position = 'absolute';
+  iframe.style.zIndex = '1'; // overlay layer sits above at z 2
+  iframe.style.transformOrigin = 'top left';
+  iframe.style.display = 'none';
+
+  // SANDBOX ASSERTION (phase criterion 3, threat T-02-08): the mirror
+  // renders attacker-influenced HTML, so the sandbox must be EXACTLY
+  // allow-same-origin -- same-origin access for diff applies and rect
+  // reads, zero script execution. Read back and verify so a hostile or
+  // broken environment fails loudly at creation instead of weakening the
+  // sandbox silently.
+  iframe.setAttribute('sandbox', 'allow-same-origin');
+  var sandboxTokens = (iframe.getAttribute('sandbox') || '').trim().split(/\s+/);
+  if (sandboxTokens.length !== 1 || sandboxTokens[0] !== 'allow-same-origin') {
+    throw new Error('viewer-sandbox-invalid');
+  }
+
+  // Snapshot-load completion handler, attached ONCE at creation (before the
+  // iframe is ever connected) rather than re-assigned per snapshot like the
+  // reference's iframe.onload. Divergence forced by jsdom (verified
+  // empirically this session): jsdom 29 only queues the iframe's initial
+  // about:blank load event when a load listener already exists at insertion
+  // time, and never re-fires load on srcdoc writes -- a per-snapshot onload
+  // assignment therefore never runs under test. In real browsers this
+  // listener fires on every srcdoc load with identical behavior. Guarded on
+  // a pending snapshot so the bare about:blank load (before any snapshot)
+  // leaves the viewer waiting.
+  iframe.addEventListener('load', function () {
+    if (!lastSnapshotPayload) return;
+    updateScale();
+    try {
+      iframe.contentWindow.scrollTo(
+        lastSnapshotPayload.scrollX || 0,
+        lastSnapshotPayload.scrollY || 0
+      );
+    } catch (e) { /* ignore: scroll restore is best-effort */ }
+    viewerState = 'streaming';
+    iframe.style.display = '';
+  });
+  root.appendChild(iframe);
+
+  // --- Overlay layer (host document, above the iframe, never inside the
+  // mirror). createOverlays pre-registers the glow/progress/dialog parity
+  // built-ins through the same registry custom kinds use. ---
+  var overlays = createOverlays({ document: doc, logger: logger });
+  root.appendChild(overlays.layer);
+
+  // Auto-attach (D-01): creation yields a live, ready-to-stream mirror.
+  container.appendChild(root);
+
+  // --- Viewer state (reference module state -> factory closure state) ---
+  var viewerState = 'waiting'; // 'waiting' | 'streaming' minimal gate
+  var active = { streamSessionId: '', snapshotId: 0 };
+  var lastScroll = { x: 0, y: 0 };
+  var counters = { staleMisses: 0, applyFailures: 0 };
+  var resyncPending = false; // latch: at most one resync in flight per generation
+  var lastSnapshotPayload = null;
+  var scaleState = computeScale(1920, 1080, container.clientWidth, container.clientHeight);
+  var detached = false;
+  var destroyed = false;
+
+  /**
+   * Deliver one CONTROL message through the injected transport. Capture-
+   * precedent containment: synchronous try/catch plus a rejection handler
+   * on any returned promise; failures route to the logger, never throw.
+   * @param {string} type
+   * @param {Object} payload
+   */
+  function safeSend(type, payload) {
+    try {
+      var result = transport.send(type, payload);
+      if (result && typeof result.catch === 'function') {
+        result.catch(function (err) {
+          logger.error('[Renderer] transport send failed', err);
+        });
+      }
+    } catch (err) {
+      logger.error('[Renderer] transport send failed', err);
+    }
+  }
+
+  /**
+   * Latched resync request (D-08 via 02-RESEARCH Pattern 2): the resync
+   * message IS CONTROL.START -- the capture host responds by starting a
+   * fresh session whose snapshot resets this generation's counters AND
+   * releases the latch (the only release site). Reference parity:
+   * requestPreviewResync, dashboard.js:248-278, with the FSB status
+   * refresh and recovery-watchdog chrome dropped.
+   * @param {string} reason   Lowercase-hyphen reason from the diff applier
+   * @param {Object} [details] Miss details (logged upstream; not sent)
+   */
+  function requestResync(reason, details) {
+    if (resyncPending) return;
+    resyncPending = true;
+    safeSend(CONTROL.START, {
+      trigger: 'preview-resync',
+      reason: reason || 'unknown'
+    });
+  }
+
+  /**
+   * Recompute scale-to-fit from the container box and the last snapshot's
+   * page size (viewportWidth || pageWidth || 1920 and viewportHeight ||
+   * 1080, per dashboard.js:2834-2835), then apply the iframe geometry:
+   * unscaled page-size box, letterbox offsets, top-left scale transform.
+   */
+  function updateScale() {
+    var p = lastSnapshotPayload || {};
+    scaleState = computeScale(
+      p.viewportWidth || p.pageWidth || 1920,
+      p.viewportHeight || 1080,
+      container.clientWidth,
+      container.clientHeight
+    );
+    iframe.style.width = scaleState.pageW + 'px';
+    iframe.style.height = scaleState.pageH + 'px';
+    iframe.style.left = scaleState.offsetX + 'px';
+    iframe.style.top = scaleState.offsetY + 'px';
+    iframe.style.transform = 'scale(' + scaleState.s + ')';
+  }
+
+  /**
+   * Resolve a captured node id to a host-document overlay rect. Reads the
+   * mirror contentDocument FRESH per call (never cached -- re-snapshots
+   * replace the document). Client rects inside the iframe are already
+   * viewport-relative and unaffected by the host-side CSS transform
+   * (02-RESEARCH Pattern 5), so mapRectToHost applies scale + offsets.
+   * @param {number|string} nid
+   * @returns {?{top: number, left: number, width: number, height: number}}
+   */
+  function resolveNidRect(nid) {
+    try {
+      var cd = iframe.contentDocument;
+      if (!cd) return null;
+      var el = cd.querySelector('[' + NID_ATTR + '="' + nid + '"]');
+      if (!el) return null;
+      var rect = el.getBoundingClientRect();
+      return mapRectToHost(
+        { x: rect.left, y: rect.top, w: rect.width, h: rect.height },
+        scaleState
+      );
+    } catch (err) {
+      // Containment: a malformed nid (selector syntax) or a torn-down
+      // mirror must never break the overlay kind loop.
+      logger.warn('[Renderer] nid rect resolution failed', nid, err);
+      return null;
+    }
+  }
+
+  /**
+   * STREAM.SNAPSHOT handler (dashboard.js:2723-2829). Snapshots are NEVER
+   * staleness-checked -- they DEFINE the new identity (2742-2756). Missing
+   * html keeps the last good frame (no state change; logger only -- the
+   * reference's error-state UI is FSB chrome). Sequence: adopt identity ->
+   * reset generation state (counters + latch, 200-204) -> reset overlays
+   * (2762-2764) -> store scroll (2758-2759) -> write srcdoc; the creation-
+   * time load listener (above) then runs scale, initial scrollTo, marks
+   * streaming, and un-hides the iframe.
+   * @param {Object} payload
+   */
+  function handleSnapshot(payload) {
+    var p = payload || {};
+    if (!p.html) {
+      logger.error('[Renderer] snapshot missing html');
+      return;
+    }
+    active.streamSessionId = p.streamSessionId || '';
+    active.snapshotId = p.snapshotId || 0;
+    counters.staleMisses = 0;
+    counters.applyFailures = 0;
+    resyncPending = false; // the latch's ONLY release site
+    overlays.resetOverlays();
+    lastScroll.x = p.scrollX || 0;
+    lastScroll.y = p.scrollY || 0;
+    lastSnapshotPayload = p;
+    iframe.srcdoc = buildSnapshotHtml(p);
+  }
+
+  /**
+   * STREAM.MUTATIONS handler (dashboard.js:3209-3356). Gated on streaming
+   * (mutations before the first load are dropped -- Pitfall 4 parity; the
+   * resync path self-heals any resulting drift) AND stream identity. The
+   * contentDocument is read FRESH per call (never cached); the last known
+   * scroll is re-applied exactly ONCE per batch (3340-3342), never per op.
+   * @param {Object} payload
+   */
+  function handleMutations(payload) {
+    if (viewerState !== 'streaming') return;
+    if (!isCurrentStream(payload, active)) return;
+    var cd = iframe.contentDocument;
+    applyMutations(cd, payload.mutations, counters, {
+      logger: logger,
+      requestResync: requestResync
+    });
+    try {
+      iframe.contentWindow.scrollTo(lastScroll.x, lastScroll.y);
+    } catch (e) { /* ignore: scroll maintenance is best-effort */ }
+  }
+
+  /**
+   * STREAM.SCROLL handler (dashboard.js:3358-3372). Store FIRST so the
+   * post-mutation re-apply always uses the freshest captured position,
+   * then follow with a smooth scroll only while streaming (read-only
+   * follow this phase, D-14/D-15).
+   * @param {Object} payload
+   */
+  function handleScroll(payload) {
+    if (!isCurrentStream(payload, active)) return;
+    lastScroll.x = (payload && payload.scrollX) || 0;
+    lastScroll.y = (payload && payload.scrollY) || 0;
+    if (viewerState !== 'streaming') return;
+    try {
+      iframe.contentWindow.scrollTo({
+        left: lastScroll.x,
+        top: lastScroll.y,
+        behavior: 'smooth'
+      });
+    } catch (e) { /* ignore: smooth follow is best-effort */ }
+  }
+
+  /**
+   * STREAM.OVERLAY handler: streaming + identity gate, then registry
+   * dispatch with the current scale state and the nid rect resolver.
+   * @param {Object} payload
+   */
+  function handleOverlay(payload) {
+    if (viewerState !== 'streaming') return;
+    if (!isCurrentStream(payload, active)) return;
+    overlays.handleOverlayMessage(payload, {
+      scale: scaleState,
+      resolveNidRect: resolveNidRect
+    });
+  }
+
+  /**
+   * STREAM.DIALOG handler: streaming gate + TOP-LEVEL identity check only.
+   * Capture nests stream identity inside payload.dialog, so this check
+   * finds no top-level identity and effectively always accepts -- the
+   * ported reference quirk (Pitfall 8), kept deliberately and ledgered in
+   * plan 02-04. Loopback has a single stream; revisit at Phase 4.
+   * @param {Object} payload
+   */
+  function handleDialog(payload) {
+    if (viewerState !== 'streaming') return;
+    if (!isCurrentStream(payload, active)) return;
+    overlays.handleDialogMessage(payload);
+  }
+
+  /**
+   * Transport message dispatch. The whole handler is containment-wrapped:
+   * one malformed message routes to the logger and never kills the
+   * subscription. Unknown types (STREAM.READY, STREAM.STATE, ...) are
+   * ignored silently (forward-compatible).
+   * @param {string} type
+   * @param {Object} payload
+   */
+  function dispatch(type, payload) {
+    if (detached) return;
+    try {
+      switch (type) {
+        case STREAM.SNAPSHOT:
+          handleSnapshot(payload);
+          break;
+        case STREAM.MUTATIONS:
+          handleMutations(payload);
+          break;
+        case STREAM.SCROLL:
+          handleScroll(payload);
+          break;
+        case STREAM.OVERLAY:
+          handleOverlay(payload);
+          break;
+        case STREAM.DIALOG:
+          handleDialog(payload);
+          break;
+        default:
+          break;
+      }
+    } catch (err) {
+      logger.error('[Renderer] message handler failed', type, err);
+    }
+  }
+
+  var unsubscribe = transport.onMessage(dispatch);
+
+  // --- Resize wiring (dashboard.js:3194-3207): window resize listener
+  // plus a typeof-guarded ResizeObserver on the container (jsdom lacks
+  // ResizeObserver -- Pitfall 5; the reference keeps both). Both gated on
+  // streaming so the waiting placeholder never triggers geometry writes. ---
+  function onWindowResize() {
+    if (viewerState === 'streaming') updateScale();
+  }
+  if (win && typeof win.addEventListener === 'function') {
+    win.addEventListener('resize', onWindowResize);
+  }
+  var resizeObserver = null;
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(function () {
+      if (viewerState === 'streaming') updateScale();
+    });
+    resizeObserver.observe(container);
+  }
+
+  /**
+   * Unsubscribe from the transport, remove resize listeners, disconnect
+   * the ResizeObserver, and remove the viewer root from the container.
+   * Idempotent (02-RESEARCH Open Question 3 recommendation).
+   */
+  function detach() {
+    if (detached) return;
+    detached = true;
+    try {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    } catch (err) {
+      logger.error('[Renderer] transport unsubscribe failed', err);
+    }
+    if (win && typeof win.removeEventListener === 'function') {
+      win.removeEventListener('resize', onWindowResize);
+    }
+    if (resizeObserver) {
+      try {
+        resizeObserver.disconnect();
+      } catch (err) { /* observer already torn down */ }
+      resizeObserver = null;
+    }
+    if (root.parentNode) root.parentNode.removeChild(root);
+  }
+
+  /**
+   * detach() plus state/overlay reset. Idempotent; safe after detach().
+   */
+  function destroy() {
+    detach();
+    if (destroyed) return;
+    destroyed = true;
+    overlays.resetOverlays();
+    lastSnapshotPayload = null;
+    active.streamSessionId = '';
+    active.snapshotId = 0;
+    counters.staleMisses = 0;
+    counters.applyFailures = 0;
+    resyncPending = false;
+    viewerState = 'waiting';
+  }
+
+  /**
+   * Register a custom overlay kind (delegates to the overlays registry --
+   * the host-facing extension seam, D-10). The handle stays minimal per
+   * D-01: no events, no addressing; this is THIS phase's locked overlay
+   * decision, not a later-phase surface. See overlays.register() for the
+   * renderFn contract (raw payload, host rect or null, layer element).
+   * @param {string} kind
+   * @param {(payload: *, anchorRect: ?Object, layer: Element) => void} renderFn
+   */
+  function registerOverlay(kind, renderFn) {
+    overlays.register(kind, renderFn);
+  }
+
+  return {
+    detach: detach,
+    destroy: destroy,
+    registerOverlay: registerOverlay
+  };
+}
+
+// Barrel re-exports: the renderer's full public surface through one module
+// (package exports map "./renderer" -> this file in plan 02-05).
+export { escapeAttribute, buildShellAttributeString, buildSnapshotHtml } from './snapshot.js';
+export { applyMutations } from './diff.js';
+export { createOverlays, mapRectToHost, OVERLAY_CSS } from './overlays.js';
