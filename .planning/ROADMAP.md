@@ -77,8 +77,8 @@ Plans:
 - [x] 02-03-PLAN.md — createViewer factory: sandbox assertion, dispatch, scale-to-fit, latched CONTROL.START resync + purity gate
 
 **Wave 3** *(blocked on Wave 2)*
-- [ ] 02-04-PLAN.md — Loopback e2e proof (recursion guard, resync round-trip, dialog/custom-overlay channels) + renderer README/divergence ledger
-- [ ] 02-05-PLAN.md — First-light demo: loopback transport module, dep-free static server, loopback-mirror.html, package exports
+- [x] 02-04-PLAN.md — Loopback e2e proof (recursion guard, resync round-trip, dialog/custom-overlay channels) + renderer README/divergence ledger
+- [x] 02-05-PLAN.md — First-light demo: loopback transport module, dep-free static server, loopback-mirror.html, package exports
 
 **Wave 4** *(blocked on Wave 3)*
 - [ ] 02-06-PLAN.md — Full-suite gate + real-browser human verification checkpoint
@@ -222,7 +222,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Capture Core Extraction + Differential Oracle | 5/5 | Complete    | 2026-06-10 |
-| 2. Renderer Core + Embedded Loopback Mirror | 3/6 | In Progress|  |
+| 2. Renderer Core + Embedded Loopback Mirror | 5/6 | In Progress|  |
 | 3. Security Pipeline — Sanitization + Privacy Masking | 0/TBD | Not started | - |
 | 4. Relay, WS Transport & Two-Tab Demo | 0/TBD | Not started | - |
 | 5. Playwright/CDP Adapter, Remote Control & Agent Demo | 0/TBD | Not started | - |
