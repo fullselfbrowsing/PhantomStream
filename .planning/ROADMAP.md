@@ -13,7 +13,7 @@ PhantomStream extracts a shipped, production-proven DOM-mirroring system out of 
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Capture Core Extraction + Differential Oracle** - Oracle-anchored extraction of the capture core behind the Transport seam (completed 2026-06-10)
-- [ ] **Phase 2: Renderer Core + Embedded Loopback Mirror** - Embeddable viewer + first end-to-end mirror with zero infrastructure
+- [x] **Phase 2: Renderer Core + Embedded Loopback Mirror** - Embeddable viewer + first end-to-end mirror with zero infrastructure (completed 2026-06-11)
 - [ ] **Phase 3: Security Pipeline — Sanitization + Privacy Masking** - Both-ends sanitization, sandbox contract, capture-side masking (publishing gate)
 - [ ] **Phase 4: Relay, WS Transport & Two-Tab Demo** - Networked mirror: relay core, ws backend, CompressionStream codec, `npx phantom-stream demo`
 - [ ] **Phase 5: Playwright/CDP Adapter, Remote Control & Agent Demo** - Script-driven page mirrored live with consent-gated remote control
@@ -81,7 +81,7 @@ Plans:
 - [x] 02-05-PLAN.md — First-light demo: loopback transport module, dep-free static server, loopback-mirror.html, package exports
 
 **Wave 4** *(blocked on Wave 3)*
-- [ ] 02-06-PLAN.md — Full-suite gate + real-browser human verification checkpoint
+- [x] 02-06-PLAN.md — Full-suite gate + real-browser human verification checkpoint
 
 ### Phase 3: Security Pipeline — Sanitization + Privacy Masking
 **Goal**: Mirrored content is safe to render and masked content never leaves the captured page — the hard gate for anything embeddable or published
@@ -222,7 +222,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Capture Core Extraction + Differential Oracle | 5/5 | Complete    | 2026-06-10 |
-| 2. Renderer Core + Embedded Loopback Mirror | 5/6 | In Progress|  |
+| 2. Renderer Core + Embedded Loopback Mirror | 6/6 | Complete   | 2026-06-11 |
 | 3. Security Pipeline — Sanitization + Privacy Masking | 0/TBD | Not started | - |
 | 4. Relay, WS Transport & Two-Tab Demo | 0/TBD | Not started | - |
 | 5. Playwright/CDP Adapter, Remote Control & Agent Demo | 0/TBD | Not started | - |
