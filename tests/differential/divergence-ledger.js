@@ -15,7 +15,7 @@
 //    fixture scenario (D4, D5). They are exempt from stale-entry detection
 //    and ledgerCovers never consults them.
 
-import { STREAM } from '../../src/protocol/messages.js';
+import { STREAM, DIFF_OP } from '../../src/protocol/messages.js';
 
 /**
  * @typedef {Object} DivergenceEntry
@@ -58,8 +58,10 @@ function placeholderOrdinal(value, prefix) {
 
 /**
  * Declared divergences between the reference capture and the extracted core.
- * Exactly ONE mismatch-kind entry exists (D1); everything else the oracle
- * compares is required to be byte-equivalent after normalization.
+ * Exactly TWO mismatch-kind entries exist (D1: resume semantics, scoped to
+ * pause-resume; D6: text-node childList fidelity fix, scoped to
+ * text-childlist); everything else the oracle compares is required to be
+ * byte-equivalent after normalization.
  * @type {DivergenceEntry[]}
  */
 export const DIVERGENCES = [
@@ -143,6 +145,49 @@ export const DIVERGENCES = [
     },
   },
   {
+    id: 'D6-text-childlist-fidelity-fix',
+    kind: 'mismatch',
+    description:
+      'The reference childList branch (reference/extension/dom-stream.js, element-only '
+      + 'added/removed loops) drops childList records whose added/removed nodes are bare '
+      + 'TEXT/CDATA nodes. el.textContent = "..." replaces the text child as exactly that '
+      + 'record shape -- NOT characterData -- so the reference emits NO wire signal and '
+      + 'the mirror silently drifts (Phase 2 real-browser checkpoint finding: 8 of 13 '
+      + 'rows stale in examples/loopback-mirror.html, no stale-miss, no self-heal). The '
+      + 'extracted core emits a per-batch-deduplicated { op: "text", nid: <target nid>, '
+      + 'text: target.textContent } op for the mutation TARGET (the parent element), '
+      + 'producing an extracted-only trailing MUTATIONS message the reference stream '
+      + 'lacks.',
+    rationale:
+      'Deliberate fidelity FIX divergence (Phase 2): the extracted core must mirror '
+      + 'textContent= edits; reference parity here would preserve a data-loss bug. '
+      + 'Capture-side change documented as src/capture/README.md entry E2; the renderer '
+      + 'is unchanged (the DIFF_OP.TEXT applier already handles the op shape). Pinned '
+      + 'end-to-end by tests/renderer-loopback.test.js and by the text-childlist '
+      + 'scenario here.',
+    affectedMessages: [STREAM.MUTATIONS],
+    affectedScenarios: ['text-childlist'],
+    appliesTo(refMsg, extMsg, scenarioName) {
+      // The scenario guard is load-bearing (same discipline as D1): a bare
+      // text-node childList divergence surfacing in any OTHER scenario must
+      // still hard-fail as UNDECLARED DIVERGENCE.
+      if (scenarioName !== 'text-childlist') return false;
+
+      // D6's exact shape: an EXTRACTED-ONLY trailing message (the reference
+      // emits nothing for the dropped mutation class, so the extracted
+      // stream is one message longer) that is a MUTATIONS batch composed
+      // PURELY of text ops. Any reference-side counterpart, any other
+      // message type, or any element op mixed into the batch stays
+      // undeclared.
+      if (refMsg !== undefined || extMsg === undefined) return false;
+      if (extMsg.type !== STREAM.MUTATIONS) return false;
+      const ops = (extMsg.payload && extMsg.payload.mutations) || [];
+      return Array.isArray(ops)
+        && ops.length > 0
+        && ops.every((op) => op.op === DIFF_OP.TEXT);
+    },
+  },
+  {
     id: 'D2-envelope-shape',
     kind: 'documented-mapping',
     description:
@@ -161,7 +206,7 @@ export const DIVERGENCES = [
     ],
     affectedScenarios: [
       'basic-mutations', 'mutation-burst', 'structural-ops', 'scroll',
-      'pause-resume', 'snapshot-only', 'dialog',
+      'pause-resume', 'snapshot-only', 'dialog', 'text-childlist',
     ],
     // Never consulted: documented-mapping divergences are absorbed by
     // normalize.js BEFORE comparison, so no mismatch can reach the ledger.
@@ -182,7 +227,7 @@ export const DIVERGENCES = [
     affectedMessages: [STREAM.READY],
     affectedScenarios: [
       'basic-mutations', 'mutation-burst', 'structural-ops', 'scroll',
-      'pause-resume', 'snapshot-only', 'dialog',
+      'pause-resume', 'snapshot-only', 'dialog', 'text-childlist',
     ],
     appliesTo() { return false; },
   },

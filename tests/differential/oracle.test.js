@@ -31,6 +31,7 @@ import * as structuralOps from './scenarios/structural-ops.js';
 import * as scroll from './scenarios/scroll.js';
 import * as dialog from './scenarios/dialog.js';
 import * as pauseResume from './scenarios/pause-resume.js';
+import * as textChildlist from './scenarios/text-childlist.js';
 
 /**
  * The full fixture x scenario matrix. Every reliability defense from the
@@ -45,6 +46,7 @@ const MATRIX = [
   { fixture: 'basic.html', scenario: structuralOps, config: {} },
   { fixture: 'basic.html', scenario: scroll, config: {} },
   { fixture: 'basic.html', scenario: pauseResume, config: {} },
+  { fixture: 'basic.html', scenario: textChildlist, config: {} },
   { fixture: 'heavy-realistic.html', scenario: snapshotOnly, config: {} },
   { fixture: 'heavy-realistic.html', scenario: structuralOps, config: {} },
   { fixture: 'truncation-overflow.html', scenario: snapshotOnly, config: { patchRects: true } },
@@ -263,13 +265,45 @@ for (const entry of MATRIX) {
         leaked.length, 0,
         'paused mutations never appear on the extracted wire'
       );
+    } else if (entry.scenario.name === 'text-childlist') {
+      // D6 territory: the extracted core's text-node childList fidelity fix
+      // (capture README E2) emits a text op where the reference emits
+      // NOTHING -- el.textContent = '...' is a childList record with a bare
+      // text-node removal+addition that the reference's element-only loops
+      // drop on the floor.
+      assert.ok(
+        matched.has('D6-text-childlist-fidelity-fix'),
+        'text-childlist exercises ledger entry D6'
+      );
+      assert.equal(
+        matched.size, 1,
+        `only D6 consulted in text-childlist (matched: ${[...matched].join(', ')})`
+      );
+
+      // Belt-and-braces, both directions. The reference really DROPS the
+      // mutation class (zero MUTATIONS messages on its wire) -- proving the
+      // divergence direction is a fidelity FIX, not a reference behavior
+      // change the predicate happens to excuse...
+      assert.equal(
+        refStream.filter((msg) => msg.type === STREAM.MUTATIONS).length, 0,
+        'reference emits no wire signal for the textContent= edit'
+      );
+      // ...and the extracted side emits exactly ONE batch of exactly ONE
+      // deduplicated text op carrying the replaced text.
+      const extBatches = extStream.filter((msg) => msg.type === STREAM.MUTATIONS);
+      assert.equal(extBatches.length, 1, 'extracted emits exactly one MUTATIONS batch');
+      assert.deepEqual(
+        extBatches[0].payload.mutations.map(({ op, text }) => ({ op, text })),
+        [{ op: DIFF_OP.TEXT, text: 'Replaced intro text.' }],
+        'one deduplicated text op carrying the replaced live text'
+      );
     } else {
-      // D1 (and any future mismatch entry) must stay scoped: every scenario
-      // other than pause-resume compares clean with ZERO ledger
-      // consultations.
+      // D1/D6 (and any future mismatch entry) must stay scoped: every
+      // scenario other than pause-resume and text-childlist compares clean
+      // with ZERO ledger consultations.
       assert.equal(
         matched.size, 0,
-        `no ledger consultation outside pause-resume (matched: ${[...matched].join(', ') || 'none'})`
+        `no ledger consultation outside pause-resume/text-childlist (matched: ${[...matched].join(', ') || 'none'})`
       );
     }
   });
@@ -316,6 +350,19 @@ test('pause-resume with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D1 is lo
 
   // The divergence is REAL: without the ledger, the exact same stream pair
   // that passes above must fail loudly. This proves D1 is the thing
+  // permitting it, not a comparison blind spot.
+  assert.throws(
+    () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
+    /UNDECLARED DIVERGENCE/
+  );
+});
+
+test('text-childlist with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D6 is load-bearing, not decorative', async () => {
+  const entry = MATRIX.find((p) => p.scenario === textChildlist);
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
+  // The divergence is REAL: without the ledger, the exact same stream pair
+  // that passes above must fail loudly. This proves D6 is the thing
   // permitting it, not a comparison blind spot.
   assert.throws(
     () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
