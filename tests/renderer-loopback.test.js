@@ -391,6 +391,81 @@ test('a text edit in the source pane updates the mirrored node textContent', asy
   }
 });
 
+test('a textContent replacement (bare text-node childList) on a tracked element mirrors', async () => {
+  const env = setupEnv(BODY_HTML);
+  try {
+    const ctx = wireLoopback(env);
+    ctx.capture.start();
+    await settle(env.window);
+    const iframe = viewerIframe(env);
+    await waitForStreaming(iframe);
+    const cd = glueMirror(iframe);
+
+    const row = env.document.getElementById('row-2');
+    const nid = row.getAttribute(NID_ATTR);
+    assert.ok(nid, 'row-2 was nid-stamped at serialization');
+    assert.equal(
+      cd.querySelector('[' + NID_ATTR + '="' + nid + '"]').textContent,
+      'row two',
+      'mirror starts in sync'
+    );
+
+    // textContent assignment REPLACES the text node: the observer reports a
+    // childList record with a bare TEXT-node removal+addition (the
+    // examples/loopback-mirror.html "Edit text" shape) -- NOT characterData.
+    // The element-only reference differ drops this class of mutation
+    // entirely, silently drifting the mirror (Phase 2 real-browser
+    // checkpoint finding).
+    row.textContent = 'row two replaced';
+    await settle(env.window);
+
+    const mirrored = cd.querySelector('[' + NID_ATTR + '="' + nid + '"]');
+    assert.equal(
+      mirrored.textContent, 'row two replaced',
+      'textContent replacement reached the mirror'
+    );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('bare text-node childList mutations emit exactly one deduplicated text op per target element', async () => {
+  const env = setupEnv(BODY_HTML);
+  try {
+    const ctx = wireLoopback(env);
+    ctx.capture.start();
+    await settle(env.window);
+    const iframe = viewerIframe(env);
+    await waitForStreaming(iframe);
+
+    const row = env.document.getElementById('row-3');
+    const nid = row.getAttribute(NID_ATTR);
+    assert.ok(nid, 'row-3 was nid-stamped at serialization');
+
+    // Two synchronous replacements on the SAME element accumulate two
+    // childList records into one rAF batch -- the differ must emit exactly
+    // ONE text op carrying the element's FINAL live textContent (the live
+    // read makes every record for the same target yield the same value, so
+    // dedup loses nothing).
+    row.textContent = 'row three intermediate';
+    row.textContent = 'row three final';
+    await settle(env.window);
+
+    const batches = mutationBatchesOf(ctx.received);
+    assert.equal(batches.length, 1, 'one flush carried the batch');
+    assert.equal(
+      batches[0].payload.mutations.length, 1,
+      'no spurious ops alongside the text op'
+    );
+    const op = batches[0].payload.mutations[0];
+    assert.equal(op.op, DIFF_OP.TEXT, 'the op is a text op');
+    assert.equal(op.nid, nid, 'addressed to the mutation target element');
+    assert.equal(op.text, 'row three final', 'carries the final live text');
+  } finally {
+    env.teardown();
+  }
+});
+
 test('recursion guard, diff path: setting iframe.srcdoc never echoes back as capture mutations', async () => {
   const env = setupEnv(BODY_HTML);
   try {
