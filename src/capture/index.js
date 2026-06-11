@@ -166,7 +166,13 @@ var SHELL_PROPS = [
  */
 
 /**
- * Overlay side-channel state returned by an overlayProvider.
+ * Overlay side-channel state returned by an overlayProvider. `glow` and
+ * `progress` are the reference built-ins; every OTHER own enumerable key is
+ * forwarded on the wire as a custom overlay kind (Phase 2 VIEW-04 pass-
+ * through -- see broadcastOverlayState and README entry E1). The identity
+ * keys `streamSessionId` / `snapshotId` are reserved: the capture core
+ * stamps them after the provider keys, so a provider can never overwrite
+ * stream identity.
  * @typedef {Object} OverlayState
  * @property {Object|null} [glow]      Action-highlight rect/state, or null
  * @property {Object|null} [progress]  Progress-card state, or null
@@ -182,6 +188,9 @@ var SHELL_PROPS = [
  *   Optional. Defaults to a console-backed logger.
  * @property {(() => OverlayState|null)} [overlayProvider]
  *   Optional. Called by the overlay broadcaster to read host overlay state.
+ *   ALL own enumerable provider keys are forwarded as overlay kinds (custom
+ *   kinds included); glow/progress default null when omitted; the identity
+ *   keys (streamSessionId / snapshotId) are reserved and never overwritten.
  *   Default null: overlay messages carry { glow: null, progress: null },
  *   preserving the reference's wire shape when no overlay system is present.
  * @property {(el: Element) => boolean} [skipElement]
@@ -1130,10 +1139,20 @@ export function createCapture(config) {
   // =========================================================================
 
   /**
-   * Read current host overlay state (highlight glow + progress) through the
-   * overlayProvider seam and broadcast it. With no provider configured the
-   * message carries { glow: null, progress: null }, preserving the
-   * reference's wire shape when no overlay system is present.
+   * Read current host overlay state through the overlayProvider seam and
+   * broadcast it. Pass-through contract (Phase 2 VIEW-04 extension, README
+   * entry E1): EVERY own enumerable key of the provider's returned state is
+   * forwarded on the wire as an overlay kind, so custom DOM-anchored
+   * overlays reach the viewer end-to-end. The built-ins `glow` and
+   * `progress` still default to null when the provider omits them, and the
+   * identity keys (streamSessionId / snapshotId) are reserved: they are
+   * assigned LAST, after the provider copy, so a provider can never
+   * overwrite stream identity (threat T-02-06).
+   *
+   * With no provider configured -- or a throwing provider -- the message
+   * carries exactly { glow: null, progress: null, streamSessionId,
+   * snapshotId }, byte-compatible with the reference's wire shape
+   * (differential-oracle protection: no fixture configures a provider).
    * @param {boolean} [force] - Bypass the throttle (lifecycle broadcasts)
    */
   function broadcastOverlayState(force) {
@@ -1142,28 +1161,37 @@ export function createCapture(config) {
     if (!force && (now - lastOverlayBroadcast < OVERLAY_THROTTLE_MS)) return;
     lastOverlayBroadcast = now;
 
-    var glow = null;
-    var progress = null;
+    var payload = {};
 
     // overlayProvider seam: replaces the reference's host-namespace overlay
     // reads. Provider errors are swallowed exactly like the reference's
-    // try/catch around its overlay reads.
+    // try/catch around its overlay reads; on error the payload resets to
+    // the defaults-only shape.
     try {
       if (overlayProvider) {
         var state = overlayProvider();
         if (state) {
-          glow = state.glow || null;
-          progress = state.progress || null;
+          for (var key in state) {
+            if (Object.prototype.hasOwnProperty.call(state, key)) {
+              payload[key] = state[key];
+            }
+          }
         }
       }
-    } catch (e) { /* ignore */ }
+    } catch (e) { payload = {}; /* swallowed like the reference */ }
 
-    safeSend(STREAM.OVERLAY, {
-      glow: glow,
-      progress: progress,
-      streamSessionId: streamSessionId || '',
-      snapshotId: currentSnapshotId || 0
-    });
+    // Built-in kinds default null even when the provider omits them
+    // (reference wire shape; the viewer's null-hides contract relies on
+    // these keys always being present).
+    payload.glow = payload.glow || null;
+    payload.progress = payload.progress || null;
+
+    // Identity keys assigned LAST: provider keys can never overwrite the
+    // stream identity (T-02-06).
+    payload.streamSessionId = streamSessionId || '';
+    payload.snapshotId = currentSnapshotId || 0;
+
+    safeSend(STREAM.OVERLAY, payload);
   }
 
   // =========================================================================

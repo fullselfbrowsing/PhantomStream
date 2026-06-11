@@ -25,7 +25,7 @@ const capture = createCapture({ transport, logger, overlayProvider, skipElement 
 |--------|----------|---------|---------|
 | `transport` | yes | — | Message sink: `{ send(type, payload), flush?() }`. The factory throws `Error('transport-send-required')` when `transport.send` is not a function — factory-time validation is the only place the capture may throw. |
 | `logger` | no | console-backed (`info`/`warn`/`error`) | Receives lifecycle logs and every contained transport error. |
-| `overlayProvider` | no | `null` | `() => ({ glow, progress })` — read host overlay state for the overlay side channel. With no provider, overlay messages carry `{ glow: null, progress: null }` (reference wire shape for an overlay-free page). |
+| `overlayProvider` | no | `null` | `() => ({ glow, progress, ...customKinds })` — read host overlay state for the overlay side channel. **All** own enumerable provider keys are forwarded on the wire as overlay kinds (extension E1 below); `glow`/`progress` default `null` when omitted; the identity keys (`streamSessionId`/`snapshotId`) are reserved and never overwritten. With no provider, overlay messages carry `{ glow: null, progress: null }` (reference wire shape for an overlay-free page). |
 | `skipElement` | no | `() => false` | `(el) => boolean` — predicate marking elements the host wants excluded from capture (its own UI). Applied **ancestor-inclusively** (like `closest()`, matching the reference's overlay handling): an element is excluded when the predicate matches it or any of its ancestors, so a root-only predicate (e.g. `el.id === 'my-overlay'`) excludes its whole subtree. Skipped subtrees receive no node-id assignment during serialization, and mutations anywhere inside them are dropped during diffing. |
 
 A readiness ping (`STREAM.READY`) is emitted once, at factory creation
@@ -83,6 +83,22 @@ Notable entries:
   control path is dropped from the core.
 
 D4 and D5 are reintroduced host-side by the Phase 6 MV3 adapter (ADPT-01).
+
+Phase 2 extension (additive, default-off — not a Phase 1 reference
+divergence, so it lives here rather than in the differential ledger):
+
+- **E1 (Phase 2, VIEW-04)** — overlay key forwarding: `broadcastOverlayState`
+  forwards **every** own enumerable key the `overlayProvider` returns as an
+  overlay kind on the `STREAM.OVERLAY` wire, so custom DOM-anchored overlays
+  reach the viewer's `registerOverlay` seam end-to-end. Constraints:
+  `glow`/`progress` still default `null` when the provider omits them, and
+  the identity keys (`streamSessionId`/`snapshotId`) are stamped **last** so
+  a provider can never overwrite stream identity. Wire-compatible when no
+  provider is present: with no provider (or a throwing provider) the message
+  is byte-identical to the reference shape
+  `{ glow: null, progress: null, streamSessionId, snapshotId }` — re-proven
+  oracle-safe by the full differential suite (no fixture configures an
+  overlayProvider). Pinned by `tests/capture-overlay-forward.test.js`.
 
 ## Behavioral changes queued for the standalone version
 
