@@ -57,6 +57,28 @@ test('viewport meta defaults to width=1920 and honors payload.viewportWidth', ()
   assert.ok(!sized.includes('width=1920'), 'no default leaks when viewportWidth provided');
 });
 
+test('viewportWidth is numerically coerced -- wire values can never break out of the meta attribute (WR-03)', () => {
+  // Leading-digit breakout probe: parseInt keeps only the numeric prefix,
+  // so the markup payload never reaches the srcdoc head.
+  const breakout = buildSnapshotHtml(minimalPayload({
+    viewportWidth: '1"><img src=x onerror=alert(1)>',
+  }));
+  assert.ok(
+    breakout.includes('<meta name="viewport" content="width=1">'),
+    'only the numeric prefix survives coercion'
+  );
+  assert.ok(!breakout.includes('onerror'), 'probe markup never reaches the srcdoc head');
+  // Entirely non-numeric input falls back to the 1920 default.
+  const garbage = buildSnapshotHtml(minimalPayload({
+    viewportWidth: '"><script>x</script>',
+  }));
+  assert.ok(
+    garbage.includes('<meta name="viewport" content="width=1920">'),
+    'non-numeric input falls back to the default'
+  );
+  assert.ok(!garbage.includes('<script>'), 'no breakout markup in the srcdoc head');
+});
+
 test('exact parity reset CSS string is present inside a style tag', () => {
   const html = buildSnapshotHtml(minimalPayload());
   assert.ok(

@@ -14,6 +14,18 @@
 // allow-same-origin-only sandbox (plan 02-03 criterion 3); the render-side
 // sanitization chokepoint lands in Phase 3 (SEC-01/SEC-02). Stylesheet link
 // hrefs escape ONLY double quotes, exactly like the reference.
+//
+// Wire-value insertion-point inventory (keep ACCURATE -- this list is what
+// the Phase 3 sanitization chokepoint audits; review WR-03):
+//   1. inlineStyles entries           -- RAW (parity pin above)
+//   2. payload.html                   -- RAW (parity pin above)
+//   3. stylesheet hrefs               -- double quotes escaped only
+//   4. html/body shell attrs + styles -- escapeAttribute (full escaping)
+//   5. viewportWidth                  -- numerically coerced
+//                                        (parseInt(_, 10) || 1920), never
+//                                        interpolated raw: the typed
+//                                        contract says number, but wire
+//                                        values are not trusted
 
 /** @typedef {import('../protocol/messages.js').SnapshotPayload} SnapshotPayload */
 
@@ -65,7 +77,8 @@ export function buildShellAttributeString(attrs, styleText) {
  * Build the full mirror srcdoc string for a snapshot payload. Assembly per
  * dashboard.js:2785-2800, in order: doctype + html shell attrs (from
  * payload.htmlAttrs/payload.htmlStyle) + head with charset meta, viewport
- * meta width=(payload.viewportWidth || 1920), stylesheet links (each with
+ * meta width=(parseInt(payload.viewportWidth, 10) || 1920) -- numerically
+ * coerced, never raw (review WR-03), stylesheet links (each with
  * ONLY double quotes escaped to &quot;), inline style tags RAW, the exact
  * parity reset-CSS style tag (02-UI-SPEC "Mirror page reset CSS") + body
  * shell attrs (payload.bodyAttrs/payload.bodyStyle) + payload.html RAW +
@@ -88,7 +101,7 @@ export function buildSnapshotHtml(payload) {
   var bodyAttrs = buildShellAttributeString(p.bodyAttrs, p.bodyStyle);
 
   return '<!DOCTYPE html><html' + htmlAttrs + '><head><meta charset="UTF-8">' +
-    '<meta name="viewport" content="width=' + (p.viewportWidth || 1920) + '">' +
+    '<meta name="viewport" content="width=' + (parseInt(p.viewportWidth, 10) || 1920) + '">' +
     stylesheetLinks +
     inlineStyleTags +
     '<style>body { margin: 0; overflow: hidden; } *::selection { background: transparent; } ::-webkit-scrollbar { display: none; }</style>' +
