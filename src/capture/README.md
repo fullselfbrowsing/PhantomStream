@@ -106,6 +106,17 @@ divergence, so it lives here rather than in the differential ledger):
   text drift, found at the Phase 2 real-browser checkpoint). Declared as
   differential ledger entry D6 (pinned by the `text-childlist` oracle
   scenario) and covered end-to-end in `tests/renderer-loopback.test.js`.
+  **Mixed-content guard (review CR-01):** emission is gated on the live
+  target having no element children at flush time (`firstElementChild`) —
+  the renderer applies the op as `textContent =`, which would otherwise
+  destroy mirrored element subtrees that still exist live (text-node
+  appends into mixed containers, `innerHTML` with mixed content). The
+  `textContent = '...'` shape keeps emitting (its element children were
+  just removed, so the live read is null). Residual gap (accepted,
+  reference drop behavior): bare text changes inside mixed-content
+  containers drift in the mirror until the next snapshot/resync — text
+  drift, never structural flattening. Pinned by the mixed-content shapes
+  in `tests/renderer-loopback.test.js`.
 
 ## Behavioral changes queued for the standalone version
 

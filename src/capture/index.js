@@ -910,7 +910,9 @@ export function createCapture(config) {
         // real-browser checkpoint finding). When any added/removed node is
         // a TEXT or CDATA node, a text op for the mutation TARGET (the
         // parent element) is emitted below, mirroring the characterData
-        // branch's shape. Comment nodes stay excluded: they never render.
+        // branch's shape -- unless the mixed-content guard at the emission
+        // site suppresses it. Comment nodes stay excluded: they never
+        // render.
         var sawBareTextNode = false;
 
         // Added nodes
@@ -956,7 +958,20 @@ export function createCapture(config) {
         // children orders its rm ops before the text op -- the renderer then
         // removes the elements and sets the final flat text, matching the
         // live DOM end state.
-        if (sawBareTextNode) {
+        //
+        // MIXED-CONTENT GUARD (review CR-01): the renderer applies this op
+        // as textContent = text, which REPLACES every child of the mirrored
+        // target. Emitting it while the live target still has element
+        // children (a text-node append into a mixed container, innerHTML
+        // with mixed content) would destroy mirrored element subtrees that
+        // still exist in the live DOM -- structural corruption with no
+        // stale-miss signal. Gating on firstElementChild keeps the
+        // textContent= shape working (its element children were just
+        // removed, so the live read is null) and reverts mixed-content text
+        // changes to the reference's drop behavior: text drift, structure
+        // intact. Residual gap documented in the E2 README entry and the D6
+        // ledger rationale.
+        if (sawBareTextNode && !m.target.firstElementChild) {
           var textTargetNid = m.target.getAttribute ? m.target.getAttribute(NID_ATTR) : null;
           if (textTargetNid && !textOpNids[textTargetNid]) {
             textOpNids[textTargetNid] = true;

@@ -162,9 +162,15 @@ export const DIVERGENCES = [
       'Deliberate fidelity FIX divergence (Phase 2): the extracted core must mirror '
       + 'textContent= edits; reference parity here would preserve a data-loss bug. '
       + 'Capture-side change documented as src/capture/README.md entry E2; the renderer '
-      + 'is unchanged (the DIFF_OP.TEXT applier already handles the op shape). Pinned '
-      + 'end-to-end by tests/renderer-loopback.test.js and by the text-childlist '
-      + 'scenario here.',
+      + 'is unchanged (the DIFF_OP.TEXT applier already handles the op shape). '
+      + 'Mixed-content guard (review CR-01): emission is gated on the live target '
+      + 'having no element children at flush time (firstElementChild) -- the renderer '
+      + 'applies the op as textContent=, which would destroy mirrored element subtrees '
+      + 'that still exist live. Mixed-content text changes therefore keep the '
+      + 'reference\'s drop behavior (text drift, structure intact) and produce NO '
+      + 'extracted-only message; the text-childlist scenario\'s text-only target keeps '
+      + 'this entry matching. Pinned end-to-end by tests/renderer-loopback.test.js and '
+      + 'by the text-childlist scenario here.',
     affectedMessages: [STREAM.MUTATIONS],
     affectedScenarios: ['text-childlist'],
     appliesTo(refMsg, extMsg, scenarioName) {

@@ -466,6 +466,109 @@ test('bare text-node childList mutations emit exactly one deduplicated text op p
   }
 });
 
+test('a bare text-node append into a mixed-content element never flattens mirrored element children (CR-01 shape A)', async () => {
+  const env = setupEnv(
+    '<div id="source-pane">'
+      + '<div id="mixed"><span id="kept">a</span></div>'
+      + '</div>'
+      + '<div id="mirror-container"></div>'
+  );
+  try {
+    const ctx = wireLoopback(env);
+    ctx.capture.start();
+    await settle(env.window);
+    const iframe = viewerIframe(env);
+    await waitForStreaming(iframe);
+    const cd = glueMirror(iframe);
+
+    const mixed = env.document.getElementById('mixed');
+    const kept = env.document.getElementById('kept');
+    const mixedNid = mixed.getAttribute(NID_ATTR);
+    const keptNid = kept.getAttribute(NID_ATTR);
+    assert.ok(mixedNid && keptNid, 'both elements nid-stamped at serialization');
+    assert.ok(
+      cd.querySelector('[' + NID_ATTR + '="' + keptNid + '"]'),
+      'mirror starts with the span present'
+    );
+
+    // Bare text-node append into a container that still has a live element
+    // child. Without the mixed-content guard the differ emits a flattening
+    // text op for the target, and the renderer's textContent= apply
+    // destroys the mirrored span while it still exists live -- silent
+    // structural corruption with no stale miss and no resync (review CR-01,
+    // probe shape A). The guarded differ suppresses the op entirely, so the
+    // batch processes empty and NO mutation message is sent (the
+    // reference's drop behavior: text drift, structure intact).
+    mixed.appendChild(env.document.createTextNode('!'));
+    await settle(env.window);
+
+    assert.equal(
+      mutationBatchesOf(ctx.received).length, 0,
+      'mixed-content bare-text record emits no wire signal (reference drop behavior)'
+    );
+    const mirroredSpan = cd.querySelector('[' + NID_ATTR + '="' + keptNid + '"]');
+    assert.ok(mirroredSpan, 'the mirrored span survived (structure intact)');
+    assert.equal(mirroredSpan.tagName, 'SPAN', 'still an element, not flattened text');
+    assert.equal(mirroredSpan.textContent, 'a', 'span content untouched');
+    // Accepted residual (documented in the E2 README entry and the D6
+    // ledger rationale): the appended bare text drifts -- live shows "a!",
+    // the mirror keeps "a" until the next snapshot/resync. Drift is
+    // recoverable; structural destruction is not.
+  } finally {
+    env.teardown();
+  }
+});
+
+test('innerHTML with mixed content keeps the mirrored element child intact (CR-01 shape B)', async () => {
+  const env = setupEnv(
+    '<div id="source-pane">'
+      + '<div id="rich">old text</div>'
+      + '</div>'
+      + '<div id="mirror-container"></div>'
+  );
+  try {
+    const ctx = wireLoopback(env);
+    ctx.capture.start();
+    await settle(env.window);
+    const iframe = viewerIframe(env);
+    await waitForStreaming(iframe);
+    const cd = glueMirror(iframe);
+
+    const rich = env.document.getElementById('rich');
+    const richNid = rich.getAttribute(NID_ATTR);
+    assert.ok(richNid, 'rich was nid-stamped at serialization');
+
+    // Mixed-content innerHTML: one childList record carrying an element
+    // addition (<b>) AND a bare text-node addition. Without the
+    // mixed-content guard the trailing flattening text op destroys the <b>
+    // the add op just inserted (review CR-01, probe shape B).
+    rich.innerHTML = 'hello <b>world</b>';
+    await settle(env.window);
+
+    const bNid = rich.querySelector('b').getAttribute(NID_ATTR);
+    assert.ok(bNid, 'the differ stamped a nid on the live added <b>');
+
+    const mirroredRich = cd.querySelector('[' + NID_ATTR + '="' + richNid + '"]');
+    const mirroredB = cd.querySelector('[' + NID_ATTR + '="' + bNid + '"]');
+    assert.ok(mirroredB, 'the added <b> reached the mirror and was NOT destroyed');
+    assert.equal(mirroredB.tagName, 'B', 'mirrored element kept its tag');
+    assert.equal(mirroredB.textContent, 'world', '<b> content intact in the mirror');
+    assert.ok(mirroredRich.contains(mirroredB), '<b> mirrored under its parent');
+
+    // The wire never carried a flattening text op for the mixed target.
+    for (const batch of mutationBatchesOf(ctx.received)) {
+      for (const op of batch.payload.mutations) {
+        assert.ok(
+          !(op.op === DIFF_OP.TEXT && op.nid === richNid),
+          'no flattening text op was emitted for the mixed-content target'
+        );
+      }
+    }
+  } finally {
+    env.teardown();
+  }
+});
+
 test('recursion guard, diff path: setting iframe.srcdoc never echoes back as capture mutations', async () => {
   const env = setupEnv(BODY_HTML);
   try {
