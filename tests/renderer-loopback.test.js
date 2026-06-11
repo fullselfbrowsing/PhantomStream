@@ -526,3 +526,185 @@ test('stale-miss threshold drives the CONTROL.START resync round-trip end-to-end
     env.teardown();
   }
 });
+
+// === Task 2: dialog + custom overlay side channels ==========================
+//
+// Dialog messages are injected through the CAPTURE end of the transport --
+// never by running capture's dialog interceptor, which requires jsdom's
+// runScripts:'dangerously' (02-RESEARCH recipe step 9). Injection still
+// exercises the full viewer-side path: transport dispatch ->
+// overlays.handleDialogMessage -> card DOM.
+//
+// Overlay broadcasts: broadcastOverlayState has exactly ONE call site in the
+// capture core -- start(force=true). The first start's OVERLAY message is
+// always delivered while the viewer is still 'waiting' (loopback microtasks
+// run before the iframe's about:blank load task), so it is gated off
+// (Pitfall 4 parity). The deterministic streaming-state trigger is a second
+// capture.start() once streaming is reached: the viewer stays 'streaming'
+// across re-snapshots (plan 02-03 parity decision), so the second broadcast
+// dispatches through the registry.
+
+test('dialog open/close mirrors through STREAM.DIALOG end-to-end', async () => {
+  const env = setupEnv(BODY_HTML);
+  try {
+    const ctx = wireLoopback(env);
+    ctx.capture.start();
+    await settle(env.window);
+    await waitForStreaming(viewerIframe(env));
+
+    ctx.transport.captureTransport.send(STREAM.DIALOG, {
+      dialog: { type: 'alert', state: 'open', message: 'saved!' },
+    });
+    await settle(env.window);
+
+    const mirrorContainer = env.document.getElementById('mirror-container');
+    const dialogEl = mirrorContainer.querySelector('.ps-overlay-dialog');
+    assert.equal(dialogEl.style.display, 'flex', 'open dialog shows the backdrop');
+    assert.equal(
+      mirrorContainer.querySelector('.ps-overlay-dialog-type').textContent,
+      'Alert',
+      'capitalized type label'
+    );
+    assert.equal(
+      mirrorContainer.querySelector('.ps-overlay-dialog-message').textContent,
+      'saved!',
+      'message rendered (textContent path)'
+    );
+
+    ctx.transport.captureTransport.send(STREAM.DIALOG, {
+      dialog: { type: 'alert', state: 'closed' },
+    });
+    await settle(env.window);
+    assert.equal(dialogEl.style.display, 'none', 'closed dialog hides the backdrop');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('a custom overlay kind flows capture overlayProvider -> wire -> registered renderFn', async () => {
+  const env = setupEnv(BODY_HTML);
+  try {
+    const ctx = wireLoopback(env, {
+      overlayProvider: () => ({
+        glow: null,
+        progress: null,
+        badge: { x: 5, y: 6, w: 10, h: 8, text: 'agent' },
+      }),
+    });
+    // Register the custom kind on the viewer handle BEFORE capture.start()
+    // (wiring-order requirement: the loopback has no buffering).
+    const calls = [];
+    ctx.viewer.registerOverlay('badge', (value, anchorRect, layer) => {
+      calls.push({ value, anchorRect, layer });
+    });
+
+    ctx.capture.start();
+    await settle(env.window);
+    await waitForStreaming(viewerIframe(env));
+    // Second start = the deterministic streaming-state broadcast trigger
+    // (see the section comment above).
+    ctx.capture.start();
+    await settle(env.window);
+
+    const payloadCalls = calls.filter((c) => c.value !== null);
+    assert.equal(payloadCalls.length, 1, 'exactly one wire dispatch carried the payload');
+    const call = payloadCalls[0];
+    assert.equal(call.value.text, 'agent', 'provider payload arrived end-to-end');
+
+    // Anchor rect: numeric x/y/w/h mapped through the viewer's scaleState.
+    // The jsdom container box is 0x0, so computeScale clamps s to 1 with
+    // zero letterbox offsets -- the mapped rect equals the raw coords.
+    assert.deepEqual(
+      call.anchorRect,
+      { top: 6, left: 5, width: 10, height: 8 },
+      'anchorRect mapped through mapRectToHost with the current scale state'
+    );
+    assert.ok(
+      call.layer && typeof call.layer.appendChild === 'function',
+      'renderFn receives the overlay layer element for DOM writes'
+    );
+
+    // The reset contract also reached the custom kind: each snapshot's
+    // resetOverlays dispatched (null, null, layer) through the registry.
+    assert.ok(
+      calls.some((c) => c.value === null && c.anchorRect === null),
+      'new-snapshot reset dispatched null through the registered renderFn'
+    );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('an unregistered overlay kind from the provider is warn-logged and ignored, never thrown', async () => {
+  const env = setupEnv(BODY_HTML);
+  try {
+    const viewerLogger = recordingWarnLogger();
+    const ctx = wireLoopback(env, {
+      viewerLogger,
+      overlayProvider: () => ({ sparkles: { note: 'shiny' } }),
+    });
+    ctx.capture.start();
+    await settle(env.window);
+    await waitForStreaming(viewerIframe(env));
+    ctx.capture.start(); // streaming-state broadcast trigger
+    await settle(env.window);
+
+    assert.ok(
+      viewerLogger.warns.some(
+        (args) => String(args[0]).includes('unknown overlay kind') && args.includes('sparkles')
+      ),
+      'unknown kind routed to logger.warn with the kind name'
+    );
+    // Nothing threw: the kind loop continued and the viewer is still live
+    // (the glow/progress null keys dispatched normally after sparkles).
+    const glowEl = env.document
+      .getElementById('mirror-container')
+      .querySelector('.ps-overlay-glow');
+    assert.equal(glowEl.style.display, 'none', 'built-ins still dispatched (null -> hidden)');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('a new snapshot resets overlays: the dialog hides after a resync even if previously open', async () => {
+  const env = setupEnv(BODY_HTML);
+  try {
+    const ctx = wireLoopback(env);
+    ctx.capture.start();
+    await settle(env.window);
+    await waitForStreaming(viewerIframe(env));
+
+    ctx.transport.captureTransport.send(STREAM.DIALOG, {
+      dialog: { type: 'confirm', state: 'open', message: 'still open?' },
+    });
+    await settle(env.window);
+    const dialogEl = env.document
+      .getElementById('mirror-container')
+      .querySelector('.ps-overlay-dialog');
+    assert.equal(dialogEl.style.display, 'flex', 'dialog open before the resync');
+
+    // Drive the REAL recovery path (not a bare restart): three stale misses
+    // with the current identity force CONTROL.START; the glue restarts the
+    // capture; the fresh snapshot's resetOverlays hides every kind.
+    const firstSnapshot = snapshotsOf(ctx.received)[0].payload;
+    for (let i = 0; i < 3; i++) {
+      ctx.transport.captureTransport.send(STREAM.MUTATIONS, {
+        mutations: [
+          { op: DIFF_OP.ADD, parentNid: 525252 + i, html: '<div>orphan</div>' },
+        ],
+        streamSessionId: firstSnapshot.streamSessionId,
+        snapshotId: firstSnapshot.snapshotId,
+      });
+    }
+    await settle(env.window);
+
+    assert.equal(controlStartsOf(ctx.controls).length, 1, 'one latched resync fired');
+    assert.equal(snapshotsOf(ctx.received).length, 2, 'recovery snapshot arrived');
+    assert.equal(
+      dialogEl.style.display, 'none',
+      'the new snapshot reset the overlays: dialog hidden'
+    );
+  } finally {
+    env.teardown();
+  }
+});
