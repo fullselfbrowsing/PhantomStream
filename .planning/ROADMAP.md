@@ -93,7 +93,21 @@ Plans:
   2. Render-side sanitization runs through one named chokepoint (DOM-fragment based, never string→`innerHTML`), with a CSS sanitization pass and srcdoc CSP meta as backstops
   3. The viewer renders exclusively in a sandboxed iframe without `allow-scripts`; a startup assertion fails loudly on misconfiguration; the embed security contract is documented
   4. Host-configured privacy masking (`blockSelector`, `maskTextSelector`, `maskInputs`, custom mask fns) is applied capture-side in all serialization paths — masked text and input values never appear on the wire
-**Plans**: TBD
+**Plans**: 5 plans (4 waves)
+
+Plans:
+**Wave 1**
+- [ ] 03-01-PLAN.md — Capture-side chokepoint `sanitizeForWire`: on*/scheme/srcdoc/object-embed strips + CSS scrub across all five serialization paths (SEC-01)
+- [ ] 03-02-PLAN.md — Render-side chokepoint `sanitizeFragment` + template-context add-op parsing + srcdoc CSP meta + per-session strip counters (SEC-02)
+
+**Wave 2** *(blocked on 03-01)*
+- [ ] 03-03-PLAN.md — Privacy masking: blockSelector placeholder, maskTextSelector, maskInputs, always-on password mask, custom mask fns (SEC-03)
+
+**Wave 3** *(blocked on 03-01 + 03-03)*
+- [ ] 03-04-PLAN.md — Differential-oracle discipline: sanitize-corpus fixture + sanitize-divergence scenario + load-bearing D7 ledger entry
+
+**Wave 4** *(blocked on all)*
+- [ ] 03-05-PLAN.md — Chokepoint-purity static scan + docs/SECURITY.md embed contract + full-suite gate + demo dogfood checkpoint
 
 ### Phase 4: Relay, WS Transport & Two-Tab Demo
 **Goal**: The mirror works across the network — `npx phantom-stream demo` captures a page in one tab and mirrors it live in another through the bundled relay
@@ -223,7 +237,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 |-------|----------------|--------|-----------|
 | 1. Capture Core Extraction + Differential Oracle | 5/5 | Complete    | 2026-06-10 |
 | 2. Renderer Core + Embedded Loopback Mirror | 6/6 | Complete    | 2026-06-11 |
-| 3. Security Pipeline — Sanitization + Privacy Masking | 0/TBD | Not started | - |
+| 3. Security Pipeline — Sanitization + Privacy Masking | 0/5 | Planned     | - |
 | 4. Relay, WS Transport & Two-Tab Demo | 0/TBD | Not started | - |
 | 5. Playwright/CDP Adapter, Remote Control & Agent Demo | 0/TBD | Not started | - |
 | 6. Extension MV3 + Bookmarklet Adapters | 0/TBD | Not started | - |
