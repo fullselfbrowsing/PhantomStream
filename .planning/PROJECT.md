@@ -35,6 +35,8 @@ standalone framework.
 - ✓ Clean dependency-free protocol module — existing (`src/protocol/`)
 - ✓ Capture core decoupled from `chrome.runtime`/`window.FSB` behind an injected `Transport` interface — runs in any injection context, with lifecycle (`start`/`stop`/`pause`/`resume`), purity grep-enforced in CI, and reliability defenses test-pinned — Validated in Phase 1 (CAPT-01, CAPT-02, CAPT-03)
 - ✓ Extracted capture verified against `reference/` via a dual-jsdom differential oracle on frozen fixtures, with machine-enforced divergence ledger (D1 mismatch + D2–D5 mappings) — Validated in Phase 1 (CAPT-04)
+- ✓ Renderer decoupled from the FSB dashboard into an embeddable viewer (`createViewer({ container, transport })`, sandboxed iframe, scale-to-fit, extensible overlay registry, scroll/dialog parity) — Validated in Phase 2 (VIEW-01, VIEW-04, VIEW-06)
+- ✓ Embedded-SDK adapter + first-light loopback demo (`npm run example:loopback`) — a page mirrors itself live with zero infrastructure, verified in real Chrome — Validated in Phase 2 (ADPT-04)
 
 ### Active
 
@@ -42,7 +44,6 @@ standalone framework.
 
 **Framework extraction (first priority):**
 - [ ] Transport-agnostic relay with pluggable backends (WebSocket reference implementation)
-- [ ] Renderer decoupled from the FSB dashboard into an embeddable viewer component
 - [ ] All six inherited limitations fixed in the standalone v1:
   - [ ] Sanitization as a first-class stage (`on*` attrs, `javascript:` URLs stripped in all serialization paths; sandboxed rendering enforced)
   - [ ] Stylesheet-centric capture mode (CSSOM) — fixes frozen-style drift, shrinks payloads, enables the paper's ablation
@@ -136,4 +137,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-10 after Phase 1 completion (capture core extracted; differential oracle green ref-vs-extracted; CI live on Node 20/22/24)*
+*Last updated: 2026-06-11 after Phase 2 completion (embeddable viewer + loopback mirror live; text-node fidelity fix D6)*
