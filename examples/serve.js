@@ -70,10 +70,22 @@ const server = createServer(async (req, res) => {
       filePath = resolve(filePath, 'index.html');
       stats = await stat(filePath);
     }
+    if (!stats.isFile()) {
+      // FIFOs/sockets/devices in the tree would hang the response forever.
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('not found');
+      return;
+    }
     res.writeHead(200, {
       'content-type': MIME[extname(filePath)] || 'application/octet-stream'
     });
-    createReadStream(filePath).pipe(res);
+    const stream = createReadStream(filePath);
+    // pipe() does NOT forward source errors: without this handler one
+    // unreadable file (EACCES, deleted between stat and open) is an
+    // unhandled 'error' event that kills the whole process (review WR-01).
+    // Headers are already sent, so abort the socket instead of a 500 body.
+    stream.on('error', () => res.destroy());
+    stream.pipe(res);
   } catch {
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
     res.end('not found');
