@@ -70,8 +70,8 @@ Plans:
 
 Plans:
 **Wave 1**
-- [ ] 02-01-PLAN.md — Pure renderer core: snapshot HTML builder + Document-parameterized diff applier (jsdom-mandated seams)
-- [ ] 02-02-PLAN.md — Overlay registry + glow/progress/dialog built-ins + oracle-safe capture overlay-key forwarding
+- [x] 02-01-PLAN.md — Pure renderer core: snapshot HTML builder + Document-parameterized diff applier (jsdom-mandated seams)
+- [x] 02-02-PLAN.md — Overlay registry + glow/progress/dialog built-ins + oracle-safe capture overlay-key forwarding
 
 **Wave 2** *(blocked on Wave 1)*
 - [ ] 02-03-PLAN.md — createViewer factory: sandbox assertion, dispatch, scale-to-fit, latched CONTROL.START resync + purity gate
@@ -222,7 +222,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Capture Core Extraction + Differential Oracle | 5/5 | Complete    | 2026-06-10 |
-| 2. Renderer Core + Embedded Loopback Mirror | 0/6 | Planned | - |
+| 2. Renderer Core + Embedded Loopback Mirror | 2/6 | In Progress|  |
 | 3. Security Pipeline — Sanitization + Privacy Masking | 0/TBD | Not started | - |
 | 4. Relay, WS Transport & Two-Tab Demo | 0/TBD | Not started | - |
 | 5. Playwright/CDP Adapter, Remote Control & Agent Demo | 0/TBD | Not started | - |
