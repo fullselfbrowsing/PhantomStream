@@ -519,10 +519,14 @@ test('registerOverlay routes a custom kind from the wire to the host renderFn', 
       streamSessionId: payload.streamSessionId,
       snapshotId: payload.snapshotId,
     });
-    assert.equal(calls.length, 1, 'custom renderFn invoked once');
-    assert.deepEqual(calls[0].value, { text: 'hi' });
-    assert.equal(calls[0].anchorRect, null, 'no nid and no coords -> null anchor');
-    assert.ok(calls[0].layer && typeof calls[0].layer.appendChild === 'function');
+    // Two calls: the snapshot's resetOverlays dispatches (null, null, layer)
+    // through EVERY registered renderFn (the plan-02-02 reset contract),
+    // then the wire message delivers the payload value.
+    assert.equal(calls.length, 2, 'snapshot reset + wire dispatch');
+    assert.equal(calls[0].value, null, 'new-snapshot reset clears the custom kind');
+    assert.deepEqual(calls[1].value, { text: 'hi' });
+    assert.equal(calls[1].anchorRect, null, 'no nid and no coords -> null anchor');
+    assert.ok(calls[1].layer && typeof calls[1].layer.appendChild === 'function');
   } finally {
     env.teardown();
   }
