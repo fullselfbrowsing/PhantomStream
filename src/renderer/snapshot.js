@@ -7,18 +7,25 @@
 // srcdoc string out. No DOM access, no module-level side effects -- the
 // caller (createViewer, plan 02-03) owns the iframe write.
 //
-// Known gap preserved on purpose (parity pin, 02-RESEARCH.md Pitfall 9):
-// inlineStyles entries and payload.html are inserted RAW -- a '</style>'
-// inside captured CSS can break out of its style tag, and the body html is
-// attacker-influenced. Script execution is blocked downstream by the
-// allow-same-origin-only sandbox (plan 02-03 criterion 3); the render-side
-// sanitization chokepoint lands in Phase 3 (SEC-01/SEC-02). Stylesheet link
-// hrefs escape ONLY double quotes, exactly like the reference.
+// Phase 3 (plan 03-02, SEC-02): the adopted CSP meta is injected as the
+// first element after <head>, and inlineStyles entries are CSS-scrubbed at
+// assembly via scrubCssText (a pure string pass -- this module stays
+// DOM-free per the contract above; the DOM-fragment chokepoint lives in
+// sanitize.js and may never land here). payload.html stays raw AT THE
+// STRING LAYER by design: string-level scrubbing is the mXSS anti-pattern
+// (scrub-then-reparse), so that insertion point is protected by the
+// layered chain instead -- capture chokepoint upstream, the viewer's
+// post-parse sanitizeFragment scrub on load (src/renderer/index.js), the
+// CSP meta below, and the allow-same-origin-only sandbox.
 //
 // Wire-value insertion-point inventory (keep ACCURATE -- this list is what
-// the Phase 3 sanitization chokepoint audits; review WR-03):
-//   1. inlineStyles entries           -- RAW (parity pin above)
-//   2. payload.html                   -- RAW (parity pin above)
+// the sanitization chokepoint audits; review WR-03):
+//   1. inlineStyles entries           -- CSS-scrubbed via scrubCssText
+//                                        (03-02; was RAW)
+//   2. payload.html                   -- intentionally RAW at the string
+//                                        layer; defense chain: capture
+//                                        chokepoint + post-parse scrub +
+//                                        CSP meta + sandbox (03-02)
 //   3. stylesheet hrefs               -- double quotes escaped only
 //   4. html/body shell attrs + styles -- escapeAttribute (full escaping)
 //   5. viewportWidth                  -- numerically coerced
@@ -27,7 +34,30 @@
 //                                        contract says number, but wire
 //                                        values are not trusted
 
+import { scrubCssText } from './sanitize.js';
+
 /** @typedef {import('../protocol/messages.js').SnapshotPayload} SnapshotPayload */
+
+// The ADOPTED srcdoc CSP (backstop behind both sanitization chokepoints,
+// delivered via meta because the mirror is never a fetched URL). Baseline
+// from 03-CONTEXT with ONE documented adjustment under the decision's own
+// clause ("adjust only with documented rationale if mirror fidelity
+// requires, never weaker than script-blocking"): style-src gains
+// http: https: because the capture deliberately emits external stylesheet
+// links (stylesheets[] collection, src/capture/index.js) and
+// 'unsafe-inline' alone would block every link-rel-stylesheet load in the
+// mirror, breaking real-world fidelity from Phase 4 on. Script-blocking is
+// untouched: default-src 'none' still governs scripts (no script-src is
+// introduced). Meta-unsupported directives are deliberately absent
+// (03-RESEARCH Pitfall 8); the iframe-level sandbox attribute asserted in
+// createViewer is the analogous control. Documented in docs/SECURITY.md
+// (plan 03-05).
+var CSP_META = '<meta http-equiv="Content-Security-Policy" content="'
+  + "default-src 'none'; "
+  + 'img-src http: https: data:; '
+  + "style-src http: https: 'unsafe-inline'; "
+  + 'font-src http: https: data:'
+  + '">';
 
 /**
  * Escape a value for inclusion inside a double-quoted HTML attribute.
@@ -75,14 +105,17 @@ export function buildShellAttributeString(attrs, styleText) {
 
 /**
  * Build the full mirror srcdoc string for a snapshot payload. Assembly per
- * dashboard.js:2785-2800, in order: doctype + html shell attrs (from
- * payload.htmlAttrs/payload.htmlStyle) + head with charset meta, viewport
- * meta width=(parseInt(payload.viewportWidth, 10) || 1920) -- numerically
+ * dashboard.js:2785-2800 extended by 03-02, in order: doctype + html shell
+ * attrs (from payload.htmlAttrs/payload.htmlStyle) + head with the adopted
+ * CSP meta FIRST, charset meta, viewport meta
+ * width=(parseInt(payload.viewportWidth, 10) || 1920) -- numerically
  * coerced, never raw (review WR-03), stylesheet links (each with
- * ONLY double quotes escaped to &quot;), inline style tags RAW, the exact
- * parity reset-CSS style tag (02-UI-SPEC "Mirror page reset CSS") + body
- * shell attrs (payload.bodyAttrs/payload.bodyStyle) + payload.html RAW +
- * closing tags. Pure transform: no DOM access anywhere.
+ * ONLY double quotes escaped to &quot;), inline style tags CSS-scrubbed
+ * via scrubCssText, the exact parity reset-CSS style tag (02-UI-SPEC
+ * "Mirror page reset CSS") + body shell attrs
+ * (payload.bodyAttrs/payload.bodyStyle) + payload.html raw at the string
+ * layer (see the insertion-point inventory above) + closing tags.
+ * Pure transform: no DOM access anywhere.
  * @param {SnapshotPayload} payload
  * @returns {string}
  */
@@ -94,13 +127,18 @@ export function buildSnapshotHtml(payload) {
   }).join('\n');
 
   var inlineStyleTags = (p.inlineStyles || []).map(function (css) {
-    return '<style>' + css + '</style>';
+    // CSS scrub at assembly (03-02): pure string pass; the scrub also
+    // rewrites any literal style-closing sequence so captured CSS cannot
+    // break out of this tag.
+    return '<style>' + scrubCssText(css) + '</style>';
   }).join('\n');
 
   var htmlAttrs = buildShellAttributeString(p.htmlAttrs, p.htmlStyle);
   var bodyAttrs = buildShellAttributeString(p.bodyAttrs, p.bodyStyle);
 
-  return '<!DOCTYPE html><html' + htmlAttrs + '><head><meta charset="UTF-8">' +
+  // CSP meta FIRST after <head> so the policy applies before any
+  // parser-initiated fetch (03-RESEARCH "CSP meta injection").
+  return '<!DOCTYPE html><html' + htmlAttrs + '><head>' + CSP_META + '<meta charset="UTF-8">' +
     '<meta name="viewport" content="width=' + (parseInt(p.viewportWidth, 10) || 1920) + '">' +
     stylesheetLinks +
     inlineStyleTags +
