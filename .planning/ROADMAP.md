@@ -97,8 +97,8 @@ Plans:
 
 Plans:
 **Wave 1**
-- [ ] 03-01-PLAN.md — Capture-side chokepoint `sanitizeForWire`: on*/scheme/srcdoc/object-embed strips + CSS scrub across all five serialization paths (SEC-01)
-- [ ] 03-02-PLAN.md — Render-side chokepoint `sanitizeFragment` + template-context add-op parsing + srcdoc CSP meta + per-session strip counters (SEC-02)
+- [x] 03-01-PLAN.md — Capture-side chokepoint `sanitizeForWire`: on*/scheme/srcdoc/object-embed strips + CSS scrub across all five serialization paths (SEC-01)
+- [x] 03-02-PLAN.md — Render-side chokepoint `sanitizeFragment` + template-context add-op parsing + srcdoc CSP meta + per-session strip counters (SEC-02)
 
 **Wave 2** *(blocked on 03-01)*
 - [ ] 03-03-PLAN.md — Privacy masking: blockSelector placeholder, maskTextSelector, maskInputs, always-on password mask, custom mask fns (SEC-03)
@@ -237,7 +237,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 |-------|----------------|--------|-----------|
 | 1. Capture Core Extraction + Differential Oracle | 5/5 | Complete    | 2026-06-10 |
 | 2. Renderer Core + Embedded Loopback Mirror | 6/6 | Complete    | 2026-06-11 |
-| 3. Security Pipeline — Sanitization + Privacy Masking | 0/5 | Planned     | - |
+| 3. Security Pipeline — Sanitization + Privacy Masking | 2/5 | In Progress|  |
 | 4. Relay, WS Transport & Two-Tab Demo | 0/TBD | Not started | - |
 | 5. Playwright/CDP Adapter, Remote Control & Agent Demo | 0/TBD | Not started | - |
 | 6. Extension MV3 + Bookmarklet Adapters | 0/TBD | Not started | - |
