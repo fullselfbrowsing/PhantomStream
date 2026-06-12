@@ -34,6 +34,8 @@ import {
   sanitizeAttrValue,
   scrubCssText,
 } from '../src/renderer/sanitize.js';
+import { applyMutations } from '../src/renderer/diff.js';
+import { NID_ATTR, DIFF_OP } from '../src/protocol/messages.js';
 
 /**
  * Fresh JSDOM instance. makeFragment parses arbitrary HTML in TEMPLATE
@@ -353,6 +355,141 @@ test('null tolerance: every export contains null/undefined input without throwin
   const shape = sanitizeAttrValue(null, null);
   assert.equal(typeof shape.drop, 'boolean', 'sanitizeAttrValue returns the {drop, value} shape');
   assert.equal(typeof shape.value, 'string');
+});
+
+// --- Section 2: chokepoint integration through applyMutations ----------------
+
+/** Detached target Document seeded through body markup (diff-test recipe). */
+function makeDoc(env, bodyHtml) {
+  const doc = env.window.document.implementation.createHTMLDocument('diff target');
+  doc.body.innerHTML = bodyHtml;
+  return doc;
+}
+
+/** Recording diff hooks carrying an injected sanitizeCounters object. */
+function diffHooks(sanitizeCounters) {
+  const warns = [];
+  const resyncs = [];
+  return {
+    warns,
+    resyncs,
+    hooks: {
+      logger: {
+        info() {},
+        warn(...args) { warns.push(args); },
+        error() {},
+      },
+      requestResync(reason, details) { resyncs.push({ reason, details }); },
+      sanitizeCounters,
+    },
+  };
+}
+
+function freshDiffCounters() {
+  return { staleMisses: 0, applyFailures: 0 };
+}
+
+test("chokepoint integration: a hostile 'add' op inserts a node with neither onclick nor javascript: href", () => {
+  const env = setupEnv();
+  try {
+    const doc = makeDoc(env, '<div ' + NID_ATTR + '="1"></div>');
+    const sc = freshCounters();
+    const rec = diffHooks(sc);
+    applyMutations(doc, [
+      {
+        op: DIFF_OP.ADD,
+        parentNid: '1',
+        html: '<div ' + NID_ATTR + '="9">'
+          + '<button ' + NID_ATTR + '="10" onclick="alert(1)">x</button>'
+          + '<a ' + NID_ATTR + '="11" href="javascript:alert(1)">y</a>'
+          + '</div>',
+      },
+    ], freshDiffCounters(), rec.hooks);
+    const added = doc.querySelector('[' + NID_ATTR + '="9"]');
+    assert.ok(added, 'the hostile add op still inserts (sanitized, never silently dropped)');
+    assert.deepEqual(onAttrsOf(added), [], 'sanitizeFragment ran on template content before importNode');
+    assert.equal(
+      added.querySelector('a').getAttribute('href'), '',
+      'javascript: href neutralized inside the inserted subtree'
+    );
+    assert.ok(sc.strippedHandlers >= 1, 'handler strip counted through hooks.sanitizeCounters');
+    assert.ok(sc.blockedUrls >= 1, 'URL block counted through hooks.sanitizeCounters');
+  } finally {
+    env.teardown();
+  }
+});
+
+test("chokepoint integration: an 'attr' op with an on* name is DROPPED -- no setAttribute, counter moves, no stale miss", () => {
+  const env = setupEnv();
+  try {
+    const doc = makeDoc(env, '<div ' + NID_ATTR + '="1"></div>');
+    const sc = freshCounters();
+    const rec = diffHooks(sc);
+    const counters = freshDiffCounters();
+    applyMutations(doc, [
+      { op: DIFF_OP.ATTR, nid: '1', attr: 'onclick', val: 'alert(1)' },
+    ], counters, rec.hooks);
+    const target = doc.querySelector('[' + NID_ATTR + '="1"]');
+    assert.equal(target.hasAttribute('onclick'), false, 'target unchanged: handler attr never applied');
+    assert.equal(counters.staleMisses, 0, 'a sanitization drop is NOT a stale miss');
+    assert.equal(counters.applyFailures, 0, 'a sanitization drop is NOT an apply failure');
+    assert.equal(sc.strippedHandlers, 1, 'drop counted in the sanitize counters');
+  } finally {
+    env.teardown();
+  }
+});
+
+test("chokepoint integration: an 'attr' op href=javascript: sets ''; benign attr ops apply unchanged", () => {
+  const env = setupEnv();
+  try {
+    const doc = makeDoc(env, '<a ' + NID_ATTR + '="1">x</a>');
+    const sc = freshCounters();
+    const rec = diffHooks(sc);
+    applyMutations(doc, [
+      { op: DIFF_OP.ATTR, nid: '1', attr: 'href', val: 'javascript:alert(1)' },
+      { op: DIFF_OP.ATTR, nid: '1', attr: 'title', val: 'tip' },
+    ], freshDiffCounters(), rec.hooks);
+    const target = doc.querySelector('[' + NID_ATTR + '="1"]');
+    assert.equal(target.getAttribute('href'), '', 'dangerous URL neutralized to empty value');
+    assert.equal(target.getAttribute('title'), 'tip', 'benign attr op applied unchanged');
+    assert.equal(sc.blockedUrls, 1, 'URL neutralization counted');
+  } finally {
+    env.teardown();
+  }
+});
+
+test("chokepoint integration: an 'attr' op for srcdoc is dropped", () => {
+  const env = setupEnv();
+  try {
+    const doc = makeDoc(env, '<iframe ' + NID_ATTR + '="1"></iframe>');
+    const sc = freshCounters();
+    const rec = diffHooks(sc);
+    applyMutations(doc, [
+      { op: DIFF_OP.ATTR, nid: '1', attr: 'srcdoc', val: '<p>nested</p>' },
+    ], freshDiffCounters(), rec.hooks);
+    const target = doc.querySelector('[' + NID_ATTR + '="1"]');
+    assert.equal(target.hasAttribute('srcdoc'), false, 'srcdoc attr op never applied');
+    assert.equal(sc.strippedHandlers, 1, 'srcdoc drop counted');
+  } finally {
+    env.teardown();
+  }
+});
+
+test("chokepoint integration: 'text' ops still apply via textContent unchanged (no HTML parse path)", () => {
+  const env = setupEnv();
+  try {
+    const doc = makeDoc(env, '<div ' + NID_ATTR + '="1">old</div>');
+    const rec = diffHooks(freshCounters());
+    const markupText = '<img src=x onerror=alert(1)> stays literal text';
+    applyMutations(doc, [
+      { op: DIFF_OP.TEXT, nid: '1', text: markupText },
+    ], freshDiffCounters(), rec.hooks);
+    const target = doc.querySelector('[' + NID_ATTR + '="1"]');
+    assert.equal(target.textContent, markupText, 'textContent assignment never parses HTML');
+    assert.equal(target.children.length, 0, 'no element materialized from the text payload');
+  } finally {
+    env.teardown();
+  }
 });
 
 test('Pitfall 2 discipline: this file never assigns srcdoc on an iframe', () => {
