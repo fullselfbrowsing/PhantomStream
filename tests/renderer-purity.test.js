@@ -43,9 +43,10 @@ test('renderer core exists with the planned module split', () => {
     'src/renderer contains no .js modules — the renderer core has not been ' +
       'extracted yet, so the purity scan below would pass vacuously'
   );
-  // Pin the four-module split (plans 02-01/02-02/02-03) so a future
-  // restructure cannot silently drop a scanned file out of the gate.
-  for (const required of ['index.js', 'snapshot.js', 'diff.js', 'overlays.js']) {
+  // Pin the five-module split (plans 02-01/02-02/02-03 + the 03-02 render
+  // chokepoint) so a future restructure cannot silently drop a scanned
+  // file out of the gate.
+  for (const required of ['index.js', 'snapshot.js', 'diff.js', 'overlays.js', 'sanitize.js']) {
     assert.ok(
       modules.includes(required),
       `src/renderer/${required} is missing — the renderer module split ` +

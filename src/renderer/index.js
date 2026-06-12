@@ -36,6 +36,7 @@
 
 import { buildSnapshotHtml } from './snapshot.js';
 import { applyMutations } from './diff.js';
+import { sanitizeFragment } from './sanitize.js';
 import { createOverlays, mapRectToHost, OVERLAY_CSS } from './overlays.js';
 import { STREAM, CONTROL, NID_ATTR, isCurrentStream } from '../protocol/messages.js';
 
@@ -185,6 +186,28 @@ export function createViewer(options) {
     throw new Error('viewer-sandbox-invalid');
   }
 
+  // POST-PARSE SCRUB (plan 03-02, threat T-03-09): the srcdoc string
+  // cannot be fragment-scrubbed before the browser parses it -- string
+  // scrubbing is the mXSS anti-pattern (scrub-then-reparse) -- so the
+  // PARSED mirror document is scrubbed on every load instead. Registered
+  // FIRST so the scrub runs before the streaming flip below; reads
+  // contentDocument fresh per call (re-snapshots replace the document).
+  // In jsdom this listener is inert against srcdoc content (jsdom never
+  // parses srcdoc; the one about:blank load sees an empty body) -- the
+  // loopback glue recipe + a deliberately re-fired load event exercise it
+  // under test, and real browsers fire it on every srcdoc load. The
+  // sandbox assertion below stays untouched (phase criterion 3).
+  iframe.addEventListener('load', function () {
+    try {
+      var scrubDoc = iframe.contentDocument;
+      if (scrubDoc && scrubDoc.body) {
+        sanitizeFragment(scrubDoc.body, sanitizeCounters, logger);
+      }
+    } catch (e) {
+      logger.warn('[Renderer] post-parse scrub failed', e);
+    }
+  });
+
   // Snapshot-load completion handler, attached ONCE at creation (before the
   // iframe is ever connected) rather than re-assigned per snapshot like the
   // reference's iframe.onload. Divergence forced by jsdom (verified
@@ -223,6 +246,16 @@ export function createViewer(options) {
   var active = { streamSessionId: '', snapshotId: 0 };
   var lastScroll = { x: 0, y: 0 };
   var counters = { staleMisses: 0, applyFailures: 0 };
+  // Sanitization strip counters -- PER-SESSION lifecycle (03-RESEARCH
+  // Pitfall 3, deliberate divergence from the per-snapshot miss counters
+  // above): misses measure per-generation drift and reset in
+  // handleSnapshot; these measure a sustained strip rate across the whole
+  // viewer session, so they reset ONLY in destroy(). Mutated in place by
+  // sanitizeFragment (post-parse scrub) and the diff applier via
+  // hooks.sanitizeCounters.
+  var sanitizeCounters = {
+    strippedHandlers: 0, blockedUrls: 0, droppedSubtrees: 0, cssScrubs: 0
+  };
   var resyncPending = false; // latch: at most one resync in flight per generation
   var lastSnapshotPayload = null;
   var scaleState = computeScale(1920, 1080, container.clientWidth, container.clientHeight);
@@ -360,7 +393,8 @@ export function createViewer(options) {
     var cd = iframe.contentDocument;
     applyMutations(cd, payload.mutations, counters, {
       logger: logger,
-      requestResync: requestResync
+      requestResync: requestResync,
+      sanitizeCounters: sanitizeCounters
     });
     try {
       iframe.contentWindow.scrollTo(lastScroll.x, lastScroll.y);
@@ -509,6 +543,12 @@ export function createViewer(options) {
     active.snapshotId = 0;
     counters.staleMisses = 0;
     counters.applyFailures = 0;
+    // The ONLY sanitize-counter reset site (per-session lifecycle --
+    // see the declaration comment; handleSnapshot never resets these).
+    sanitizeCounters.strippedHandlers = 0;
+    sanitizeCounters.blockedUrls = 0;
+    sanitizeCounters.droppedSubtrees = 0;
+    sanitizeCounters.cssScrubs = 0;
     resyncPending = false;
     viewerState = 'waiting';
   }
