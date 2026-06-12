@@ -154,6 +154,33 @@ function addOps(transport) {
     .filter((op) => op.op === DIFF_OP.ADD);
 }
 
+// .blocked subtrees are the blockSelector targets; the inputs cover the
+// always-on password mask plus the configurable maskInputs rule.
+const BLOCK_BODY_HTML = '<div id="root">'
+  + '<div id="wrap">'
+  + '<div class="blocked" id="blk" data-secret="s3cr3t-attr"><span id="blk-child">blocked content text</span></div>'
+  + '<input id="pw" type="password" value="hunter2">'
+  + '<input id="txt" type="text" value="visible-value">'
+  + '<textarea id="ta">textarea secret body</textarea>'
+  + '<p id="pub2">tracked public</p>'
+  + '</div>'
+  + '</div>';
+
+/** Collect every DIFF_OP.ATTR op across all mutation batches. */
+function attrOps(transport) {
+  return transport.sent
+    .filter((m) => m.type === STREAM.MUTATIONS)
+    .flatMap((m) => m.payload.mutations)
+    .filter((op) => op.op === DIFF_OP.ATTR);
+}
+
+/** Stub a fixed live rect on an element (jsdom returns zeros otherwise). */
+function stubRect(el, width, height) {
+  el.getBoundingClientRect = () => ({
+    width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0,
+  });
+}
+
 // =========================================================================
 // Task 1: maskTextSelector / maskTextFn across all text paths
 // =========================================================================
@@ -463,6 +490,376 @@ test('with no masking config, snapshot + mutations carry zero asterisk masking (
     // masking was applied with no config (default-off violation).
     const wire = wireText(transport);
     assert.ok(!wire.includes('*'), 'zero asterisk masking anywhere on the wire');
+  } finally {
+    env.teardown();
+  }
+});
+
+// =========================================================================
+// Task 2: blockSelector placeholder + maskInputs / password value masking
+// =========================================================================
+
+test('a blockSelector-matched element emits ONLY a rr_width/rr_height placeholder with the nid -- no attrs, children, or text', async () => {
+  const env = setupEnv(BLOCK_BODY_HTML);
+  try {
+    const transport = createLoopbackTransport();
+    stubRect(env.document.getElementById('blk'), 320, 240);
+    env.capture = createCapture({
+      transport,
+      logger: silentLogger(),
+      blockSelector: '.blocked',
+    });
+    env.capture.start();
+
+    const snapshots = transport.sent.filter((m) => m.type === STREAM.SNAPSHOT);
+    assert.equal(snapshots.length, 1, 'start() emits exactly one snapshot');
+    const html = snapshots[0].payload.html;
+
+    // Nothing of the blocked element's content reaches the snapshot.
+    assert.ok(!html.includes('blocked content text'), 'blocked text absent');
+    assert.ok(!html.includes('s3cr3t-attr'), 'blocked attribute value absent');
+    assert.ok(!html.includes('data-secret'), 'blocked attribute name absent');
+    assert.ok(!html.includes('blk-child'), 'blocked descendant absent');
+
+    // The placeholder carries rr_width/rr_height (px from the live rect)
+    // plus the nid attribute and NOTHING else.
+    const tpl = env.document.createElement('template');
+    tpl.innerHTML = html;
+    const placeholder = tpl.content.querySelector('[rr_width]');
+    assert.ok(placeholder, 'placeholder present in the snapshot');
+    assert.equal(placeholder.getAttribute('rr_width'), '320px', 'rr_width carries the live px width');
+    assert.equal(placeholder.getAttribute('rr_height'), '240px', 'rr_height carries the live px height');
+    assert.ok(placeholder.getAttribute(NID_ATTR), 'placeholder carries the nid');
+    assert.equal(placeholder.attributes.length, 3, 'placeholder has EXACTLY rr_width + rr_height + nid');
+    assert.equal(placeholder.childNodes.length, 0, 'placeholder has no children and no text');
+
+    // The live blocked element is nid-stamped (placeholder addressable for
+    // later rm ops) and the nids match.
+    assert.equal(env.document.getElementById('blk').getAttribute(NID_ATTR),
+      placeholder.getAttribute(NID_ATTR),
+      'placeholder nid matches the live blocked element nid');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('attribute, text, and childList mutations anywhere inside a blocked subtree (including ON it) emit zero ops', async () => {
+  const env = setupEnv(BLOCK_BODY_HTML);
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({
+      transport,
+      logger: silentLogger(),
+      blockSelector: '.blocked',
+    });
+    env.capture.start();
+    await settle(env.window);
+
+    const mutationCount = () => transport.sent.filter((m) => m.type === STREAM.MUTATIONS).length;
+    assert.equal(mutationCount(), 0, 'no mutation traffic before any edit');
+
+    // ON the blocked element itself (attr op on the blocked root).
+    env.document.getElementById('blk').setAttribute('data-blocked-edit', '1');
+    // Attribute on a descendant.
+    env.document.getElementById('blk-child').setAttribute('data-deep-edit', '1');
+    // characterData on a descendant text node.
+    env.document.getElementById('blk-child').firstChild.nodeValue = 'changed blocked text';
+    // childList inside the blocked subtree.
+    env.document.getElementById('blk').appendChild(env.document.createElement('div'));
+    await settle(env.window);
+    assert.equal(mutationCount(), 0, 'mutations on/inside the blocked subtree emit no ops');
+
+    // The pipeline is still alive: tracked content streams.
+    env.document.getElementById('pub2').setAttribute('data-tracked', 'yes');
+    await settle(env.window);
+    const batches = transport.sent.filter((m) => m.type === STREAM.MUTATIONS);
+    assert.equal(batches.length, 1, 'tracked content still streams');
+    const ops = batches[0].payload.mutations;
+    assert.ok(ops.some((op) => op.op === DIFF_OP.ATTR && op.attr === 'data-tracked'), 'tracked op on the wire');
+    assert.ok(!ops.some((op) => op.attr === 'data-blocked-edit' || op.attr === 'data-deep-edit'),
+      'no blocked-subtree op leaked');
+    const wire = wireText(transport);
+    assert.ok(!wire.includes('changed blocked text'), 'blocked text edit never on the wire');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('a blockSelector-matched element ADDED post-snapshot emits an add op whose html is the placeholder shape', async () => {
+  const env = setupEnv(BLOCK_BODY_HTML);
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({
+      transport,
+      logger: silentLogger(),
+      blockSelector: '.blocked',
+    });
+    env.capture.start();
+    await settle(env.window);
+
+    const late = env.document.createElement('div');
+    late.className = 'blocked';
+    late.setAttribute('data-late-secret', 'late-attr-secret');
+    late.textContent = 'late blocked secret';
+    stubRect(late, 111, 222);
+    env.document.getElementById('wrap').appendChild(late);
+    await settle(env.window);
+
+    const adds = addOps(transport);
+    assert.equal(adds.length, 1, 'exactly one add op emitted');
+    assert.ok(adds[0].html.includes('rr_width="111px"'), 'add-op html is the placeholder (rr_width)');
+    assert.ok(adds[0].html.includes('rr_height="222px"'), 'add-op html is the placeholder (rr_height)');
+    assert.ok(adds[0].html.includes(NID_ATTR), 'placeholder carries a nid');
+    assert.ok(!adds[0].html.includes('late blocked secret'), 'blocked content absent from the add op');
+    assert.ok(!adds[0].html.includes('late-attr-secret'), 'blocked attribute absent from the add op');
+    const wire = wireText(transport);
+    assert.ok(!wire.includes('late blocked secret'), 'blocked content never on the wire');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('an added subtree CONTAINING a blocked descendant swaps that descendant for the placeholder in the add-op html', async () => {
+  const env = setupEnv(BLOCK_BODY_HTML);
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({
+      transport,
+      logger: silentLogger(),
+      blockSelector: '.blocked',
+    });
+    env.capture.start();
+    await settle(env.window);
+
+    const cont = env.document.createElement('div');
+    cont.innerHTML = '<span id="fine-span">fine text</span>'
+      + '<div class="blocked" id="late-blk">deep blocked secret</div>';
+    stubRect(cont.querySelector('#late-blk'), 50, 60);
+    env.document.getElementById('wrap').appendChild(cont);
+    await settle(env.window);
+
+    const adds = addOps(transport);
+    assert.equal(adds.length, 1, 'exactly one add op emitted');
+    assert.ok(adds[0].html.includes('fine text'), 'unblocked sibling text stays raw');
+    assert.ok(adds[0].html.includes('rr_width="50px"'), 'blocked descendant became a placeholder');
+    assert.ok(adds[0].html.includes('rr_height="60px"'), 'placeholder carries the live rect height');
+    assert.ok(!adds[0].html.includes('deep blocked secret'), 'blocked descendant content absent');
+    const wire = wireText(transport);
+    assert.ok(!wire.includes('deep blocked secret'), 'blocked descendant content never on the wire');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('input[type=password] value is masked in the snapshot even with NO masking config (always-on, non-configurable)', async () => {
+  const env = setupEnv(BLOCK_BODY_HTML);
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({
+      transport,
+      logger: silentLogger(),
+    });
+    env.capture.start();
+
+    const snapshots = transport.sent.filter((m) => m.type === STREAM.SNAPSHOT);
+    const html = snapshots[0].payload.html;
+    assert.ok(!html.includes('hunter2'), 'password plaintext absent from the snapshot');
+
+    const tpl = env.document.createElement('template');
+    tpl.innerHTML = html;
+    const pw = tpl.content.querySelector('#pw');
+    assert.ok(pw, 'password input still mirrored');
+    assert.ok(pw.getAttribute(NID_ATTR), 'password input nid still present (element mirrored, value masked)');
+    assert.equal(pw.getAttribute('value'), expectMask('hunter2'), 'password value masked with the default mask');
+
+    // Non-password values pass through raw with maskInputs off (default).
+    assert.ok(html.includes('visible-value'), 'text input value stays raw without maskInputs');
+    assert.ok(html.includes('textarea secret body'), 'textarea text stays raw without maskInputs');
+
+    const wire = wireText(transport);
+    assert.ok(!/hunter2/.test(wire), 'password plaintext appears in ZERO transport.sent payloads');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('post-snapshot setAttribute(value) on a password input emits an attr op with the masked value, never the plaintext', async () => {
+  const env = setupEnv(BLOCK_BODY_HTML);
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({
+      transport,
+      logger: silentLogger(),
+    });
+    env.capture.start();
+    await settle(env.window);
+
+    env.document.getElementById('pw').setAttribute('value', 'hunter2-rotated');
+    await settle(env.window);
+
+    const ops = attrOps(transport).filter((op) => op.attr === 'value');
+    assert.equal(ops.length, 1, 'exactly one value attr op emitted');
+    assert.equal(ops[0].val, expectMask('hunter2-rotated'), 'attr op carries the masked value (Pitfall 10)');
+    const wire = wireText(transport);
+    assert.ok(!/hunter2/.test(wire), 'password plaintext appears in ZERO transport.sent payloads');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('with maskInputs true, a text input value is masked in snapshot AND attr-op mutations; textarea text is masked too', async () => {
+  const env = setupEnv(BLOCK_BODY_HTML);
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({
+      transport,
+      logger: silentLogger(),
+      maskInputs: true,
+    });
+    env.capture.start();
+    await settle(env.window);
+
+    const snapshots = transport.sent.filter((m) => m.type === STREAM.SNAPSHOT);
+    const html = snapshots[0].payload.html;
+    assert.ok(!html.includes('visible-value'), 'text input value absent from snapshot');
+    assert.ok(!html.includes('textarea secret body'), 'textarea text absent from snapshot');
+
+    const tpl = env.document.createElement('template');
+    tpl.innerHTML = html;
+    assert.equal(tpl.content.querySelector('#txt').getAttribute('value'), expectMask('visible-value'),
+      'text input value masked in snapshot');
+    assert.equal(tpl.content.querySelector('#ta').textContent, expectMask('textarea secret body'),
+      'textarea text masked in snapshot');
+
+    env.document.getElementById('txt').setAttribute('value', 'updated-input');
+    await settle(env.window);
+    const ops = attrOps(transport).filter((op) => op.attr === 'value');
+    assert.equal(ops.length, 1, 'exactly one value attr op emitted');
+    assert.equal(ops[0].val, expectMask('updated-input'), 'attr op carries the masked value');
+    const wire = wireText(transport);
+    assert.ok(!wire.includes('visible-value'), 'snapshot input value never on the wire');
+    assert.ok(!wire.includes('updated-input'), 'mutated input value never on the wire');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('with maskInputs false (default), non-password values pass through raw in snapshot and attr ops', async () => {
+  const env = setupEnv(BLOCK_BODY_HTML);
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({
+      transport,
+      logger: silentLogger(),
+    });
+    env.capture.start();
+    await settle(env.window);
+
+    const snapshots = transport.sent.filter((m) => m.type === STREAM.SNAPSHOT);
+    assert.ok(snapshots[0].payload.html.includes('visible-value'), 'text input value raw in snapshot');
+
+    env.document.getElementById('txt').setAttribute('value', 'plain-new-value');
+    await settle(env.window);
+    const ops = attrOps(transport).filter((op) => op.attr === 'value');
+    assert.equal(ops.length, 1, 'exactly one value attr op emitted');
+    assert.equal(ops[0].val, 'plain-new-value', 'non-password attr op passes through raw');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('maskInputFn receives (text, element) and is used; a THROWING maskInputFn falls back to the default mask', async () => {
+  // Custom fn used.
+  let env = setupEnv(BLOCK_BODY_HTML);
+  try {
+    const transport = createLoopbackTransport();
+    const calls = [];
+    env.capture = createCapture({
+      transport,
+      logger: silentLogger(),
+      maskInputs: true,
+      maskInputFn: (text, element) => {
+        calls.push({ text, id: element && element.id });
+        return '#'.repeat(text.length);
+      },
+    });
+    env.capture.start();
+
+    const tpl = env.document.createElement('template');
+    tpl.innerHTML = transport.sent.filter((m) => m.type === STREAM.SNAPSHOT)[0].payload.html;
+    assert.equal(tpl.content.querySelector('#txt').getAttribute('value'), '#'.repeat('visible-value'.length),
+      'snapshot uses the custom input mask fn return value');
+    assert.ok(calls.some((c) => c.text === 'visible-value' && c.id === 'txt'),
+      'maskInputFn received (text, element)');
+
+    env.document.getElementById('txt').setAttribute('value', 'next-value');
+    await settle(env.window);
+    assert.ok(
+      attrOps(transport).some((op) => op.attr === 'value' && op.val === '#'.repeat('next-value'.length)),
+      'attr op uses the custom input mask fn return value'
+    );
+  } finally {
+    env.teardown();
+  }
+
+  // Throwing fn: fail closed to the default asterisk mask + logger.error.
+  env = setupEnv(BLOCK_BODY_HTML);
+  try {
+    const transport = createLoopbackTransport();
+    const errors = [];
+    const recordingLogger = { info() {}, warn() {}, error(...args) { errors.push(args); } };
+    env.capture = createCapture({
+      transport,
+      logger: recordingLogger,
+      maskInputs: true,
+      maskInputFn: () => { throw new TypeError('input-mask-fn-blew-up'); },
+    });
+    assert.doesNotThrow(() => env.capture.start());
+    assert.ok(errors.length >= 1, 'input mask fn errors were routed to the logger');
+
+    const tpl = env.document.createElement('template');
+    tpl.innerHTML = transport.sent.filter((m) => m.type === STREAM.SNAPSHOT)[0].payload.html;
+    assert.equal(tpl.content.querySelector('#txt').getAttribute('value'), expectMask('visible-value'),
+      'fallback is the DEFAULT asterisk mask, never raw');
+    const wire = wireText(transport);
+    assert.ok(!wire.includes('visible-value'), 'raw input value never leaked');
+    assert.ok(!/hunter2/.test(wire), 'password plaintext never leaked');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('wire-wide scan: blocked content and password plaintext appear in NO message of any type', async () => {
+  const env = setupEnv(BLOCK_BODY_HTML);
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({
+      transport,
+      logger: silentLogger(),
+      blockSelector: '.blocked',
+    });
+    env.capture.start();
+    await settle(env.window);
+
+    // Exercise multiple paths in one stream: blocked-subtree edits, a
+    // password attr op, an added blocked element, a tracked edit.
+    env.document.getElementById('blk-child').firstChild.nodeValue = 'blocked rewrite';
+    env.document.getElementById('pw').setAttribute('value', 'hunter2-again');
+    const late = env.document.createElement('div');
+    late.className = 'blocked';
+    late.textContent = 'late blocked secret';
+    env.document.getElementById('wrap').appendChild(late);
+    env.document.getElementById('pub2').setAttribute('data-alive', '1');
+    await settle(env.window);
+    env.capture.stop();
+
+    const wire = wireText(transport);
+    assert.ok(!wire.includes('blocked content text'), 'snapshot-blocked text in zero messages');
+    assert.ok(!wire.includes('blocked rewrite'), 'blocked text edit in zero messages');
+    assert.ok(!wire.includes('late blocked secret'), 'late blocked content in zero messages');
+    assert.ok(!wire.includes('s3cr3t-attr'), 'blocked attr value in zero messages');
+    assert.ok(!/hunter2/.test(wire), 'password plaintext in zero messages');
+    assert.ok(wire.includes('data-alive'), 'tracked traffic still flows (scan surface is non-empty)');
   } finally {
     env.teardown();
   }
