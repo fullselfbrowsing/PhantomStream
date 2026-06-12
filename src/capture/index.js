@@ -683,28 +683,55 @@ export function createCapture(config) {
     }
   }
 
+  // Serialization-path inventory (keep ACCURATE -- this list is the ground
+  // truth the plan 03-05 chokepoint purity scan audits, Pitfall 1; mirrors
+  // the WR-03 wire-value insertion-point inventory in
+  // src/renderer/snapshot.js):
+  //   1. serializeDOM clone walk          -- 'element' dispatch (drop
+  //      decision at the old script/noscript site, before nid assignment,
+  //      plus a post-absolutification re-scrub per pair and an
+  //      iframe-branch scrub)
+  //   2. processAddedNode add-op subtrees -- 'subtree' dispatch on the
+  //      detached wire clone (the live node is NEVER scrubbed)
+  //   3. attr-op branch                   -- 'attr' dispatch, after
+  //      absolutifyUrl/absolutifySrcset so the scheme check runs on final
+  //      wire values
+  //   4. characterData text branch       -- 'text' dispatch (identity this
+  //      plan; SEC-03 masking seam, plan 03-03)
+  //   5. E2 text-childlist branch        -- 'text' dispatch (same seam)
+  // Head inline <style> text additionally routes through the 'css' dispatch
+  // at the serializeDOM collection site (a value scrub, not a markup walk).
+  // Side channels that BYPASS the markup scrub BY DESIGN: the dialog relay
+  // (setupDialogRelay) and the overlay broadcast (broadcastOverlayState)
+  // carry text/metadata only and are rendered via textContent in the viewer
+  // (overlays.js, threat T-02-04) -- no HTML parse path exists for them.
+
   /**
    * The capture-side sanitization chokepoint (SEC-01): the single named
    * function through which every serialization path emits. Blocklist
    * policy, fidelity-first (CONTEXT locked decision: allowlist rejected) --
    * benign content passes through byte-identical. Strips apply ONLY to
    * detached clones / wire values, never to the live observed page (threat
-   * T-03-06). Dispatch shapes:
+   * T-03-06). Dispatch shapes (kind, payload -> result):
    *
-   *   sanitizeForWire('element', { orig, clone })    -> { drop?: true }
+   *   'element', { orig, clone }         -> { drop?: true }
    *     Scrubs one detached clone element in place; { drop: true } for
    *     script/noscript (reference-parity strip, uncounted) and
    *     object/embed (SEC-01 blocklist, counted).
-   *   sanitizeForWire('subtree', { root, liveRoot }) -> { drop?: true }
+   *   'subtree', { root, liveRoot }      -> { drop?: true }
    *     Walks a detached wire clone (root + descendants), element-scrubbing
    *     each and removing forbidden descendants; { drop: true } when the
    *     root itself is forbidden.
-   *   sanitizeForWire('text',    { text, owner })    -> { text }
+   *   'attr',    { name, value, target } -> { drop?: true, value?: string }
+   *     Attr-op gate: on* and srcdoc ops are DROPPED, dangerous URL schemes
+   *     neutralize to '', style values are CSS-scrubbed; everything else
+   *     passes through unchanged.
+   *   'text',    { text, owner }         -> { text }
    *     IDENTITY HOOK this plan: the SEC-03 masking seam -- plan 03-03
    *     fills maskTextSelector/maskTextFn here (incrementing
    *     maskedTextNodes); Phase 8 CAPT-05 typed-text capture plugs into the
    *     same seam.
-   *   sanitizeForWire('css',     { css })            -> { css }
+   *   'css',     { css }                 -> { css }
    *     Targeted CSS value scrub (scrubCssText) for head inline styles.
    *
    * @param {string} kind - dispatch tag
@@ -834,6 +861,51 @@ export function createCapture(config) {
         }
       }
       return {};
+    }
+
+    if (kind === 'attr') {
+      var attrName = String(payload.name || '').toLowerCase();
+      // on* handler attr mutations: the op is DROPPED entirely, never
+      // value-neutralized -- the mirror must not even learn the attribute
+      // name (Pitfall 5: this branch bypassed the snapshot sanitizer).
+      if (attrName.indexOf('on') === 0) {
+        sanitizeCounters.strippedHandlers++;
+        return { drop: true };
+      }
+      // srcdoc: dropped, matching the element-path attribute strip.
+      if (attrName === 'srcdoc') {
+        sanitizeCounters.blockedSubtrees++;
+        return { drop: true };
+      }
+      // style: targeted CSS value scrub (A2: style attr mutations flow
+      // through this branch as full inline-style serializations).
+      if (attrName === 'style') {
+        var scrubbedAttrCss = scrubCssText(payload.value);
+        if (scrubbedAttrCss !== payload.value) {
+          sanitizeCounters.cssScrubs++;
+        }
+        return { value: scrubbedAttrCss };
+      }
+      // srcset: per-candidate scheme neutralization.
+      if (attrName === 'srcset' && payload.value) {
+        var scrubbedAttrSrcset = scrubSrcset(payload.value);
+        if (scrubbedAttrSrcset !== payload.value) {
+          sanitizeCounters.blockedUrlSchemes++;
+        }
+        return { value: scrubbedAttrSrcset };
+      }
+      // URL-carrying attrs: dangerous schemes neutralize to '' -- the op
+      // (and so attribute EXISTENCE) is preserved for mirror parity.
+      if ((URL_ATTRS.indexOf(attrName) !== -1 || attrName === 'formaction' || attrName === 'xlink:href')
+          && payload.value && hasDangerousScheme(payload.value)) {
+        sanitizeCounters.blockedUrlSchemes++;
+        return { value: '' };
+      }
+      // The 'value' attribute passes through unchanged THIS plan: this is
+      // the plan 03-03 maskInputs seam (the always-on password mask and the
+      // maskInputs config consult payload.target here; Phase 8 CAPT-05
+      // typed-text capture reuses the same rule).
+      return { value: payload.value };
     }
 
     if (kind === 'text') {
@@ -1407,12 +1479,18 @@ export function createCapture(config) {
           var textTargetNid = m.target.getAttribute ? m.target.getAttribute(NID_ATTR) : null;
           if (textTargetNid && !textOpNids[textTargetNid]) {
             textOpNids[textTargetNid] = true;
+            // SEC-03 masking seam (plan 03-03): identity transform this
+            // plan; owner is the mutation target itself for E2.
+            var e2TextResult = sanitizeForWire('text', {
+              text: m.target.textContent,
+              owner: m.target
+            });
             // Same wire shape as the characterData branch: the renderer's
             // DIFF_OP.TEXT applier sets textContent on the nid target.
             diffs.push({
               op: 'text',
               nid: textTargetNid,
-              text: m.target.textContent
+              text: e2TextResult.text
             });
           }
         }
@@ -1429,21 +1507,37 @@ export function createCapture(config) {
           attrVal = absolutifySrcset(attrVal);
         }
 
+        // SEC-01: route through the chokepoint AFTER absolutification so
+        // the scheme check runs on final wire values (Pitfall 5: this
+        // branch was the snapshot sanitizer's bypass).
+        var attrResult = sanitizeForWire('attr', {
+          name: m.attributeName,
+          value: attrVal,
+          target: m.target
+        });
+        if (attrResult.drop) continue;
+
         diffs.push({
           op: 'attr',
           nid: targetNid,
           attr: m.attributeName,
-          val: attrVal
+          val: attrResult.value
         });
       } else if (m.type === 'characterData') {
         var parentEl = m.target.parentElement;
         var textNid = (parentEl && parentEl.getAttribute) ? parentEl.getAttribute(NID_ATTR) : null;
         if (!textNid) continue;
 
+        // SEC-03 masking seam (plan 03-03): identity transform this plan.
+        var textResult = sanitizeForWire('text', {
+          text: m.target.textContent,
+          owner: parentEl
+        });
+
         diffs.push({
           op: 'text',
           nid: textNid,
-          text: m.target.textContent
+          text: textResult.text
         });
       }
     }
