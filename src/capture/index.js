@@ -28,11 +28,16 @@
 //
 // The 5-module split (serializer/differ/side-channels/session) is deliberately
 // deferred beyond Phase 1 (D-10); parity against the reference, proven by the
-// differential oracle, is the exit bar. Known reference quirks are preserved
-// on purpose: on* attributes are stripped only on the html/body shells and
-// javascript: URLs pass through absolutifyUrl (Phase 3 SEC-01 introduces the
-// capture-side sanitization chokepoint); the truncation budget compares
-// html.length (UTF-16 code units) against a byte constant (inherited quirk).
+// differential oracle, is the exit bar. One reference quirk remains preserved
+// on purpose: the truncation budget compares html.length (UTF-16 code units)
+// against a byte constant (inherited quirk). Phase 3 SEC-01 DIVERGENCE: the
+// sanitizeForWire chokepoint (a named inner function of createCapture) now
+// strips on* handlers, dangerous URL schemes, srcdoc attributes and
+// object/embed subtrees, and value-scrubs CSS on every serialization path --
+// the reference stripped on* only on the html/body shells and passed
+// javascript: URLs straight through. All strips are counted + logged (never
+// silent), and ONLY detached clones / wire values are touched: the live
+// observed page keeps its attributes and handlers.
 
 import {
   RELAY_PER_MESSAGE_LIMIT_BYTES,
@@ -138,6 +143,152 @@ var SHELL_PROPS = [
   'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
   'overflow', 'overflow-x', 'overflow-y', 'box-sizing'
 ];
+
+// =========================================================================
+// SEC-01 sanitization pure helpers (module scope; absolutifyUrl shape:
+// string in, string out, early-return guards, exception-to-identity).
+// Blocklist policy per the Phase 3 CONTEXT locked decision: fidelity-first,
+// allowlist explicitly rejected -- benign content passes byte-identical.
+// =========================================================================
+
+/**
+ * Remove every character with code <= 0x20 (C0 controls + space) from a
+ * string. Browsers' URL parsers strip tab/LF/CR anywhere in a URL and trim
+ * leading/trailing C0-or-space, so an obfuscated "jav\tascript:" normalizes
+ * to a live javascript: URL at navigation time; stripping the FULL <= 0x20
+ * range before scheme-matching is strictly more aggressive than the parser,
+ * closing the whitespace-obfuscation class (threat T-03-02).
+ * @param {string} value
+ * @returns {string}
+ */
+function stripLowChars(value) {
+  var out = '';
+  for (var i = 0; i < value.length; i++) {
+    if (value.charCodeAt(i) > 0x20) out += value.charAt(i);
+  }
+  return out;
+}
+
+/**
+ * True when a URL-ish attribute value carries a script-capable scheme:
+ * javascript:, vbscript:, or data:text/html. The check runs AFTER stripping
+ * chars <= 0x20 (see stripLowChars) and is case-insensitive. data:image/*
+ * values are allowed (canvas swaps and inline images depend on them); the
+ * scheme list is centralized HERE -- one place to add schemes.
+ * @param {string} value
+ * @returns {boolean}
+ */
+function hasDangerousScheme(value) {
+  if (!value || typeof value !== 'string') return false;
+  var compact = stripLowChars(value).toLowerCase();
+  return compact.indexOf('javascript:') === 0
+    || compact.indexOf('vbscript:') === 0
+    || compact.indexOf('data:text/html') === 0;
+}
+
+/**
+ * Neutralize dangerous-scheme candidate URLs inside a srcset value
+ * (comma-separated URL + descriptor entries). Returns the ORIGINAL string
+ * untouched when no candidate is dangerous, so benign srcset values stay
+ * byte-identical (separator re-joining only happens on the hostile path).
+ * @param {string} srcset
+ * @returns {string}
+ */
+function scrubSrcset(srcset) {
+  if (!srcset) return srcset;
+  try {
+    var entries = srcset.split(',');
+    var changed = false;
+    for (var i = 0; i < entries.length; i++) {
+      var parts = entries[i].trim().split(/\s+/);
+      if (parts[0] && hasDangerousScheme(parts[0])) {
+        parts[0] = '';
+        entries[i] = parts.join(' ');
+        changed = true;
+      }
+    }
+    return changed ? entries.join(', ') : srcset;
+  } catch (e) {
+    return srcset;
+  }
+}
+
+/**
+ * Targeted CSS value scrub (CONTEXT decision: value scrub, not a CSS
+ * parser). Applied to head <style> text, style attribute values, and (plan
+ * 03-01 Task 2) style attr-op values. Four passes, each leaving benign CSS
+ * byte-identical and each idempotent (re-scrubbing scrubbed output is a
+ * no-op):
+ *   1. url() whose EXPLICIT scheme is not http/https/data:image* has its
+ *      contents replaced with about:blank. NO-scheme url() values
+ *      (relative paths, fragments, query-only) are ALLOWED: they resolve
+ *      against the document base -- which is never a dangerous scheme --
+ *      and rewriting them would break relative-asset fidelity (CONTEXT
+ *      fidelity-first decision).
+ *   2. expression( occurrences are removed (legacy IE script-in-CSS).
+ *   3. -moz-binding declarations are removed (legacy XBL script binding).
+ *   4. @import statements survive ONLY with an explicit http(s) target
+ *      (an @import pulls a whole stylesheet -- script-equivalent blast
+ *      radius -- so the conservative rule wins over relative fidelity);
+ *      and the literal sequence "</style" is rewritten to "<\/style"
+ *      (CSS string-escape, preserving evaluated string values) so captured
+ *      CSS can never break out of the viewer's style tag.
+ *   5. Markup-breakout strip: any remaining tag-like sequence
+ *      (< + optional / + letter ... up to > or end) is REMOVED, iterated to
+ *      a fixpoint. This closes the namespace-confusion mXSS class (threat
+ *      T-03-03, Pitfall 4): a MathML/SVG-confused parse can leave hostile
+ *      markup (e.g. "</math><img onerror=...>") as RAW TEXT inside a style
+ *      element, where a context-shifted re-parse materializes it as real
+ *      elements. '<' is not valid anywhere in CSS syntax outside quoted
+ *      strings and the legacy CDO token "<!--" (preserved -- '!' is not a
+ *      tag start), so benign CSS passes byte-identical; content strings
+ *      that embed literal markup are a deliberately accepted fidelity loss.
+ * @param {string} css
+ * @returns {string}
+ */
+function scrubCssText(css) {
+  if (!css || typeof css !== 'string') return css;
+  try {
+    var out = css;
+    // Pass 1: url() scheme scrub (quoted forms may contain parens; the
+    // unquoted form ends at the first close-paren like the CSS tokenizer).
+    out = out.replace(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"'][^)]*))?\s*\)/gi,
+      function (match, dq, sq, bare) {
+        var inner = dq !== undefined ? dq : (sq !== undefined ? sq : (bare || ''));
+        var compact = stripLowChars(inner);
+        var schemeMatch = /^([a-zA-Z][a-zA-Z0-9+.\-]*):/.exec(compact);
+        if (!schemeMatch) return match; // no explicit scheme: allowed (base-relative)
+        var scheme = schemeMatch[1].toLowerCase();
+        if (scheme === 'http' || scheme === 'https') return match;
+        if (scheme === 'data' && /^data:image\//i.test(compact)) return match;
+        return 'url(about:blank)';
+      });
+    // Pass 2: expression( removal.
+    out = out.replace(/expression\s*\(/gi, '');
+    // Pass 3: -moz-binding declaration removal (up to the next ; or }).
+    out = out.replace(/-moz-binding[^;}]*/gi, '');
+    // Pass 4a: @import scheme gate (statement removed unless explicit http(s)).
+    out = out.replace(/@import\b[^;]*(;|$)/gi, function (stmt) {
+      return /^@import\s+(?:url\(\s*)?['"]?\s*https?:/i.test(stmt) ? stmt : '';
+    });
+    // Pass 4b: </style breakout neutralization (string-escape rewrite runs
+    // BEFORE the markup strip so evaluated string values are preserved for
+    // the canonical breakout; the escaped "<\/style" no longer matches the
+    // tag-like pattern below).
+    out = out.replace(/<\/style/gi, '<\\/style');
+    // Pass 5: markup-breakout strip, iterated to a fixpoint so adversarial
+    // nesting ("<i<img x>mg ...") cannot reassemble a tag across passes.
+    var tagLike = /<\/?[a-zA-Z][^>]*(?:>|$)/g;
+    for (;;) {
+      var next = out.replace(tagLike, '');
+      if (next === out) break;
+      out = next;
+    }
+    return out;
+  } catch (e) {
+    return css;
+  }
+}
 
 /**
  * The host-injected message sink. `send` mirrors the fire-and-forget
@@ -344,6 +495,21 @@ export function createCapture(config) {
   var staleFlushCount = 0;
   var watchdogTimer = null;
 
+  // SEC-01 sanitization strip counters (closure state, staleFlushCount
+  // pattern). Lifecycle is PER-SESSION (03-RESEARCH.md Pitfall 3): reset in
+  // beginStreamSession only, never per snapshot or per flush, so strip
+  // totals accumulate across one whole stream session. The masked* pair is
+  // declared here but incremented by the SEC-03 masking pass (plan 03-03)
+  // through the same chokepoint.
+  var sanitizeCounters = {
+    strippedHandlers: 0,  // on* handler attributes removed
+    blockedUrlSchemes: 0, // javascript:/vbscript:/data:text/html values neutralized
+    blockedSubtrees: 0,   // object/embed subtrees dropped + srcdoc attrs dropped
+    cssScrubs: 0,         // CSS values rewritten by scrubCssText
+    maskedTextNodes: 0,   // (plan 03-03) maskTextSelector-matched text masked
+    maskedInputs: 0       // (plan 03-03) masked input values
+  };
+
   function beginStreamSession() {
     // Entropy is supplied here so the protocol helper stays pure; the wire
     // format ('stream_<ts36>_<rand>') matches the reference byte-for-byte.
@@ -352,6 +518,14 @@ export function createCapture(config) {
       Math.random().toString(36).slice(2, 8)
     );
     currentSnapshotId = Date.now();
+    // SEC-01: per-session counter reset (the ONLY reset site -- see the
+    // declaration comment for the lifecycle rationale).
+    sanitizeCounters.strippedHandlers = 0;
+    sanitizeCounters.blockedUrlSchemes = 0;
+    sanitizeCounters.blockedSubtrees = 0;
+    sanitizeCounters.cssScrubs = 0;
+    sanitizeCounters.maskedTextNodes = 0;
+    sanitizeCounters.maskedInputs = 0;
   }
 
   function getCurrentStreamMetadata() {
@@ -469,13 +643,300 @@ export function createCapture(config) {
   }
 
   // =========================================================================
+  // 0.5 SEC-01 Sanitization chokepoint
+  // =========================================================================
+
+  /**
+   * Snapshot the sanitization counters (plain copy, for the aggregate strip
+   * warn's before/after comparison and as the warn payload).
+   * @returns {Object} counter snapshot
+   */
+  function sanitizeCountersSnapshot() {
+    return {
+      strippedHandlers: sanitizeCounters.strippedHandlers,
+      blockedUrlSchemes: sanitizeCounters.blockedUrlSchemes,
+      blockedSubtrees: sanitizeCounters.blockedSubtrees,
+      cssScrubs: sanitizeCounters.cssScrubs,
+      maskedTextNodes: sanitizeCounters.maskedTextNodes,
+      maskedInputs: sanitizeCounters.maskedInputs
+    };
+  }
+
+  /**
+   * Emit ONE aggregate strip warn per serialization pass when any
+   * sanitization counter moved during that pass (counted + logged, never
+   * silent -- CONTEXT observability decision; aggregate, not per-strip
+   * spam). Called once per serializeDOM pass and once per mutation flush.
+   * @param {Object} before - counter snapshot taken before the pass
+   */
+  function warnIfSanitizeStrips(before) {
+    var after = sanitizeCountersSnapshot();
+    var moved = false;
+    for (var key in after) {
+      if (Object.prototype.hasOwnProperty.call(after, key) && after[key] !== before[key]) {
+        moved = true;
+        break;
+      }
+    }
+    if (moved) {
+      logger.warn('[DOM Stream] sanitization strips', after);
+    }
+  }
+
+  // Serialization-path inventory (keep ACCURATE -- this list is the ground
+  // truth the plan 03-05 chokepoint purity scan audits, Pitfall 1; mirrors
+  // the WR-03 wire-value insertion-point inventory in
+  // src/renderer/snapshot.js):
+  //   1. serializeDOM clone walk          -- 'element' dispatch (drop
+  //      decision at the old script/noscript site, before nid assignment,
+  //      plus a post-absolutification re-scrub per pair and an
+  //      iframe-branch scrub)
+  //   2. processAddedNode add-op subtrees -- 'subtree' dispatch on the
+  //      detached wire clone (the live node is NEVER scrubbed)
+  //   3. attr-op branch                   -- 'attr' dispatch, after
+  //      absolutifyUrl/absolutifySrcset so the scheme check runs on final
+  //      wire values
+  //   4. characterData text branch       -- 'text' dispatch (identity this
+  //      plan; SEC-03 masking seam, plan 03-03)
+  //   5. E2 text-childlist branch        -- 'text' dispatch (same seam)
+  // Head inline <style> text additionally routes through the 'css' dispatch
+  // at the serializeDOM collection site (a value scrub, not a markup walk).
+  // Side channels that BYPASS the markup scrub BY DESIGN: the dialog relay
+  // (setupDialogRelay) and the overlay broadcast (broadcastOverlayState)
+  // carry text/metadata only and are rendered via textContent in the viewer
+  // (overlays.js, threat T-02-04) -- no HTML parse path exists for them.
+
+  /**
+   * The capture-side sanitization chokepoint (SEC-01): the single named
+   * function through which every serialization path emits. Blocklist
+   * policy, fidelity-first (CONTEXT locked decision: allowlist rejected) --
+   * benign content passes through byte-identical. Strips apply ONLY to
+   * detached clones / wire values, never to the live observed page (threat
+   * T-03-06). Dispatch shapes (kind, payload -> result):
+   *
+   *   'element', { orig, clone }         -> { drop?: true }
+   *     Scrubs one detached clone element in place; { drop: true } for
+   *     script/noscript (reference-parity strip, uncounted) and
+   *     object/embed (SEC-01 blocklist, counted).
+   *   'subtree', { root, liveRoot }      -> { drop?: true }
+   *     Walks a detached wire clone (root + descendants), element-scrubbing
+   *     each and removing forbidden descendants; { drop: true } when the
+   *     root itself is forbidden.
+   *   'attr',    { name, value, target } -> { drop?: true, value?: string }
+   *     Attr-op gate: on* and srcdoc ops are DROPPED, dangerous URL schemes
+   *     neutralize to '', style values are CSS-scrubbed; everything else
+   *     passes through unchanged.
+   *   'text',    { text, owner }         -> { text }
+   *     IDENTITY HOOK this plan: the SEC-03 masking seam -- plan 03-03
+   *     fills maskTextSelector/maskTextFn here (incrementing
+   *     maskedTextNodes); Phase 8 CAPT-05 typed-text capture plugs into the
+   *     same seam.
+   *   'css',     { css }                 -> { css }
+   *     Targeted CSS value scrub (scrubCssText) for head inline styles.
+   *
+   * @param {string} kind - dispatch tag
+   * @param {Object} payload - shape per dispatch tag (above)
+   * @returns {Object} per-dispatch result object
+   */
+  function sanitizeForWire(kind, payload) {
+    if (kind === 'element') {
+      var clone = payload.clone;
+      if (!clone || clone.nodeType !== Node.ELEMENT_NODE) return {};
+      var tag = clone.tagName ? String(clone.tagName).toLowerCase() : '';
+      // script/noscript: reference-parity strip -- NOT counted (the
+      // reference already dropped these from snapshots; counting them
+      // would fire the strip warn on every benign page with a <script>).
+      if (tag === 'script' || tag === 'noscript') {
+        return { drop: true };
+      }
+      // object/embed: SEC-01 blocklist drop (CONTEXT decision: drop the
+      // whole subtree, no placeholder -- threat T-03-04).
+      if (tag === 'object' || tag === 'embed') {
+        sanitizeCounters.blockedSubtrees++;
+        return { drop: true };
+      }
+      // Collect attribute names FIRST: clone.attributes is a LIVE
+      // NamedNodeMap, so removing while iterating skips entries.
+      var attrNames = [];
+      var attrList = clone.attributes;
+      if (attrList) {
+        for (var i = 0; i < attrList.length; i++) {
+          if (attrList[i] && attrList[i].name) attrNames.push(attrList[i].name);
+        }
+      }
+      for (var n = 0; n < attrNames.length; n++) {
+        var rawName = attrNames[n];
+        var lowName = String(rawName).toLowerCase();
+        // on* handler attrs: stripped on EVERY element regardless of
+        // namespace (serializeShellAttributes precedent generalized to all
+        // paths -- threats T-03-01/T-03-03, Pitfall 4).
+        if (lowName.indexOf('on') === 0) {
+          clone.removeAttribute(rawName);
+          sanitizeCounters.strippedHandlers++;
+          continue;
+        }
+        // srcdoc: a whole nested attacker document in one attribute --
+        // dropped outright, counted as a blocked subtree (T-03-04).
+        if (lowName === 'srcdoc') {
+          clone.removeAttribute(rawName);
+          sanitizeCounters.blockedSubtrees++;
+        }
+      }
+      // URL-carrying attributes: dangerous schemes neutralize to '' --
+      // attribute EXISTENCE is preserved for mirror parity (T-03-02).
+      for (var u = 0; u < URL_ATTRS.length; u++) {
+        var urlVal = clone.getAttribute(URL_ATTRS[u]);
+        if (urlVal && hasDangerousScheme(urlVal)) {
+          clone.setAttribute(URL_ATTRS[u], '');
+          sanitizeCounters.blockedUrlSchemes++;
+        }
+      }
+      var formactionVal = clone.getAttribute('formaction');
+      if (formactionVal && hasDangerousScheme(formactionVal)) {
+        clone.setAttribute('formaction', '');
+        sanitizeCounters.blockedUrlSchemes++;
+      }
+      // SVG xlink:href (getAttributeNS per the serializeDOM precedent).
+      try {
+        var xlinkVal = clone.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
+        if (xlinkVal && hasDangerousScheme(xlinkVal)) {
+          clone.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '');
+          sanitizeCounters.blockedUrlSchemes++;
+        }
+      } catch (e) { /* not an SVG element or no xlink support */ }
+      // srcset: per-candidate scheme check (benign values byte-identical).
+      var srcsetVal = clone.getAttribute('srcset');
+      if (srcsetVal) {
+        var scrubbedSrcset = scrubSrcset(srcsetVal);
+        if (scrubbedSrcset !== srcsetVal) {
+          clone.setAttribute('srcset', scrubbedSrcset);
+          sanitizeCounters.blockedUrlSchemes++;
+        }
+      }
+      // style attribute: targeted CSS value scrub.
+      var styleVal = clone.getAttribute('style');
+      if (styleVal) {
+        var scrubbedStyle = scrubCssText(styleVal);
+        if (scrubbedStyle !== styleVal) {
+          clone.setAttribute('style', scrubbedStyle);
+          sanitizeCounters.cssScrubs++;
+        }
+      }
+      // <style> ELEMENT text: same CSS value scrub as head styles. This is
+      // the namespace-confusion mXSS surface (threat T-03-03): a confused
+      // parse can leave hostile markup as the style element's RAW TEXT,
+      // invisible to attribute enumeration -- scrubCssText pass 5 removes
+      // it. Detached clone only; the live element's text is untouched.
+      if (tag === 'style') {
+        var styleElText = clone.textContent;
+        if (styleElText) {
+          var scrubbedElText = scrubCssText(styleElText);
+          if (scrubbedElText !== styleElText) {
+            clone.textContent = scrubbedElText;
+            sanitizeCounters.cssScrubs++;
+          }
+        }
+      }
+      return {};
+    }
+
+    if (kind === 'subtree') {
+      var root = payload.root;
+      if (!root || root.nodeType !== Node.ELEMENT_NODE) return {};
+      // Root itself forbidden (script/noscript/object/embed): signal the
+      // caller to emit nothing rather than an empty-html op.
+      var rootResult = sanitizeForWire('element', { orig: payload.liveRoot, clone: root });
+      if (rootResult && rootResult.drop) {
+        return { drop: true };
+      }
+      var descendants = root.querySelectorAll('*');
+      for (var d = 0; d < descendants.length; d++) {
+        var desc = descendants[d];
+        // Skip nodes already detached with a removed forbidden ancestor
+        // (querySelectorAll is static; removal does not re-enumerate).
+        if (!root.contains(desc)) continue;
+        var descResult = sanitizeForWire('element', { orig: null, clone: desc });
+        if (descResult && descResult.drop && desc.parentNode) {
+          desc.parentNode.removeChild(desc);
+        }
+      }
+      return {};
+    }
+
+    if (kind === 'attr') {
+      var attrName = String(payload.name || '').toLowerCase();
+      // on* handler attr mutations: the op is DROPPED entirely, never
+      // value-neutralized -- the mirror must not even learn the attribute
+      // name (Pitfall 5: this branch bypassed the snapshot sanitizer).
+      if (attrName.indexOf('on') === 0) {
+        sanitizeCounters.strippedHandlers++;
+        return { drop: true };
+      }
+      // srcdoc: dropped, matching the element-path attribute strip.
+      if (attrName === 'srcdoc') {
+        sanitizeCounters.blockedSubtrees++;
+        return { drop: true };
+      }
+      // style: targeted CSS value scrub (A2: style attr mutations flow
+      // through this branch as full inline-style serializations).
+      if (attrName === 'style') {
+        var scrubbedAttrCss = scrubCssText(payload.value);
+        if (scrubbedAttrCss !== payload.value) {
+          sanitizeCounters.cssScrubs++;
+        }
+        return { value: scrubbedAttrCss };
+      }
+      // srcset: per-candidate scheme neutralization.
+      if (attrName === 'srcset' && payload.value) {
+        var scrubbedAttrSrcset = scrubSrcset(payload.value);
+        if (scrubbedAttrSrcset !== payload.value) {
+          sanitizeCounters.blockedUrlSchemes++;
+        }
+        return { value: scrubbedAttrSrcset };
+      }
+      // URL-carrying attrs: dangerous schemes neutralize to '' -- the op
+      // (and so attribute EXISTENCE) is preserved for mirror parity.
+      if ((URL_ATTRS.indexOf(attrName) !== -1 || attrName === 'formaction' || attrName === 'xlink:href')
+          && payload.value && hasDangerousScheme(payload.value)) {
+        sanitizeCounters.blockedUrlSchemes++;
+        return { value: '' };
+      }
+      // The 'value' attribute passes through unchanged THIS plan: this is
+      // the plan 03-03 maskInputs seam (the always-on password mask and the
+      // maskInputs config consult payload.target here; Phase 8 CAPT-05
+      // typed-text capture reuses the same rule).
+      return { value: payload.value };
+    }
+
+    if (kind === 'text') {
+      // IDENTITY HOOK (this plan): the SEC-03 masking seam. Plan 03-03
+      // consults payload.owner against maskTextSelector / maskTextFn here
+      // and increments maskedTextNodes; Phase 8 CAPT-05 typed-text capture
+      // plugs into the same seam. Until then text passes through unchanged.
+      return { text: payload.text };
+    }
+
+    if (kind === 'css') {
+      var scrubbedCss = scrubCssText(payload.css);
+      if (scrubbedCss !== payload.css) {
+        sanitizeCounters.cssScrubs++;
+      }
+      return { css: scrubbedCss };
+    }
+
+    return {};
+  }
+
+  // =========================================================================
   // 1. DOM Serializer
   // =========================================================================
 
   /**
    * Absolutify a URL attribute value relative to the current document.
-   * Note: javascript: URLs intentionally pass through unchanged this phase
-   * (parity with the reference; Phase 3 SEC-01 owns sanitization).
+   * Note: javascript: URLs pass through unchanged HERE (reference parity --
+   * this helper stays a pure URL resolver); the SEC-01 chokepoint
+   * (sanitizeForWire) neutralizes dangerous schemes AFTER absolutification,
+   * so the scheme check always runs on final wire values.
    * @param {string} val - The attribute value
    * @returns {string} Absolute URL or original value if invalid
    */
@@ -556,9 +1017,9 @@ export function createCapture(config) {
 
   /**
    * Serialize the attributes of a shell element (html/body), dropping style
-   * and on* handler attributes. Reference quirk preserved on purpose: this
-   * stripping applies to the shells ONLY, not to the serialized body tree
-   * (Phase 3 SEC-01 extends sanitization to all paths — threat T-01-03).
+   * and on* handler attributes. This was the reference's ONLY on*-strip
+   * site; Phase 3 SEC-01 generalized the same name test to every
+   * serialization path via the sanitizeForWire chokepoint (threat T-03-01).
    * @param {Element} el
    * @returns {Object} name -> value attribute map
    */
@@ -585,6 +1046,9 @@ export function createCapture(config) {
    *                     pageWidth, pageHeight, url, title }
    */
   function serializeDOM() {
+    // SEC-01: counter snapshot for the ONE aggregate strip warn per pass.
+    var sanBefore = sanitizeCountersSnapshot();
+
     // Reset node ID counter for each full snapshot
     nextNodeId = 1;
 
@@ -622,8 +1086,15 @@ export function createCapture(config) {
       var cl = pairs[i].clone;
       var tag = cl.tagName ? cl.tagName.toLowerCase() : '';
 
-      // Skip script and noscript tags
-      if (tag === 'script' || tag === 'noscript') {
+      // SEC-01 drop decision routed through the chokepoint: script/noscript
+      // (reference parity) plus object/embed (blocklist) -- the decision
+      // logic lives INSIDE sanitizeForWire; this loop only routes. The same
+      // call scrubs the surviving clone's RAW attribute values (the
+      // post-absolutification re-scrub below covers final wire values).
+      // Dropped elements exit BEFORE node-id assignment, exactly like the
+      // reference's script/noscript handling.
+      var elemDecision = sanitizeForWire('element', { orig: orig, clone: cl });
+      if (elemDecision && elemDecision.drop) {
         toRemove.push(cl);
         continue;
       }
@@ -657,6 +1128,10 @@ export function createCapture(config) {
         cl.setAttribute('style', existingStyle + ';pointer-events:none');
         // Capture computed styles for sizing/positioning
         captureComputedStyles(orig, cl);
+        // SEC-01: iframe exits the loop early, so it gets its own
+        // final-wire-value scrub (srcdoc drop + post-absolutification
+        // scheme check on src).
+        sanitizeForWire('element', { orig: orig, clone: cl });
         continue;
       }
 
@@ -705,6 +1180,13 @@ export function createCapture(config) {
 
       // Capture computed styles from original element
       captureComputedStyles(orig, cl);
+
+      // SEC-01 re-scrub on FINAL wire values: absolutifyUrl normalizes
+      // whitespace-obfuscated schemes (the URL parser strips tab/LF/CR), and
+      // captureComputedStyles rewrites the style attribute -- so the scheme
+      // check and CSS scrub must run again after both. Idempotent: counters
+      // only move when an attribute value actually changes.
+      sanitizeForWire('element', { orig: orig, clone: cl });
     }
 
     // Remove marked elements
@@ -724,13 +1206,16 @@ export function createCapture(config) {
       }
     }
 
-    // Collect inline <style> tags from document.head
+    // Collect inline <style> tags from document.head, value-scrubbed
+    // through the chokepoint's 'css' dispatch (SEC-01: dangerous url()
+    // schemes, expression(), -moz-binding, non-http(s) @import, </style
+    // breakout). Benign CSS passes byte-identical.
     var inlineStyles = [];
     var styleTags = document.querySelectorAll('head style');
     for (var st = 0; st < styleTags.length; st++) {
       var cssText = styleTags[st].textContent;
       if (cssText && cssText.length < INLINE_STYLE_MAX_BYTES) {
-        inlineStyles.push(cssText);
+        inlineStyles.push(sanitizeForWire('css', { css: cssText }).css);
       }
     }
 
@@ -810,6 +1295,9 @@ export function createCapture(config) {
       }
     }
 
+    // SEC-01: one aggregate strip warn per serialization pass (never silent).
+    warnIfSanitizeStrips(sanBefore);
+
     return {
       html: html,
       truncated: truncated,
@@ -839,37 +1327,50 @@ export function createCapture(config) {
 
   /**
    * Stamp node ids on an added node and its descendants and absolutify URLs,
-   * then serialize it (for add ops).
-   * @param {Element} el - Element whose outerHTML to process
-   * @returns {string} Processed outerHTML
+   * then serialize a SCRUBBED detached clone of it (for add ops).
+   *
+   * SEC-01: the live node keeps its nid stamping and URL absolutification
+   * exactly as before (reference parity -- the observed page must keep its
+   * event handlers; stripping the live node would change page behavior).
+   * The wire HTML is then built from a detached cloneNode(true) routed
+   * through sanitizeForWire('subtree') -- the serialized output never comes
+   * from the live node directly (threat T-03-06).
+   *
+   * @param {Element} el - Added element to process
+   * @returns {string} Scrubbed wire HTML ('' when the root itself is a
+   *   forbidden element -- the caller emits no add op for it)
    */
   function processAddedNode(el) {
-    // Assign nid to the added node and its descendants
-    if (el.nodeType === Node.ELEMENT_NODE) {
-      el.setAttribute(NID_ATTR, String(nextNodeId++));
+    if (el.nodeType !== Node.ELEMENT_NODE) return '';
 
-      // Absolutify URL attributes on the node itself
-      for (var a = 0; a < URL_ATTRS.length; a++) {
-        var val = el.getAttribute(URL_ATTRS[a]);
-        if (val) el.setAttribute(URL_ATTRS[a], absolutifyUrl(val));
-      }
-      var srcset = el.getAttribute('srcset');
-      if (srcset) el.setAttribute('srcset', absolutifySrcset(srcset));
-
-      // Process descendant elements
-      var descendants = el.querySelectorAll('*');
-      for (var d = 0; d < descendants.length; d++) {
-        var desc = descendants[d];
-        desc.setAttribute(NID_ATTR, String(nextNodeId++));
-        for (var b = 0; b < URL_ATTRS.length; b++) {
-          var dv = desc.getAttribute(URL_ATTRS[b]);
-          if (dv) desc.setAttribute(URL_ATTRS[b], absolutifyUrl(dv));
-        }
-        var ds = desc.getAttribute('srcset');
-        if (ds) desc.setAttribute('srcset', absolutifySrcset(ds));
-      }
+    // Live-node stamping + absolutification (reference parity, unchanged).
+    el.setAttribute(NID_ATTR, String(nextNodeId++));
+    for (var a = 0; a < URL_ATTRS.length; a++) {
+      var val = el.getAttribute(URL_ATTRS[a]);
+      if (val) el.setAttribute(URL_ATTRS[a], absolutifyUrl(val));
     }
-    return el.outerHTML || '';
+    var srcset = el.getAttribute('srcset');
+    if (srcset) el.setAttribute('srcset', absolutifySrcset(srcset));
+
+    // Process descendant elements
+    var descendants = el.querySelectorAll('*');
+    for (var d = 0; d < descendants.length; d++) {
+      var desc = descendants[d];
+      desc.setAttribute(NID_ATTR, String(nextNodeId++));
+      for (var b = 0; b < URL_ATTRS.length; b++) {
+        var dv = desc.getAttribute(URL_ATTRS[b]);
+        if (dv) desc.setAttribute(URL_ATTRS[b], absolutifyUrl(dv));
+      }
+      var ds = desc.getAttribute('srcset');
+      if (ds) desc.setAttribute('srcset', absolutifySrcset(ds));
+    }
+
+    // SEC-01: scrub a detached wire clone through the chokepoint and
+    // serialize THAT -- never the live node's own markup.
+    var wireClone = el.cloneNode(true);
+    var subtreeResult = sanitizeForWire('subtree', { root: wireClone, liveRoot: el });
+    if (subtreeResult && subtreeResult.drop) return '';
+    return wireClone.outerHTML || '';
   }
 
   /**
@@ -928,6 +1429,9 @@ export function createCapture(config) {
             if (!parentNid) continue; // Parent not tracked
 
             var html = processAddedNode(added);
+            // SEC-01: a forbidden root (script/noscript/object/embed)
+            // scrubs to nothing -- emit no add op rather than an empty op.
+            if (!html) continue;
             var nextSib = added.nextElementSibling;
             var beforeNid = (nextSib && nextSib.getAttribute) ? nextSib.getAttribute(NID_ATTR) || null : null;
 
@@ -975,12 +1479,18 @@ export function createCapture(config) {
           var textTargetNid = m.target.getAttribute ? m.target.getAttribute(NID_ATTR) : null;
           if (textTargetNid && !textOpNids[textTargetNid]) {
             textOpNids[textTargetNid] = true;
+            // SEC-03 masking seam (plan 03-03): identity transform this
+            // plan; owner is the mutation target itself for E2.
+            var e2TextResult = sanitizeForWire('text', {
+              text: m.target.textContent,
+              owner: m.target
+            });
             // Same wire shape as the characterData branch: the renderer's
             // DIFF_OP.TEXT applier sets textContent on the nid target.
             diffs.push({
               op: 'text',
               nid: textTargetNid,
-              text: m.target.textContent
+              text: e2TextResult.text
             });
           }
         }
@@ -997,21 +1507,37 @@ export function createCapture(config) {
           attrVal = absolutifySrcset(attrVal);
         }
 
+        // SEC-01: route through the chokepoint AFTER absolutification so
+        // the scheme check runs on final wire values (Pitfall 5: this
+        // branch was the snapshot sanitizer's bypass).
+        var attrResult = sanitizeForWire('attr', {
+          name: m.attributeName,
+          value: attrVal,
+          target: m.target
+        });
+        if (attrResult.drop) continue;
+
         diffs.push({
           op: 'attr',
           nid: targetNid,
           attr: m.attributeName,
-          val: attrVal
+          val: attrResult.value
         });
       } else if (m.type === 'characterData') {
         var parentEl = m.target.parentElement;
         var textNid = (parentEl && parentEl.getAttribute) ? parentEl.getAttribute(NID_ATTR) : null;
         if (!textNid) continue;
 
+        // SEC-03 masking seam (plan 03-03): identity transform this plan.
+        var textResult = sanitizeForWire('text', {
+          text: m.target.textContent,
+          owner: parentEl
+        });
+
         diffs.push({
           op: 'text',
           nid: textNid,
-          text: m.target.textContent
+          text: textResult.text
         });
       }
     }
@@ -1029,7 +1555,12 @@ export function createCapture(config) {
     var batch = pendingMutations;
     pendingMutations = [];
 
+    // SEC-01: the aggregate strip warn fires even when every diff in the
+    // batch was dropped by the chokepoint (counted + logged, never silent),
+    // so the snapshot/compare wraps the empty-diffs early return.
+    var sanBefore = sanitizeCountersSnapshot();
     var diffs = processMutationBatch(batch);
+    warnIfSanitizeStrips(sanBefore);
     if (diffs.length === 0) return;
 
     safeSend(STREAM.MUTATIONS, {
@@ -1133,7 +1664,10 @@ export function createCapture(config) {
     if (pendingMutations.length > 0) {
       var batch = pendingMutations;
       pendingMutations = [];
+      // SEC-01: same aggregate strip-warn discipline as flushMutations.
+      var sanBefore = sanitizeCountersSnapshot();
       var diffs = processMutationBatch(batch);
+      warnIfSanitizeStrips(sanBefore);
       if (diffs.length > 0) {
         safeSend(STREAM.MUTATIONS, {
           mutations: diffs,
