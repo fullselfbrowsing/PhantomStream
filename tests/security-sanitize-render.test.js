@@ -35,7 +35,8 @@ import {
   scrubCssText,
 } from '../src/renderer/sanitize.js';
 import { applyMutations } from '../src/renderer/diff.js';
-import { NID_ATTR, DIFF_OP } from '../src/protocol/messages.js';
+import { createViewer } from '../src/renderer/index.js';
+import { NID_ATTR, DIFF_OP, STREAM } from '../src/protocol/messages.js';
 
 /**
  * Fresh JSDOM instance. makeFragment parses arbitrary HTML in TEMPLATE
@@ -487,6 +488,137 @@ test("chokepoint integration: 'text' ops still apply via textContent unchanged (
     const target = doc.querySelector('[' + NID_ATTR + '="1"]');
     assert.equal(target.textContent, markupText, 'textContent assignment never parses HTML');
     assert.equal(target.children.length, 0, 'no element materialized from the text payload');
+  } finally {
+    env.teardown();
+  }
+});
+
+// --- Section 3: post-parse snapshot scrub (behavioral) -----------------------
+
+/**
+ * Fresh JSDOM page with a host container (the renderer-viewer.test.js
+ * stub-transport recipe, duplicated locally). teardown destroys the viewer
+ * FIRST so its resize listener detaches while the window is alive.
+ */
+function viewerEnv() {
+  const dom = new JSDOM(
+    '<!DOCTYPE html><html><head><title>viewer fixture</title></head><body>'
+      + '<div id="host"></div></body></html>',
+    {
+      url: 'https://fixture.test/page',
+      pretendToBeVisual: true,
+      virtualConsole: new VirtualConsole(),
+    }
+  );
+  const w = dom.window;
+  const env = {
+    dom,
+    window: w,
+    document: w.document,
+    container: w.document.getElementById('host'),
+    viewer: null,
+    teardown() {
+      try {
+        if (env.viewer) env.viewer.destroy();
+      } catch (e) { /* already destroyed */ }
+      env.viewer = null;
+      w.close();
+    },
+  };
+  return env;
+}
+
+/** Recording ViewerTransport stub: emit() invokes the stored handler. */
+function createRecordingTransport() {
+  const api = {
+    sent: [],
+    handler: null,
+    send(type, payload) {
+      api.sent.push({ type, payload });
+    },
+    onMessage(h) {
+      api.handler = h;
+      return function unsubscribe() {
+        api.handler = null;
+      };
+    },
+    emit(type, payload) {
+      if (api.handler) api.handler(type, payload);
+    },
+  };
+  return api;
+}
+
+/** Minimal valid SnapshotPayload for the viewer dispatch path. */
+function snapshotPayload(overrides) {
+  return Object.assign(
+    {
+      html: '<div ' + NID_ATTR + '="1">hello</div>',
+      stylesheets: [],
+      inlineStyles: [],
+      htmlAttrs: {},
+      bodyAttrs: {},
+      htmlStyle: '',
+      bodyStyle: '',
+      scrollX: 0,
+      scrollY: 0,
+      viewportWidth: 1920,
+      viewportHeight: 1080,
+      streamSessionId: 'stream_a_b',
+      snapshotId: 111,
+    },
+    overrides || {}
+  );
+}
+
+test('post-parse scrub (behavioral): a hostile snapshot fed to the viewer yields a scrubbed mirror body after glue + re-fired load', () => {
+  const env = viewerEnv();
+  try {
+    const transport = createRecordingTransport();
+    const log = recordingLogger();
+    env.viewer = createViewer({
+      container: env.container,
+      transport,
+      logger: Object.assign({ info() {}, error() {} }, log),
+    });
+    const iframe = env.container.querySelector('iframe');
+
+    // Hostile payload.html simulating a BYPASSED capture chokepoint --
+    // the defense-in-depth bar: the render side must not trust the wire.
+    transport.emit(STREAM.SNAPSHOT, snapshotPayload({
+      html: '<div ' + NID_ATTR + '="1">'
+        + '<button ' + NID_ATTR + '="2" onclick="alert(1)">x</button>'
+        + '<a ' + NID_ATTR + '="3" href="javascript:alert(1)">y</a>'
+        + '</div>',
+    }));
+
+    // GLUE (loopback recipe): jsdom 29 never parses the srcdoc attribute
+    // into contentDocument, so the test simulates the browser's srcdoc
+    // navigation manually through document.write.
+    const cd = iframe.contentDocument;
+    cd.open();
+    cd.write(iframe.getAttribute('srcdoc'));
+    cd.close();
+
+    // RE-FIRED LOAD: jsdom fires the iframe load event exactly ONCE --
+    // for about:blank, BEFORE any srcdoc write -- so this deliberate
+    // synthetic re-fire is what exercises the creation-time load listener
+    // against the POPULATED document (the listener reads contentDocument
+    // fresh per call; in real browsers every srcdoc load fires it).
+    iframe.dispatchEvent(new env.window.Event('load'));
+
+    assert.deepEqual(
+      onAttrsOf(cd.body), [],
+      'zero on* attributes anywhere in the mirror body after the post-parse scrub'
+    );
+    assert.deepEqual(
+      attrValuesMatching(cd.body, /javascript:/i), [],
+      'no javascript: URL anywhere in the mirror body'
+    );
+    assert.ok(
+      log.warns.some((args) => String(args[0]).startsWith('[Renderer] sanitization strips')),
+      'the aggregated sanitization warn reached the injected logger'
+    );
   } finally {
     env.teardown();
   }

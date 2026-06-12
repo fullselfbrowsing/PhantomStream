@@ -8,8 +8,12 @@
 // Parity pins of note:
 //   - The reset CSS string is the exact srcdoc wrapper from 02-UI-SPEC.md.
 //   - Stylesheet link hrefs escape ONLY double quotes (reference behavior).
-//   - inlineStyles and payload.html are inserted RAW (Pitfall 9 parity pin;
-//     Phase 3 owns the sanitization chokepoint).
+//   - Phase 3 (plan 03-02): the adopted CSP meta is the first element after
+//     <head>; inlineStyles entries are CSS-scrubbed at assembly (the old
+//     raw pin DELIBERATELY FLIPPED); payload.html stays raw AT THE STRING
+//     LAYER by design -- string-level scrubbing is the mXSS anti-pattern,
+//     and that insertion point is protected by the capture chokepoint
+//     upstream + the post-parse scrub + CSP + sandbox.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -41,6 +45,35 @@ test('output starts with the doctype+html shell and contains the charset meta', 
   const html = buildSnapshotHtml(minimalPayload());
   assert.ok(html.startsWith('<!DOCTYPE html><html'), 'starts with <!DOCTYPE html><html');
   assert.ok(html.includes('<meta charset="UTF-8">'), 'contains the charset meta');
+});
+
+// The ADOPTED policy (03-CONTEXT baseline adjusted via its documented-
+// rationale clause: style-src gains http: https: so the external stylesheet
+// links the capture deliberately emits keep loading; script-blocking is
+// untouched -- default-src 'none' still governs scripts).
+const CSP_CONTENT = "default-src 'none'; img-src http: https: data:; "
+  + "style-src http: https: 'unsafe-inline'; font-src http: https: data:";
+
+test('the exact adopted CSP meta is the FIRST element after <head>, before the charset meta', () => {
+  const html = buildSnapshotHtml(minimalPayload());
+  assert.ok(
+    html.includes(
+      '<head><meta http-equiv="Content-Security-Policy" content="'
+        + CSP_CONTENT + '"><meta charset="UTF-8">'
+    ),
+    'CSP meta pinned verbatim, positioned before any parser-initiated fetch'
+  );
+});
+
+test('the CSP meta contains no meta-unsupported directives (Pitfall 8)', () => {
+  const html = buildSnapshotHtml(minimalPayload());
+  // frame-ancestors / sandbox / report-uri are silently dropped when
+  // delivered via <meta http-equiv> -- their presence would be a no-op
+  // masquerading as a control (the iframe-level sandbox attribute is the
+  // analogous real control, asserted in renderer-viewer tests).
+  assert.ok(!html.includes('frame-ancestors'), 'no frame-ancestors directive');
+  assert.ok(!html.includes('sandbox'), 'no sandbox directive');
+  assert.ok(!html.includes('report-uri'), 'no report-uri directive');
 });
 
 test('viewport meta defaults to width=1920 and honors payload.viewportWidth', () => {
@@ -101,21 +134,36 @@ test('stylesheet URLs render as link tags with only double quotes escaped', () =
   );
 });
 
-test('inlineStyles are wrapped raw -- a </style> inside CSS passes through unmodified', () => {
-  const css = 'p { color: red; } /* </style> trap */';
-  const html = buildSnapshotHtml(minimalPayload({ inlineStyles: [css] }));
+test('inlineStyles are CSS-scrubbed at assembly -- </style> breakout and url(javascript:) neutralized, benign CSS byte-identical', () => {
+  // DELIBERATE FLIP of the raw parity pin (plan 03-02 Task 3): inline CSS
+  // now routes through scrubCssText before the style tag is assembled.
+  const hostile = 'p { background: url(javascript:alert(1)); } /* </style> trap */';
+  const html = buildSnapshotHtml(minimalPayload({ inlineStyles: [hostile] }));
+  assert.ok(!html.includes('</style> trap'), 'literal </style sequence cannot break out of the style tag');
+  assert.ok(html.includes('<\\/style> trap'), 'breakout sequence rewritten, comment text otherwise kept');
+  assert.ok(!/url\(\s*javascript/i.test(html), 'url(javascript:) scrubbed inside the emitted CSS');
+  assert.ok(html.includes('url(about:blank)'), 'dangerous url() contents replaced with about:blank');
+
+  const benign = 'p { color: red; margin: 0 }';
+  const benignHtml = buildSnapshotHtml(minimalPayload({ inlineStyles: [benign] }));
   assert.ok(
-    html.includes('<style>' + css + '</style>'),
-    'CSS inserted raw (Pitfall 9 parity pin; Phase 3 owns sanitization)'
+    benignHtml.includes('<style>' + benign + '</style>'),
+    'benign CSS passes byte-identical through the scrub'
   );
 });
 
-test('payload.html is inserted raw between the body tags', () => {
+test('payload.html is inserted raw between the body tags AT THE STRING LAYER', () => {
+  // KEPT pin, re-rationalized (plan 03-02 Task 3): string-level scrubbing
+  // of the body html is the mXSS anti-pattern (scrub-then-reparse), so
+  // this insertion point is deliberately untouched here. Its protection is
+  // the layered chain: capture chokepoint upstream + the viewer's
+  // post-parse sanitizeFragment scrub on load + the CSP meta + the
+  // allow-same-origin-only sandbox.
   const body = '<div data-fsb-nid="7"><script>1 < 2 && "x"</script></div>';
   const html = buildSnapshotHtml(minimalPayload({ html: body }));
   assert.ok(
     html.includes('<body>' + body + '</body></html>'),
-    'body html raw -- no escaping or normalizing (parity)'
+    'body html raw at the string layer -- no escaping or normalizing'
   );
 });
 
