@@ -428,3 +428,184 @@ test('strips surface through one aggregate counter warn; a fully benign snapshot
     env2.teardown();
   }
 });
+
+// =========================================================================
+// Task 2: differ paths (attr-op branch, characterData + E2 text branches)
+// =========================================================================
+
+test('post-snapshot on* setAttribute emits NO attr op (dropped, not neutralized) and counts the strip', async () => {
+  const env = setupEnv('<div id="t1">x</div>');
+  try {
+    const transport = createLoopbackTransport();
+    const logger = recordingLogger();
+    env.capture = createCapture({ transport, logger });
+    env.capture.start();
+    await settle(env.window);
+
+    env.document.getElementById('t1').setAttribute('onclick', 'alert(1)');
+    await settle(env.window);
+
+    // Wire-level scan: NO on*-named attr op anywhere in transport.sent
+    // (Pitfall 5: the attr-op branch is the snapshot sanitizer's bypass).
+    const ops = allMutationOps(transport);
+    assert.ok(
+      !ops.some((op) => op.op === DIFF_OP.ATTR && /^on/i.test(op.attr)),
+      'no on*-named attr op ever reaches the transport'
+    );
+    assert.equal(ops.length, 0, 'the hostile-only batch emits nothing at all');
+    // strippedHandlers incremented: surfaced through the aggregate warn.
+    const stripWarns = logger.warns.filter((w) => String(w[0]).includes('sanitization strips'));
+    assert.ok(
+      stripWarns.some((w) => w[1] && w[1].strippedHandlers > 0),
+      'strippedHandlers counted the dropped attr op'
+    );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('post-snapshot srcdoc setAttribute on an iframe emits no attr op', async () => {
+  const env = setupEnv('<iframe id="t2" src="https://x.test/f"></iframe>');
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    env.document.getElementById('t2').setAttribute('srcdoc', '<b>x</b>');
+    await settle(env.window);
+
+    const ops = allMutationOps(transport);
+    assert.ok(
+      !ops.some((op) => op.op === DIFF_OP.ATTR && op.attr === 'srcdoc'),
+      'no srcdoc attr op on the wire'
+    );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('post-snapshot href=javascript: emits an attr op with val "" (existence preserved, value neutralized)', async () => {
+  const env = setupEnv('<a id="t3" href="/start">x</a>');
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    env.document.getElementById('t3').setAttribute('href', 'javascript:alert(1)');
+    await settle(env.window);
+
+    const hrefOps = allMutationOps(transport)
+      .filter((op) => op.op === DIFF_OP.ATTR && op.attr === 'href');
+    assert.equal(hrefOps.length, 1, 'the href attr op is still emitted (mirror parity)');
+    assert.equal(hrefOps[0].val, '', 'the dangerous-scheme value is neutralized to ""');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('post-snapshot style=expression() emits an attr op with the expression scrubbed (A2 fixture row)', async () => {
+  const env = setupEnv('<div id="t4">x</div>');
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    // A2 (03-RESEARCH.md Assumptions Log): style attr mutations flow
+    // through the attr-op branch -- explicit fixture row.
+    env.document.getElementById('t4').setAttribute('style', 'width:expression(alert(1))');
+    await settle(env.window);
+
+    const styleOps = allMutationOps(transport)
+      .filter((op) => op.op === DIFF_OP.ATTR && op.attr === 'style');
+    assert.equal(styleOps.length, 1, 'the style attr op is emitted');
+    assert.ok(!/expression\(/i.test(styleOps[0].val), 'expression() scrubbed from the attr-op value');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('a benign attr mutation emits the exact unmodified value (fidelity pin)', async () => {
+  const env = setupEnv('<div id="t5">x</div>');
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    env.document.getElementById('t5').setAttribute('class', 'foo  bar baz');
+    await settle(env.window);
+
+    const classOps = allMutationOps(transport)
+      .filter((op) => op.op === DIFF_OP.ATTR && op.attr === 'class');
+    assert.equal(classOps.length, 1, 'the benign attr op is emitted');
+    assert.equal(classOps[0].val, 'foo  bar baz', 'value byte-identical (whitespace preserved)');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('characterData and textContent edits emit UNCHANGED text (identity pin -- 03-03 flips this for masked elements)', async () => {
+  const env = setupEnv('<p id="t6">orig text</p><p id="t7"><span>a</span></p>');
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const t6 = env.document.getElementById('t6');
+    const t7 = env.document.getElementById('t7');
+    const t6Nid = t6.getAttribute(NID_ATTR);
+    const t7Nid = t7.getAttribute(NID_ATTR);
+
+    // characterData branch: in-place text-node edit.
+    t6.firstChild.nodeValue = 'edited text value';
+    // E2 text-childlist branch: textContent= replaces the element child
+    // with a bare text node.
+    t7.textContent = 'replaced flat text';
+    await settle(env.window);
+
+    const textOps = allMutationOps(transport).filter((op) => op.op === DIFF_OP.TEXT);
+    assert.ok(
+      textOps.some((op) => op.nid === t6Nid && op.text === 'edited text value'),
+      'characterData text op carries the UNCHANGED text'
+    );
+    assert.ok(
+      textOps.some((op) => op.nid === t7Nid && op.text === 'replaced flat text'),
+      'E2 text-childlist op carries the UNCHANGED text'
+    );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('a hostile subtree arriving via the differ routes through the subtree scrub (embed dropped, on* stripped)', async () => {
+  const env = setupEnv('<div id="t8"></div>');
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const wrap = env.document.createElement('div');
+    const embed = env.document.createElement('embed');
+    embed.setAttribute('src', 'movie.swf');
+    const img = env.document.createElement('img');
+    img.setAttribute('onerror', 'alert(1)');
+    img.setAttribute('src', '/x.png');
+    wrap.appendChild(embed);
+    wrap.appendChild(img);
+    env.document.getElementById('t8').appendChild(wrap);
+    await settle(env.window);
+
+    const addOps = allMutationOps(transport).filter((op) => op.op === DIFF_OP.ADD);
+    assert.equal(addOps.length, 1, 'one add op for the appended wrapper');
+    assert.ok(!/<embed/i.test(addOps[0].html), 'embed descendant dropped from the add-op html');
+    assert.ok(!/onerror/i.test(addOps[0].html), 'on* stripped from the add-op html');
+    assert.ok(/<img/i.test(addOps[0].html), 'the benign img sibling survives');
+  } finally {
+    env.teardown();
+  }
+});
