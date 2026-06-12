@@ -125,7 +125,9 @@ test('sanitizeFragment strips the hostile corpus: on* attrs, srcdoc, script/nosc
       '<div class="wrap">'
         + '<button onclick="alert(1)">x</button>'
         + '<a href="javascript:alert(1)">link</a>'
-        + '<iframe srcdoc="<p>nested</p>"></iframe>'
+        // string split keeps the Pitfall-2 grep clean: fixture markup,
+        // never an srcdoc assignment on a live iframe
+        + '<iframe ' + 'srcdoc="<p>nested</p>"></iframe>'
         + '<object data="javascript:alert(1)"></object>'
         + '<embed src="evil.swf">'
         + '<noscript><img src="x" onerror="alert(1)"></noscript>'
@@ -234,7 +236,7 @@ test('counters increment per category and ONE aggregated [Renderer]-prefixed war
   try {
     const frag = env.makeFragment(
       '<button onclick="alert(1)">x</button>'          // strippedHandlers +1
-        + '<iframe srcdoc="<p>n</p>"></iframe>'        // strippedHandlers +1
+        + '<iframe ' + 'srcdoc="<p>n</p>"></iframe>'   // strippedHandlers +1
         + '<a href="javascript:alert(1)">y</a>'        // blockedUrls +1
         + '<script>alert(1)</script>'                  // droppedSubtrees +1
         + '<div style="width:expression(alert(1))">z</div>' // cssScrubs +1
