@@ -32,6 +32,7 @@ import * as scroll from './scenarios/scroll.js';
 import * as dialog from './scenarios/dialog.js';
 import * as pauseResume from './scenarios/pause-resume.js';
 import * as textChildlist from './scenarios/text-childlist.js';
+import * as sanitizeDivergence from './scenarios/sanitize-divergence.js';
 
 /**
  * The full fixture x scenario matrix. Every reliability defense from the
@@ -47,6 +48,7 @@ const MATRIX = [
   { fixture: 'basic.html', scenario: scroll, config: {} },
   { fixture: 'basic.html', scenario: pauseResume, config: {} },
   { fixture: 'basic.html', scenario: textChildlist, config: {} },
+  { fixture: 'sanitize-corpus.html', scenario: sanitizeDivergence, config: {} },
   { fixture: 'heavy-realistic.html', scenario: snapshotOnly, config: {} },
   { fixture: 'heavy-realistic.html', scenario: structuralOps, config: {} },
   { fixture: 'truncation-overflow.html', scenario: snapshotOnly, config: { patchRects: true } },
@@ -297,13 +299,76 @@ for (const entry of MATRIX) {
         [{ op: DIFF_OP.TEXT, text: 'Replaced intro text.' }],
         'one deduplicated text op carrying the replaced live text'
       );
+    } else if (entry.scenario.name === 'sanitize-divergence') {
+      // D7 territory: capture-side sanitization deliberately diverges from
+      // the raw reference stream by stripping on* handlers, neutralizing
+      // dangerous URL attrs, dropping embed surfaces, and masking password
+      // values before transport.
+      assert.ok(
+        matched.has('D7-capture-sanitization'),
+        'sanitize-divergence exercises ledger entry D7'
+      );
+      assert.equal(
+        matched.size,
+        1,
+        `only D7 consulted in sanitize-divergence (matched: ${[...matched].join(', ')})`
+      );
+
+      const refHtml = refStream
+        .filter((msg) => msg.type === STREAM.SNAPSHOT)
+        .map((msg) => (msg.payload && msg.payload.html) || '')
+        .join('\n');
+      const extHtml = extStream
+        .filter((msg) => msg.type === STREAM.SNAPSHOT)
+        .map((msg) => (msg.payload && msg.payload.html) || '')
+        .join('\n');
+      const hostileSnapshot = /on\w+\s*=|javascript:|<object|<embed|srcdoc=|expression\(|hunter2/i;
+      assert.match(
+        refHtml,
+        hostileSnapshot,
+        'reference snapshot carries hostile content and password plaintext'
+      );
+      assert.doesNotMatch(
+        extHtml,
+        hostileSnapshot,
+        'extracted snapshot strips hostile content and password plaintext'
+      );
+
+      const refOps = refStream
+        .filter((msg) => msg.type === STREAM.MUTATIONS)
+        .flatMap((msg) => (msg.payload && msg.payload.mutations) || []);
+      const extOps = extStream
+        .filter((msg) => msg.type === STREAM.MUTATIONS)
+        .flatMap((msg) => (msg.payload && msg.payload.mutations) || []);
+      assert.ok(
+        refOps.some((op) => op.op === DIFF_OP.ATTR && /^on/i.test(String(op.attr || ''))),
+        'reference mutation batch carries the hostile on* attr op'
+      );
+      assert.ok(
+        refOps.some((op) => op.op === DIFF_OP.ATTR && op.attr === 'href' && /javascript:/i.test(String(op.val || ''))),
+        'reference mutation batch carries the hostile javascript: href value'
+      );
+      assert.equal(
+        extOps.filter((op) => op.op === DIFF_OP.ATTR && /^on/i.test(String(op.attr || ''))).length,
+        0,
+        'extracted mutation batch drops on* attr ops'
+      );
+      assert.equal(
+        extOps.filter((op) => op.op === DIFF_OP.ATTR && /javascript:/i.test(String(op.val || ''))).length,
+        0,
+        'extracted mutation batch never carries javascript: attr values'
+      );
+      assert.ok(
+        extOps.some((op) => op.op === DIFF_OP.ATTR && op.attr === 'href' && op.val === ''),
+        'extracted mutation batch carries the neutralized href attr op'
+      );
     } else {
-      // D1/D6 (and any future mismatch entry) must stay scoped: every
-      // scenario other than pause-resume and text-childlist compares clean
-      // with ZERO ledger consultations.
+      // D1/D6/D7 (and any future mismatch entry) must stay scoped: every
+      // scenario other than pause-resume, text-childlist, and
+      // sanitize-divergence compares clean with ZERO ledger consultations.
       assert.equal(
         matched.size, 0,
-        `no ledger consultation outside pause-resume/text-childlist (matched: ${[...matched].join(', ') || 'none'})`
+        `no ledger consultation outside pause-resume/text-childlist/sanitize-divergence (matched: ${[...matched].join(', ') || 'none'})`
       );
     }
   });
@@ -363,6 +428,19 @@ test('text-childlist with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D6 is 
 
   // The divergence is REAL: without the ledger, the exact same stream pair
   // that passes above must fail loudly. This proves D6 is the thing
+  // permitting it, not a comparison blind spot.
+  assert.throws(
+    () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
+    /UNDECLARED DIVERGENCE/
+  );
+});
+
+test('sanitize-divergence with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D7 is load-bearing, not decorative', async () => {
+  const entry = MATRIX.find((p) => p.scenario === sanitizeDivergence);
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
+  // The divergence is REAL: without the ledger, the exact same stream pair
+  // that passes above must fail loudly. This proves D7 is the thing
   // permitting it, not a comparison blind spot.
   assert.throws(
     () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
