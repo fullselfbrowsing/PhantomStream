@@ -198,16 +198,19 @@ function scrubSrcset(srcset) {
   if (!srcset) return srcset;
   try {
     var entries = srcset.split(',');
+    var kept = [];
     var changed = false;
     for (var i = 0; i < entries.length; i++) {
-      var parts = entries[i].trim().split(/\s+/);
+      var entry = entries[i].trim();
+      if (!entry) continue;
+      var parts = entry.split(/\s+/);
       if (parts[0] && hasDangerousScheme(parts[0])) {
-        parts[0] = '';
-        entries[i] = parts.join(' ');
         changed = true;
+        continue;
       }
+      kept.push(entry);
     }
-    return changed ? entries.join(', ') : srcset;
+    return changed ? kept.join(', ') : srcset;
   } catch (e) {
     return srcset;
   }
@@ -1591,7 +1594,12 @@ export function createCapture(config) {
     for (var s = 0; s < links.length; s++) {
       var href = links[s].getAttribute('href');
       if (href) {
-        stylesheets.push(absolutifyUrl(href));
+        var sheetHref = absolutifyUrl(href);
+        if (hasDangerousScheme(sheetHref)) {
+          sanitizeCounters.blockedUrlSchemes++;
+        } else {
+          stylesheets.push(sheetHref);
+        }
       }
     }
 

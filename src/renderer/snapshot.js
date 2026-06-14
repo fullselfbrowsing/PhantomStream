@@ -26,7 +26,8 @@
 //                                        layer; defense chain: capture
 //                                        chokepoint + post-parse scrub +
 //                                        CSP meta + sandbox (03-02)
-//   3. stylesheet hrefs               -- double quotes escaped only
+//   3. stylesheet hrefs               -- dangerous schemes filtered, then
+//                                        double quotes escaped
 //   4. html/body shell attrs + styles -- escapeAttribute (full escaping)
 //   5. viewportWidth                  -- numerically coerced
 //                                        (parseInt(_, 10) || 1920), never
@@ -58,6 +59,14 @@ var CSP_META = '<meta http-equiv="Content-Security-Policy" content="'
   + "style-src http: https: 'unsafe-inline'; "
   + 'font-src http: https: data:'
   + '">';
+
+function hasDangerousStylesheetUrl(value) {
+  if (!value || typeof value !== 'string') return false;
+  var compact = value.replace(/[\u0000-\u0020]+/g, '').toLowerCase();
+  return compact.indexOf('javascript:') === 0
+    || compact.indexOf('vbscript:') === 0
+    || compact.indexOf('data:text/html') === 0;
+}
 
 /**
  * Escape a value for inclusion inside a double-quoted HTML attribute.
@@ -122,9 +131,11 @@ export function buildShellAttributeString(attrs, styleText) {
 export function buildSnapshotHtml(payload) {
   var p = payload || {};
 
-  var stylesheetLinks = (p.stylesheets || []).map(function (url) {
-    return '<link rel="stylesheet" href="' + url.replace(/"/g, '&quot;') + '">';
-  }).join('\n');
+  var stylesheetLinks = (p.stylesheets || [])
+    .filter(function (url) { return !hasDangerousStylesheetUrl(url); })
+    .map(function (url) {
+      return '<link rel="stylesheet" href="' + url.replace(/"/g, '&quot;') + '">';
+    }).join('\n');
 
   var inlineStyleTags = (p.inlineStyles || []).map(function (css) {
     // CSS scrub at assembly (03-02): pure string pass; the scrub also

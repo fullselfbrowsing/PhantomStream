@@ -359,6 +359,29 @@ test('head inline styles are scrubbed (url scheme, @import, </style breakout); b
   }
 });
 
+test('head stylesheet URLs with dangerous schemes are removed before the snapshot wire', async () => {
+  const env = setupEnv(
+    '<div id="c">x</div>',
+    '<link rel="stylesheet" href="javascript:alert(1)">'
+      + '<link rel="stylesheet" href="vbscript:msgbox(1)">'
+      + '<link rel="stylesheet" href="data:text/html,<b>x</b>">'
+      + '<link rel="stylesheet" href="https://cdn.test/app.css">'
+  );
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+
+    assert.deepEqual(
+      snapshotPayloadOf(transport).stylesheets || [],
+      ['https://cdn.test/app.css'],
+      'only benign stylesheet URLs survive the capture-side side channel'
+    );
+  } finally {
+    env.teardown();
+  }
+});
+
 test('a hostile subtree added post-snapshot is scrubbed in the add op; the live node keeps its handler', async () => {
   const env = setupEnv('<div id="root2"></div>');
   try {
@@ -383,6 +406,51 @@ test('a hostile subtree added post-snapshot is scrubbed in the add op; the live 
     // The LIVE added node is untouched by sanitization.
     assert.equal(a.getAttribute('onclick'), 'alert(1)', 'the LIVE added node keeps its handler');
     assert.equal(a.getAttribute('href'), 'javascript:alert(1)', 'the LIVE added node keeps its raw href');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('srcset dangerous candidates are removed without becoming relative fetches', async () => {
+  const env = setupEnv(
+    '<img id="snap" srcset="javascript:alert(1) 1x, https://safe.test/a.png 2x">'
+      + '<div id="host"></div>'
+  );
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    let html = snapshotPayloadOf(transport).html;
+    assert.ok(!/javascript:/i.test(html), 'snapshot srcset has no javascript candidate');
+    assert.ok(!/srcset="(?:https:\/\/fixture\.test\/)?1x/i.test(html), 'snapshot srcset did not create a bare 1x relative URL');
+    assert.ok(html.includes('https://safe.test/a.png 2x'), 'snapshot srcset preserved the benign candidate');
+
+    const added = env.document.createElement('img');
+    added.id = 'added-srcset';
+    added.setAttribute('srcset', 'javascript:alert(2) 1x, https://safe.test/b.png 2x');
+    env.document.getElementById('host').appendChild(added);
+    await settle(env.window);
+
+    html = allMutationOps(transport)
+      .filter((op) => op.op === DIFF_OP.ADD)
+      .map((op) => op.html)
+      .join('\n');
+    assert.ok(!/javascript:/i.test(html), 'add-op srcset has no javascript candidate');
+    assert.ok(!/srcset="(?:https:\/\/fixture\.test\/)?1x/i.test(html), 'add-op srcset did not create a bare 1x relative URL');
+    assert.ok(html.includes('https://safe.test/b.png 2x'), 'add-op srcset preserved the benign candidate');
+
+    added.setAttribute('srcset', 'javascript:alert(3) 1x, https://safe.test/c.png 2x');
+    await settle(env.window);
+
+    const srcsetOps = allMutationOps(transport)
+      .filter((op) => op.op === DIFF_OP.ATTR && op.attr === 'srcset');
+    const last = srcsetOps[srcsetOps.length - 1];
+    assert.ok(last, 'attr-op srcset mutation emitted');
+    assert.ok(!/javascript:/i.test(last.val), 'attr-op srcset has no javascript candidate');
+    assert.ok(!/(^|,\s*)(?:https:\/\/fixture\.test\/)?1x(?:\s|,|$)/i.test(last.val), 'attr-op srcset did not create a bare 1x relative URL');
+    assert.ok(last.val.includes('https://safe.test/c.png 2x'), 'attr-op srcset preserved the benign candidate');
   } finally {
     env.teardown();
   }
