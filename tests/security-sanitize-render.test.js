@@ -201,7 +201,7 @@ test('sanitizeFragment scrubs hostile <style> element text', () => {
   const env = setupEnv();
   try {
     const frag = env.makeFragment(
-      '<style>.x{background:url(javascript:alert(1));width:expression(alert(2));}</style>'
+      '<style>.x{background:url("javascript:alert(1)");width:expression(alert(2));}</style>'
     );
     const counters = freshCounters();
     sanitizeFragment(frag, counters, recordingLogger());
@@ -218,14 +218,13 @@ test('style="width:expression(alert(1))" is scrubbed; benign style values pass t
   const env = setupEnv();
   try {
     const frag = env.makeFragment(
-      '<div style="width:expression(alert(1))">x</div>'
+      '<div style="background:url(&quot;javascript:alert(1)&quot;);width:expression(alert(1))">x</div>'
         + '<p style="color: red">y</p>'
     );
     sanitizeFragment(frag, freshCounters(), recordingLogger());
-    assert.ok(
-      !/expression\(/i.test(frag.querySelector('div').getAttribute('style')),
-      'expression() neutralized in the style value'
-    );
+    const style = frag.querySelector('div').getAttribute('style');
+    assert.ok(!/javascript:/i.test(style), 'quoted url(javascript:) neutralized in the style value');
+    assert.ok(!/expression\(/i.test(style), 'expression() neutralized in the style value');
     assert.equal(
       frag.querySelector('p').getAttribute('style'), 'color: red',
       'benign style value byte-identical (no rewrite when nothing scrubbed)'
@@ -330,6 +329,11 @@ test('sanitizeAttrValue: on* and srcdoc drop; dangerous URL schemes neutralize; 
   assert.equal(styled.drop, false);
   assert.ok(!/expression\(/i.test(styled.value), 'style value goes through scrubCssText');
 
+  const quotedUrlStyle = sanitizeAttrValue('style', 'background:url("javascript:alert(1)")');
+  assert.equal(quotedUrlStyle.drop, false);
+  assert.ok(!/javascript:/i.test(quotedUrlStyle.value), 'quoted style url() goes through scrubCssText');
+  assert.ok(quotedUrlStyle.value.includes('about:blank'), 'quoted style url() is replaced with about:blank');
+
   const plain = sanitizeAttrValue('title', 'hello');
   assert.equal(plain.drop, false);
   assert.equal(plain.value, 'hello', 'non-special attribute passes through');
@@ -341,6 +345,16 @@ test('scrubCssText neutralizes url(javascript:), expression(), -moz-binding, non
   const urlScrubbed = scrubCssText('background:url(javascript:alert(1))');
   assert.ok(!/url\(\s*javascript/i.test(urlScrubbed), 'url(javascript:) contents replaced');
   assert.ok(urlScrubbed.includes('about:blank'), 'replacement target is about:blank');
+
+  for (const css of [
+    'background:url("javascript:alert(1)")',
+    "background:url('javascript:alert(1)')",
+    'background:url("java\nscript:alert(1)")',
+  ]) {
+    const scrubbed = scrubCssText(css);
+    assert.ok(!/javascript:/i.test(scrubbed), 'quoted dangerous url() neutralized: ' + css);
+    assert.ok(scrubbed.includes('about:blank'), 'quoted dangerous url() replacement is about:blank: ' + css);
+  }
 
   assert.ok(!/expression\(/i.test(scrubCssText('width:expression(alert(1))')), 'expression() neutralized');
   assert.ok(!/-moz-binding/i.test(scrubCssText('-moz-binding:url(evil.xml#x)')), '-moz-binding neutralized');
@@ -453,7 +467,7 @@ test("chokepoint integration: a hostile 'add' op scrubs <style> element text", (
         op: DIFF_OP.ADD,
         parentNid: '1',
         html: '<div ' + NID_ATTR + '="9">'
-          + '<style>.x{background:url(javascript:alert(1));width:expression(alert(2));}</style>'
+          + '<style>.x{background:url("javascript:alert(1)");width:expression(alert(2));}</style>'
           + '</div>',
       },
     ], freshDiffCounters(), rec.hooks);
@@ -635,7 +649,7 @@ test('post-parse scrub (behavioral): a hostile snapshot fed to the viewer yields
       html: '<div ' + NID_ATTR + '="1">'
         + '<button ' + NID_ATTR + '="2" onclick="alert(1)">x</button>'
         + '<a ' + NID_ATTR + '="3" href="javascript:alert(1)">y</a>'
-        + '<style>.x{background:url(javascript:alert(1));width:expression(alert(2));}</style>'
+        + '<style>.x{background:url("javascript:alert(1)");width:expression(alert(2));}</style>'
         + '</div>',
     }));
 

@@ -167,14 +167,16 @@ export function scrubCssText(css) {
   var input = String(css == null ? '' : css);
   try {
     var out = input;
-    out = out.replace(/url\(\s*(['"]?)([^)'"]*)\1\s*\)/gi, function (match, quote, inner) {
-      var probe = String(inner || '').replace(/[\u0000-\u0020]+/g, '').toLowerCase();
-      var scheme = /^([a-z][a-z0-9+.-]*):/.exec(probe);
-      if (!scheme) return match; // relative URL: allowed
-      if (scheme[1] === 'http' || scheme[1] === 'https') return match;
-      if (scheme[1] === 'data' && probe.indexOf('data:image/') === 0) return match;
-      return 'url(' + quote + 'about:blank' + quote + ')';
-    });
+    out = out.replace(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"'][^)]*))?\s*\)/gi,
+      function (match, dq, sq, bare) {
+        var inner = dq !== undefined ? dq : (sq !== undefined ? sq : (bare || ''));
+        var probe = String(inner || '').replace(/[\u0000-\u0020]+/g, '').toLowerCase();
+        var scheme = /^([a-z][a-z0-9+.-]*):/.exec(probe);
+        if (!scheme) return match; // relative URL: allowed
+        if (scheme[1] === 'http' || scheme[1] === 'https') return match;
+        if (scheme[1] === 'data' && probe.indexOf('data:image/') === 0) return match;
+        return 'url(about:blank)';
+      });
     out = out.replace(/expression\s*\(/gi, 'blocked(');
     out = out.replace(/-moz-binding/gi, 'blocked-binding');
     out = out.replace(/@import\b(\s*(?:url\(\s*)?['"]?\s*)([^'");\s]*)/gi, function (match, lead, target) {

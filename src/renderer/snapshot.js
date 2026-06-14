@@ -28,7 +28,8 @@
 //                                        CSP meta + sandbox (03-02)
 //   3. stylesheet hrefs               -- dangerous schemes filtered, then
 //                                        double quotes escaped
-//   4. html/body shell attrs + styles -- escapeAttribute (full escaping)
+//   4. html/body shell attrs + styles -- attrs escapeAttribute; styleText
+//                                        scrubCssText + escapeAttribute
 //   5. viewportWidth                  -- numerically coerced
 //                                        (parseInt(_, 10) || 1920), never
 //                                        interpolated raw: the typed
@@ -89,8 +90,8 @@ export function escapeAttribute(value) {
  * dashboard.js:2679-2694: names are lowercased and must match
  * /^[a-z][a-z0-9_:.~-]*$/; 'style' and any on*-prefixed name are dropped
  * (shell event-handler attributes never reach the mirror); null/undefined
- * values are dropped; trimmed styleText is appended last as style="...".
- * Values are escaped via escapeAttribute.
+ * values are dropped; trimmed styleText is scrubbed and appended last as
+ * style="...". Values are escaped via escapeAttribute.
  * @param {Object|null|undefined} attrs     Captured shell attributes (name -> value)
  * @param {string|null|undefined} styleText Shell computed style text
  * @returns {string} ' name="value" ...' (leading-space-prefixed) or ''
@@ -107,7 +108,7 @@ export function buildShellAttributeString(attrs, styleText) {
       parts.push(name + '="' + escapeAttribute(value) + '"');
     });
   }
-  var style = String(styleText || '').trim();
+  var style = scrubCssText(String(styleText || '')).trim();
   if (style) parts.push('style="' + escapeAttribute(style) + '"');
   return parts.length ? ' ' + parts.join(' ') : '';
 }

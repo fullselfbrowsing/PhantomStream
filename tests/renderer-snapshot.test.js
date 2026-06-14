@@ -168,6 +168,17 @@ test('inlineStyles are CSS-scrubbed at assembly -- </style> breakout and url(jav
   );
 });
 
+test('htmlStyle and bodyStyle are CSS-scrubbed before shell assembly', () => {
+  const html = buildSnapshotHtml(minimalPayload({
+    htmlStyle: 'background:url("javascript:alert(1)");width:expression(alert(2));',
+    bodyStyle: "background:url('javascript:alert(3)');color: red;",
+  }));
+  assert.ok(!/javascript:/i.test(html), 'shell styles have no javascript: URL');
+  assert.ok(!/expression\(/i.test(html), 'shell styles have no expression()');
+  assert.ok(html.includes('<html style="background:url(about:blank);width:blocked(alert(2));">'));
+  assert.ok(html.includes('<body style="background:url(about:blank);color: red;">'));
+});
+
 test('payload.html is inserted raw between the body tags AT THE STRING LAYER', () => {
   // KEPT pin, re-rationalized (plan 03-02 Task 3): string-level scrubbing
   // of the body html is the mXSS anti-pattern (scrub-then-reparse), so
