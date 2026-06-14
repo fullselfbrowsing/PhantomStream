@@ -310,7 +310,7 @@ export const DIVERGENCES = [
           }
           return extOps.some((extOp) => isAttrOp(extOp)
             && String(extOp.attr || '').toLowerCase() === attr
-            && extOp.val === '');
+            && extOp.val === null);
         });
       }
 

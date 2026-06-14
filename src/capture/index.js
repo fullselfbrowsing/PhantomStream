@@ -1100,25 +1100,27 @@ export function createCapture(config) {
           sanitizeCounters.blockedSubtrees++;
         }
       }
-      // URL-carrying attributes: dangerous schemes neutralize to '' --
-      // attribute EXISTENCE is preserved for mirror parity (T-03-02).
+      // URL-carrying attributes: dangerous schemes are removed, not
+      // rewritten to href="". Empty hrefs navigate to the iframe's own URL
+      // on click, so removal is the inert mirror behavior required by the
+      // Phase 3 browser checkpoint.
       for (var u = 0; u < URL_ATTRS.length; u++) {
         var urlVal = clone.getAttribute(URL_ATTRS[u]);
         if (urlVal && hasDangerousScheme(urlVal)) {
-          clone.setAttribute(URL_ATTRS[u], '');
+          clone.removeAttribute(URL_ATTRS[u]);
           sanitizeCounters.blockedUrlSchemes++;
         }
       }
       var formactionVal = clone.getAttribute('formaction');
       if (formactionVal && hasDangerousScheme(formactionVal)) {
-        clone.setAttribute('formaction', '');
+        clone.removeAttribute('formaction');
         sanitizeCounters.blockedUrlSchemes++;
       }
       // SVG xlink:href (getAttributeNS per the serializeDOM precedent).
       try {
         var xlinkVal = clone.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
         if (xlinkVal && hasDangerousScheme(xlinkVal)) {
-          clone.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '');
+          clone.removeAttributeNS('http://www.w3.org/1999/xlink', 'href');
           sanitizeCounters.blockedUrlSchemes++;
         }
       } catch (e) { /* not an SVG element or no xlink support */ }
@@ -1242,12 +1244,13 @@ export function createCapture(config) {
         }
         return { value: scrubbedAttrSrcset };
       }
-      // URL-carrying attrs: dangerous schemes neutralize to '' -- the op
-      // (and so attribute EXISTENCE) is preserved for mirror parity.
+      // URL-carrying attrs: dangerous schemes remove the attr on the mirror.
+      // Preserving href with an empty value is still navigable in real
+      // browsers, so null is the inert ATTR-op shape (diff.js removeAttribute).
       if ((URL_ATTRS.indexOf(attrName) !== -1 || attrName === 'formaction' || attrName === 'xlink:href')
           && payload.value && hasDangerousScheme(payload.value)) {
         sanitizeCounters.blockedUrlSchemes++;
-        return { value: '' };
+        return { value: null };
       }
       if (attrName === 'value' && shouldMaskInput(payload.target)) {
         var maskedAttrValue = safeMaskInput(payload.value == null ? '' : payload.value, payload.target);

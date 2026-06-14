@@ -69,7 +69,7 @@ The policy is blocklist-based and fidelity-first. An allowlist was rejected beca
 must mirror arbitrary real pages without breaking benign markup.
 
 - Event-handler attributes (`on*`) are removed in capture and render paths.
-- Dangerous URL schemes are neutralized for URL-bearing attrs, including `href`, `src`, `action`,
+- Dangerous URL schemes are removed for URL-bearing attrs, including `href`, `src`, `action`,
   `poster`, `data`, `formaction`, `xlink:href`, and `srcset` candidates.
 - `srcdoc` attributes are dropped.
 - `script`, `noscript`, `object`, and `embed` subtrees are dropped. `object` / `embed` are

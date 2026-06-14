@@ -195,6 +195,10 @@ export function applyMutations(doc, mutations, counters, hooks) {
                 nid: m.nid || '', attr: m.attr || ''
               });
             }
+            if (scrubbed.value === null) {
+              target.removeAttribute(m.attr);
+              break;
+            }
             target.setAttribute(m.attr, scrubbed.value);
             break;
           }

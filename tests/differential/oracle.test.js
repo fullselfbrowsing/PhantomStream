@@ -360,8 +360,8 @@ for (const entry of MATRIX) {
         'extracted mutation batch never carries javascript: attr values'
       );
       assert.ok(
-        extOps.some((op) => op.op === DIFF_OP.ATTR && op.attr === 'href' && op.val === ''),
-        'extracted mutation batch carries the neutralized href attr op'
+        extOps.some((op) => op.op === DIFF_OP.ATTR && op.attr === 'href' && op.val === null),
+        'extracted mutation batch carries the href removal attr op'
       );
     } else {
       // D1/D6/D7 (and any future mismatch entry) must stay scoped: every

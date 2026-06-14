@@ -146,7 +146,7 @@ test('sanitizeFragment strips the hostile corpus: on* attrs, srcdoc, script/nosc
     const iframeEl = frag.querySelector('iframe');
     assert.ok(iframeEl, 'the iframe element itself survives (only its srcdoc attr is stripped)');
     assert.equal(iframeEl.hasAttribute('srcdoc'), false, 'srcdoc attribute removed');
-    assert.equal(frag.querySelector('a').getAttribute('href'), '', 'javascript: href neutralized to empty');
+    assert.equal(frag.querySelector('a').hasAttribute('href'), false, 'javascript: href removed');
     assert.ok(frag.querySelector('button'), 'the button itself survives (only its handler is stripped)');
   } finally {
     env.teardown();
@@ -283,16 +283,16 @@ test('sanitizeAttrValue: on* and srcdoc drop; dangerous URL schemes neutralize; 
   assert.equal(sanitizeAttrValue('srcdoc', '<p>x</p>').drop, true, 'srcdoc dropped');
 
   const neutralized = sanitizeAttrValue('href', 'javascript:alert(1)');
-  assert.equal(neutralized.drop, false, 'dangerous URL is neutralized, not dropped (href existence parity)');
-  assert.equal(neutralized.value, '', 'javascript: href value cleared');
-  assert.equal(sanitizeAttrValue('src', 'vbscript:msgbox(1)').value, '', 'vbscript: cleared');
+  assert.equal(neutralized.drop, false, 'dangerous URL is neutralized by removing the attr value');
+  assert.equal(neutralized.value, null, 'javascript: href value removes attr');
+  assert.equal(sanitizeAttrValue('src', 'vbscript:msgbox(1)').value, null, 'vbscript: removes attr');
   assert.equal(
-    sanitizeAttrValue('href', 'data:text/html,<b>x</b>').value, '',
-    'data:text/html cleared'
+    sanitizeAttrValue('href', 'data:text/html,<b>x</b>').value, null,
+    'data:text/html removes attr'
   );
   assert.equal(
-    sanitizeAttrValue('href', ' java\tscript:alert(1)').value, '',
-    'control-char/whitespace obfuscated scheme still detected'
+    sanitizeAttrValue('href', ' java\tscript:alert(1)').value, null,
+    'control-char/whitespace obfuscated scheme still detected and removed'
   );
 
   const benign = sanitizeAttrValue('href', 'https://x.test');
@@ -410,8 +410,8 @@ test("chokepoint integration: a hostile 'add' op inserts a node with neither onc
     assert.ok(added, 'the hostile add op still inserts (sanitized, never silently dropped)');
     assert.deepEqual(onAttrsOf(added), [], 'sanitizeFragment ran on template content before importNode');
     assert.equal(
-      added.querySelector('a').getAttribute('href'), '',
-      'javascript: href neutralized inside the inserted subtree'
+      added.querySelector('a').hasAttribute('href'), false,
+      'javascript: href removed inside the inserted subtree'
     );
     assert.ok(sc.strippedHandlers >= 1, 'handler strip counted through hooks.sanitizeCounters');
     assert.ok(sc.blockedUrls >= 1, 'URL block counted through hooks.sanitizeCounters');
@@ -440,7 +440,7 @@ test("chokepoint integration: an 'attr' op with an on* name is DROPPED -- no set
   }
 });
 
-test("chokepoint integration: an 'attr' op href=javascript: sets ''; benign attr ops apply unchanged", () => {
+test("chokepoint integration: an 'attr' op href=javascript: removes href; benign attr ops apply unchanged", () => {
   const env = setupEnv();
   try {
     const doc = makeDoc(env, '<a ' + NID_ATTR + '="1">x</a>');
@@ -451,7 +451,7 @@ test("chokepoint integration: an 'attr' op href=javascript: sets ''; benign attr
       { op: DIFF_OP.ATTR, nid: '1', attr: 'title', val: 'tip' },
     ], freshDiffCounters(), rec.hooks);
     const target = doc.querySelector('[' + NID_ATTR + '="1"]');
-    assert.equal(target.getAttribute('href'), '', 'dangerous URL neutralized to empty value');
+    assert.equal(target.hasAttribute('href'), false, 'dangerous URL removed from the mirror');
     assert.equal(target.getAttribute('title'), 'tip', 'benign attr op applied unchanged');
     assert.equal(sc.blockedUrls, 1, 'URL neutralization counted');
   } finally {

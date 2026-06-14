@@ -172,7 +172,7 @@ export function scrubCssText(css) {
  * caller owns counting (its counters, its lifecycle).
  * @param {*} name   Attribute name from the wire (untrusted)
  * @param {*} value  Attribute value from the wire (untrusted)
- * @returns {{drop: boolean, value: string}}
+ * @returns {{drop: boolean, value: string|null}}
  */
 export function sanitizeAttrValue(name, value) {
   var n;
@@ -186,7 +186,7 @@ export function sanitizeAttrValue(name, value) {
   if (n.indexOf('on') === 0) return { drop: true, value: '' };
   if (n === 'srcdoc') return { drop: true, value: '' };
   if (URL_ATTRS[n] === true) {
-    if (hasDangerousScheme(v)) return { drop: false, value: '' };
+    if (hasDangerousScheme(v)) return { drop: false, value: null };
     return { drop: false, value: v };
   }
   if (n === 'srcset') {
@@ -284,11 +284,7 @@ export function sanitizeFragment(root, counters, logger) {
         if (URL_ATTRS[lower] === true) {
           var attrNode = el.getAttributeNode(name);
           if (attrNode && hasDangerousScheme(attrNode.value)) {
-            // Mutate the attr node in place: setAttribute with a
-            // namespaced qualified name (xlink:href) would mint a
-            // DIFFERENT non-namespaced attribute and leave the
-            // dangerous one intact.
-            attrNode.value = '';
+            el.removeAttributeNode(attrNode);
             tallies.blockedUrls += 1;
           }
           continue;

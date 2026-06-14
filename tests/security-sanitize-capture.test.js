@@ -165,7 +165,7 @@ test('on* handler attributes never reach the snapshot wire; the live page keeps 
   }
 });
 
-test('javascript: hrefs (raw + tab-obfuscated) neutralize to ""; benign absolute href passes through', async () => {
+test('javascript: hrefs (raw + tab-obfuscated) are removed; benign absolute href passes through', async () => {
   const env = setupEnv(
     '<a id="a1" href="javascript:alert(1)">x</a>'
     + '<a id="a2" href="jav\tascript:alert(1)">y</a>'
@@ -179,8 +179,8 @@ test('javascript: hrefs (raw + tab-obfuscated) neutralize to ""; benign absolute
     const html = snapshotPayloadOf(transport).html;
     assert.ok(!/javascript:/i.test(html), 'no javascript: scheme anywhere on the wire');
     assert.ok(!/jav\s*ascript/i.test(html), 'no whitespace-obfuscated javascript scheme either');
-    assert.match(startTagOf(html, 'a1'), /href=""/, 'raw javascript: href neutralized to ""');
-    assert.match(startTagOf(html, 'a2'), /href=""/, 'tab-obfuscated javascript: href neutralized to ""');
+    assert.doesNotMatch(startTagOf(html, 'a1'), /\bhref=/, 'raw javascript: href removed');
+    assert.doesNotMatch(startTagOf(html, 'a2'), /\bhref=/, 'tab-obfuscated javascript href removed');
     assert.match(startTagOf(html, 'a3'), /href="https:\/\/x\.test\/a"/,
       'benign href passes through unchanged after absolutification');
   } finally {
@@ -485,7 +485,7 @@ test('post-snapshot srcdoc setAttribute on an iframe emits no attr op', async ()
   }
 });
 
-test('post-snapshot href=javascript: emits an attr op with val "" (existence preserved, value neutralized)', async () => {
+test('post-snapshot href=javascript: emits an attr op with val null (mirror attr removed)', async () => {
   const env = setupEnv('<a id="t3" href="/start">x</a>');
   try {
     const transport = createLoopbackTransport();
@@ -499,7 +499,7 @@ test('post-snapshot href=javascript: emits an attr op with val "" (existence pre
     const hrefOps = allMutationOps(transport)
       .filter((op) => op.op === DIFF_OP.ATTR && op.attr === 'href');
     assert.equal(hrefOps.length, 1, 'the href attr op is still emitted (mirror parity)');
-    assert.equal(hrefOps[0].val, '', 'the dangerous-scheme value is neutralized to ""');
+    assert.equal(hrefOps[0].val, null, 'the dangerous-scheme attr is removed on the mirror');
   } finally {
     env.teardown();
   }
