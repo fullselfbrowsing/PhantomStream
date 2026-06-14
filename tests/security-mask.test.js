@@ -162,6 +162,7 @@ const BLOCK_BODY_HTML = '<div id="root">'
   + '<input id="pw" type="password" value="hunter2">'
   + '<input id="txt" type="text" value="visible-value">'
   + '<textarea id="ta">textarea secret body</textarea>'
+  + '<select id="sel"><option id="sel-opt" value="option-secret-value">Visible option label</option></select>'
   + '<p id="pub2">tracked public</p>'
   + '</div>'
   + '</div>';
@@ -723,6 +724,7 @@ test('with maskInputs true, a text input value is masked in snapshot AND attr-op
     const html = snapshots[0].payload.html;
     assert.ok(!html.includes('visible-value'), 'text input value absent from snapshot');
     assert.ok(!html.includes('textarea secret body'), 'textarea text absent from snapshot');
+    assert.ok(!html.includes('option-secret-value'), 'select option value absent from snapshot');
 
     const tpl = env.document.createElement('template');
     tpl.innerHTML = html;
@@ -730,6 +732,10 @@ test('with maskInputs true, a text input value is masked in snapshot AND attr-op
       'text input value masked in snapshot');
     assert.equal(tpl.content.querySelector('#ta').textContent, expectMask('textarea secret body'),
       'textarea text masked in snapshot');
+    assert.equal(tpl.content.querySelector('#sel-opt').getAttribute('value'), expectMask('option-secret-value'),
+      'select option value masked in snapshot');
+    assert.equal(tpl.content.querySelector('#sel-opt').textContent, 'Visible option label',
+      'select option label remains the documented residual');
 
     env.document.getElementById('txt').setAttribute('value', 'updated-input');
     await settle(env.window);
@@ -739,6 +745,49 @@ test('with maskInputs true, a text input value is masked in snapshot AND attr-op
     const wire = wireText(transport);
     assert.ok(!wire.includes('visible-value'), 'snapshot input value never on the wire');
     assert.ok(!wire.includes('updated-input'), 'mutated input value never on the wire');
+
+    const ta = env.document.getElementById('ta');
+    const taNid = ta.getAttribute(NID_ATTR);
+    ta.firstChild.nodeValue = 'textarea edited secret';
+    await settle(env.window);
+    assert.ok(
+      textOps(transport).some((op) => op.nid === taNid && op.text === expectMask('textarea edited secret')),
+      'textarea characterData text op is masked with maskInputs true'
+    );
+
+    ta.textContent = 'textarea replaced secret';
+    await settle(env.window);
+    assert.ok(
+      textOps(transport).some((op) => op.nid === taNid && op.text === expectMask('textarea replaced secret')),
+      'textarea textContent childList text op is masked with maskInputs true'
+    );
+
+    const option = env.document.getElementById('sel-opt');
+    option.setAttribute('value', 'option-updated-secret');
+    await settle(env.window);
+    assert.ok(
+      attrOps(transport).some((op) => op.attr === 'value' && op.val === expectMask('option-updated-secret')),
+      'select option value attr op is masked with maskInputs true'
+    );
+
+    const lateSelect = env.document.createElement('select');
+    lateSelect.id = 'late-sel';
+    const lateOption = env.document.createElement('option');
+    lateOption.id = 'late-opt';
+    lateOption.setAttribute('value', 'late-option-secret');
+    lateOption.textContent = 'Late option label';
+    lateSelect.appendChild(lateOption);
+    env.document.getElementById('wrap').appendChild(lateSelect);
+    await settle(env.window);
+    const lateAdd = addOps(transport).find((op) => op.html.includes('late-sel'));
+    assert.ok(lateAdd, 'late select subtree emitted as an add op');
+    assert.ok(!lateAdd.html.includes('late-option-secret'), 'late select option value absent from add-op html');
+    assert.ok(lateAdd.html.includes('value="' + expectMask('late-option-secret') + '"'),
+      'late select option value masked in add-op html');
+    assert.ok(!wireText(transport).includes('textarea edited secret'), 'textarea characterData raw value never on the wire');
+    assert.ok(!wireText(transport).includes('textarea replaced secret'), 'textarea textContent raw value never on the wire');
+    assert.ok(!wireText(transport).includes('option-updated-secret'), 'option attr raw value never on the wire');
+    assert.ok(!wireText(transport).includes('late-option-secret'), 'late option raw value never on the wire');
   } finally {
     env.teardown();
   }

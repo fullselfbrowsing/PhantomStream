@@ -832,6 +832,36 @@ export function createCapture(config) {
   }
 
   /**
+   * Elements intentionally absent from the wire must also be absent from the
+   * live tracking graph. Otherwise descendants can receive nids before the
+   * clone subtree is removed, then later leak mutations for content the
+   * snapshot never mirrored.
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function isWireDroppedElement(el) {
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    var tag = el.tagName ? String(el.tagName).toLowerCase() : '';
+    return tag === 'script' || tag === 'noscript' || tag === 'object' || tag === 'embed';
+  }
+
+  /**
+   * Ancestor-inclusive dropped-subtree predicate, matching the blockSelector
+   * mutation guards for built-in forbidden wire roots.
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function wireDroppedWithAncestors(el) {
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    var node = el;
+    while (node && node.nodeType === Node.ELEMENT_NODE) {
+      if (isWireDroppedElement(node)) return true;
+      node = node.parentElement;
+    }
+    return false;
+  }
+
+  /**
    * Apply the text mask: maskTextFn when provided, with fail-CLOSED
    * containment -- a throwing custom fn falls back to the DEFAULT asterisk
    * mask (raw text NEVER leaks, threat T-03-16) and routes to the logger.
@@ -897,15 +927,56 @@ export function createCapture(config) {
   }
 
   /**
+   * Option value attributes are the value surface of a masked select. Option
+   * display labels remain the documented residual; value attrs do not.
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function isOptionUnderMaskedSelect(el) {
+    if (!maskInputs || !el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    var tag = el.tagName ? String(el.tagName).toLowerCase() : '';
+    if (tag !== 'option') return false;
+    try {
+      return !!(el.closest && el.closest('select'));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function maskOptionValue(optionClone, owner) {
+    if (!optionClone || !optionClone.hasAttribute || !optionClone.hasAttribute('value')) return;
+    if (optionClone._psOptionValueMasked) return;
+    optionClone._psOptionValueMasked = true;
+    var value = optionClone.getAttribute('value');
+    var maskedValue = safeMaskInput(value == null ? '' : value, owner);
+    if (maskedValue !== value) {
+      optionClone.setAttribute('value', maskedValue);
+      sanitizeCounters.maskedInputs++;
+    }
+  }
+
+  /**
    * Mask a clone's input/textarea/select wire value in place.
    * @param {Element} clone
    * @param {Element} owner
    */
   function maskInputCloneValue(clone, owner) {
+    if (isOptionUnderMaskedSelect(owner)) {
+      maskOptionValue(clone, owner);
+      return;
+    }
     if (!shouldMaskInput(owner)) return;
     var tag = clone.tagName ? String(clone.tagName).toLowerCase() : '';
     if (tag === 'textarea') {
       maskDirectChildText(clone, owner, safeMaskInput, 'maskedInputs');
+      return;
+    }
+    if (tag === 'select') {
+      var cloneOptions = clone.querySelectorAll ? clone.querySelectorAll('option') : [];
+      var ownerOptions = owner && owner.querySelectorAll ? owner.querySelectorAll('option') : [];
+      for (var o = 0; o < cloneOptions.length; o++) {
+        maskOptionValue(cloneOptions[o], ownerOptions[o] || owner);
+      }
       return;
     }
     if (clone.hasAttribute && clone.hasAttribute('value')) {
@@ -1236,6 +1307,7 @@ export function createCapture(config) {
         // Skip nodes already detached with a removed forbidden ancestor
         // (querySelectorAll is static; removal does not re-enumerate).
         if (!root.contains(desc)) continue;
+        if (liveDesc && wireDroppedWithAncestors(liveDesc.parentElement)) continue;
         if (liveDesc && blockedWithAncestors(liveDesc.parentElement)) continue;
         if (liveDesc && blockMatches(liveDesc)) {
           replaceWithBlockPlaceholder(liveDesc, desc, readBlockRect(liveDesc));
@@ -1288,7 +1360,7 @@ export function createCapture(config) {
         sanitizeCounters.blockedUrlSchemes++;
         return { value: null };
       }
-      if (attrName === 'value' && shouldMaskInput(payload.target)) {
+      if (attrName === 'value' && (shouldMaskInput(payload.target) || isOptionUnderMaskedSelect(payload.target))) {
         var maskedAttrValue = safeMaskInput(payload.value == null ? '' : payload.value, payload.target);
         if (maskedAttrValue !== payload.value) {
           sanitizeCounters.maskedInputs++;
@@ -1305,6 +1377,13 @@ export function createCapture(config) {
       // CAPT-05 typed-text capture plugs into the same seam. Unmasked text
       // passes through unchanged (default-off: zero wire change without
       // masking config).
+      if (shouldMaskInput(payload.owner)) {
+        var maskedInputText = safeMaskInput(payload.text == null ? '' : payload.text, payload.owner);
+        if (maskedInputText !== payload.text) {
+          sanitizeCounters.maskedInputs++;
+        }
+        return { text: maskedInputText };
+      }
       if (maskTextMatches(payload.owner)) {
         var maskedOpText = safeMaskText(payload.text, payload.owner);
         if (maskedOpText !== payload.text) {
@@ -1486,6 +1565,11 @@ export function createCapture(config) {
       var orig = pairs[i].orig;
       var cl = pairs[i].clone;
       var tag = cl.tagName ? cl.tagName.toLowerCase() : '';
+
+      if (wireDroppedWithAncestors(orig.parentElement)) {
+        nextNodeId++;
+        continue;
+      }
 
       // SEC-01 drop decision routed through the chokepoint: script/noscript
       // (reference parity) plus object/embed (blocklist) -- the decision
@@ -1773,6 +1857,11 @@ export function createCapture(config) {
    */
   function processAddedNode(el) {
     if (el.nodeType !== Node.ELEMENT_NODE) return '';
+    if (wireDroppedWithAncestors(el)) {
+      nextNodeId++;
+      if (isWireDroppedElement(el)) sanitizeCounters.blockedSubtrees++;
+      return '';
+    }
 
     // Live-node stamping + absolutification (reference parity, unchanged).
     el.setAttribute(NID_ATTR, String(nextNodeId++));
@@ -1796,6 +1885,10 @@ export function createCapture(config) {
     var descendants = el.querySelectorAll('*');
     for (var d = 0; d < descendants.length; d++) {
       var desc = descendants[d];
+      if (wireDroppedWithAncestors(desc)) {
+        nextNodeId++;
+        continue;
+      }
       if (blockedWithAncestors(desc.parentElement)) continue;
       desc.setAttribute(NID_ATTR, String(nextNodeId++));
       if (blockMatches(desc)) continue;
@@ -1837,12 +1930,14 @@ export function createCapture(config) {
       // Ancestor-inclusive, matching the reference's isFsbOverlay closest()
       // semantics: mutations anywhere inside a skipped subtree are dropped.
       if (m.target && m.target.nodeType === Node.ELEMENT_NODE &&
-          (skipElementWithAncestors(m.target) || blockedWithAncestors(m.target))) {
+          (skipElementWithAncestors(m.target) || blockedWithAncestors(m.target) || wireDroppedWithAncestors(m.target))) {
         continue;
       }
       if (m.target && m.target.nodeType === Node.TEXT_NODE &&
           m.target.parentElement &&
-          (skipElementWithAncestors(m.target.parentElement) || blockedWithAncestors(m.target.parentElement))) {
+          (skipElementWithAncestors(m.target.parentElement)
+            || blockedWithAncestors(m.target.parentElement)
+            || wireDroppedWithAncestors(m.target.parentElement))) {
         continue;
       }
 
@@ -1865,6 +1960,7 @@ export function createCapture(config) {
           var added = m.addedNodes[a];
           if (added.nodeType === Node.ELEMENT_NODE) {
             if (skipElementWithAncestors(added)) continue;
+            if (wireDroppedWithAncestors(added.parentElement)) continue;
             if (blockedWithAncestors(added.parentElement)) continue;
 
             // Node identity is read through the NID_ATTR protocol constant
@@ -1895,6 +1991,7 @@ export function createCapture(config) {
         for (var r = 0; r < m.removedNodes.length; r++) {
           var removed = m.removedNodes[r];
           if (removed.nodeType === Node.ELEMENT_NODE) {
+            if (wireDroppedWithAncestors(removed)) continue;
             var nid = removed.getAttribute ? removed.getAttribute(NID_ATTR) : null;
             if (!nid) continue; // Not tracked
             diffs.push({ op: 'rm', nid: nid });

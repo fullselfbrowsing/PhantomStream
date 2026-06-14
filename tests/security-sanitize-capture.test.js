@@ -411,6 +411,71 @@ test('a hostile subtree added post-snapshot is scrubbed in the add op; the live 
   }
 });
 
+test('dropped object/embed/script subtrees are never nid-stamped and emit no later mutations', async () => {
+  const env = setupEnv(
+    '<object id="obj"><param id="obj-param" value="object-secret"></object>'
+      + '<div id="host"></div>'
+  );
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const snapshotHtml = snapshotPayloadOf(transport).html;
+    assert.ok(!/<object/i.test(snapshotHtml), 'initial object subtree absent from snapshot');
+    assert.ok(!snapshotHtml.includes('object-secret'), 'initial object descendant value absent from snapshot');
+    assert.equal(env.document.getElementById('obj').hasAttribute(NID_ATTR), false, 'dropped object root has no live nid');
+    assert.equal(env.document.getElementById('obj-param').hasAttribute(NID_ATTR), false, 'dropped object descendant has no live nid');
+
+    env.document.getElementById('obj-param').setAttribute('value', 'mutated-object-secret');
+    await settle(env.window);
+    assert.equal(allMutationOps(transport).length, 0, 'mutating initial dropped descendants emits zero ops');
+
+    const directObject = env.document.createElement('object');
+    directObject.id = 'late-obj';
+    const directParam = env.document.createElement('param');
+    directParam.id = 'late-param';
+    directParam.setAttribute('value', 'late-direct-secret');
+    directObject.appendChild(directParam);
+    env.document.getElementById('host').appendChild(directObject);
+    await settle(env.window);
+    assert.equal(allMutationOps(transport).length, 0, 'adding a dropped root emits no add op');
+    assert.equal(directObject.hasAttribute(NID_ATTR), false, 'late dropped root has no live nid');
+    assert.equal(directParam.hasAttribute(NID_ATTR), false, 'late dropped descendant has no live nid');
+
+    const wrap = env.document.createElement('div');
+    wrap.id = 'late-wrap';
+    const embedded = env.document.createElement('embed');
+    embedded.id = 'late-embed';
+    embedded.setAttribute('src', 'late-secret.swf');
+    const sibling = env.document.createElement('span');
+    sibling.textContent = 'safe sibling';
+    wrap.appendChild(embedded);
+    wrap.appendChild(sibling);
+    env.document.getElementById('host').appendChild(wrap);
+    await settle(env.window);
+
+    const addOps = allMutationOps(transport).filter((op) => op.op === DIFF_OP.ADD);
+    assert.equal(addOps.length, 1, 'wrapper sibling still emits one add op');
+    assert.ok(!/<embed/i.test(addOps[0].html), 'embed descendant absent from add-op html');
+    assert.ok(!addOps[0].html.includes('late-secret.swf'), 'embed descendant value absent from add-op html');
+    assert.ok(addOps[0].html.includes('safe sibling'), 'safe sibling remains mirrored');
+    assert.equal(embedded.hasAttribute(NID_ATTR), false, 'dropped embed descendant has no live nid');
+
+    const opCountBeforeDroppedMutation = allMutationOps(transport).length;
+    embedded.setAttribute('src', 'mutated-late-secret.swf');
+    await settle(env.window);
+    assert.equal(
+      allMutationOps(transport).length,
+      opCountBeforeDroppedMutation,
+      'mutating late dropped descendant emits no follow-up op'
+    );
+  } finally {
+    env.teardown();
+  }
+});
+
 test('srcset dangerous candidates are removed without becoming relative fetches', async () => {
   const env = setupEnv(
     '<img id="snap" srcset="javascript:alert(1) 1x, data:image/png;base64,AAAA 2x, https://safe.test/a.png 3x">'
