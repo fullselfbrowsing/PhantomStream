@@ -12,10 +12,11 @@
 //
 // Mode 2 (ref-vs-EXTRACTED, the phase exit bar): the same matrix with side B
 // flipped to src/capture/index.js behind a flush-less loopback transport.
-// Every intentional divergence must be a declared ledger entry (only D1, in
-// pause-resume); any undeclared divergence fails the suite, and stale-entry
-// detection (LAST test in the file) proves every mismatch-kind ledger entry
-// actually matched a real divergence.
+// Every intentional divergence must be a declared ledger entry (D1 in
+// pause-resume, D6 in text-childlist, D7 in sanitize-divergence); any
+// undeclared divergence fails the suite, and stale-entry detection (LAST test
+// in the file) proves every mismatch-kind ledger entry actually matched a real
+// divergence.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

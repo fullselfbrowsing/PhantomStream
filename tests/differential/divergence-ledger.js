@@ -56,12 +56,72 @@ function placeholderOrdinal(value, prefix) {
   return Number.isInteger(ordinal) && ordinal > 0 ? ordinal : null;
 }
 
+const D7_HOSTILE_SNAPSHOT_MARKER = /on\w+\s*=|javascript:|<object\b|<embed\b|srcdoc=|expression\(/i;
+const D7_PASSWORD_PLAINTEXT = /hunter2/i;
+
+/**
+ * @param {*} msg
+ * @returns {string}
+ */
+function snapshotSanitizationText(msg) {
+  const payload = (msg && msg.payload) || {};
+  const html = typeof payload.html === 'string' ? payload.html : '';
+  const inlineStyles = Array.isArray(payload.inlineStyles)
+    ? payload.inlineStyles.join('\n')
+    : '';
+  return html + '\n' + inlineStyles;
+}
+
+/**
+ * @param {*} msg
+ * @returns {Array<*>}
+ */
+function mutationOps(msg) {
+  const ops = msg && msg.payload && msg.payload.mutations;
+  return Array.isArray(ops) ? ops : [];
+}
+
+/**
+ * @param {*} op
+ * @returns {boolean}
+ */
+function isAttrOp(op) {
+  return op && op.op === DIFF_OP.ATTR;
+}
+
+/**
+ * @param {*} value
+ * @returns {boolean}
+ */
+function hasDangerousAttrValue(value) {
+  return /(?:javascript|vbscript):|data:text\/html/i.test(String(value || ''));
+}
+
+/**
+ * @param {*} op
+ * @returns {boolean}
+ */
+function isHostileAttrOp(op) {
+  if (!isAttrOp(op)) return false;
+  const attr = String(op.attr || '');
+  return /^on/i.test(attr) || hasDangerousAttrValue(op.val);
+}
+
+/**
+ * @param {*[]} ops
+ * @returns {boolean}
+ */
+function hasBenignD7Anchor(ops) {
+  return ops.some((op) => isAttrOp(op) && op.attr === 'class' && op.val === 'after');
+}
+
 /**
  * Declared divergences between the reference capture and the extracted core.
- * Exactly TWO mismatch-kind entries exist (D1: resume semantics, scoped to
+ * Exactly THREE mismatch-kind entries exist (D1: resume semantics, scoped to
  * pause-resume; D6: text-node childList fidelity fix, scoped to
- * text-childlist); everything else the oracle compares is required to be
- * byte-equivalent after normalization.
+ * text-childlist; D7: capture-side sanitization and masking, scoped to
+ * sanitize-divergence); everything else the oracle compares is required to
+ * be byte-equivalent after normalization.
  * @type {DivergenceEntry[]}
  */
 export const DIVERGENCES = [
@@ -194,6 +254,70 @@ export const DIVERGENCES = [
     },
   },
   {
+    id: 'D7-capture-sanitization',
+    kind: 'mismatch',
+    description:
+      'The reference serializes raw hostile content -- on* handlers, javascript: '
+      + 'URLs, srcdoc, object/embed surfaces, hostile CSS, and password plaintext -- '
+      + 'through both SNAPSHOT and MUTATIONS messages. The extracted core routes wire '
+      + 'values through src/capture/index.js sanitizeForWire, which strips handlers, '
+      + 'drops object/embed surfaces, neutralizes dangerous URL attrs, scrubs hostile '
+      + 'CSS, and masks password values before transport.',
+    rationale:
+      'Deliberate security divergence (Phase 3): CONTEXT locks sanitizers and '
+      + 'password masking as always-on with no opt-out, and requires capture-side '
+      + 'sanitization to be ledgered like D6 -- tightly scoped, scenario-pinned, '
+      + 'and load-bearing. Pinned end-to-end by sanitize-corpus.html plus the '
+      + 'sanitize-divergence scenario.',
+    affectedMessages: [STREAM.SNAPSHOT, STREAM.MUTATIONS],
+    affectedScenarios: ['sanitize-divergence'],
+    appliesTo(refMsg, extMsg, scenarioName) {
+      if (scenarioName !== 'sanitize-divergence') return false;
+
+      // The scenario guard is load-bearing (same discipline as D1/D6): a
+      // sanitization-shaped mismatch surfacing in any OTHER scenario must
+      // still hard-fail as UNDECLARED DIVERGENCE.
+      // D7's exact shape is a SAME-INDEX mismatch. A trailing message,
+      // missing counterpart, or type mismatch is not a sanitization strip.
+      if (refMsg === undefined || extMsg === undefined) return false;
+      if (refMsg.type !== extMsg.type) return false;
+
+      if (refMsg.type === STREAM.SNAPSHOT) {
+        const refText = snapshotSanitizationText(refMsg);
+        const extText = snapshotSanitizationText(extMsg);
+        const refCarriesSanitizable =
+          D7_HOSTILE_SNAPSHOT_MARKER.test(refText) || D7_PASSWORD_PLAINTEXT.test(refText);
+        const extCarriesSanitizable =
+          D7_HOSTILE_SNAPSHOT_MARKER.test(extText) || D7_PASSWORD_PLAINTEXT.test(extText);
+        return refCarriesSanitizable && !extCarriesSanitizable;
+      }
+
+      if (refMsg.type === STREAM.MUTATIONS) {
+        const refOps = mutationOps(refMsg);
+        const extOps = mutationOps(extMsg);
+        const refHostileOps = refOps.filter(isHostileAttrOp);
+        if (refHostileOps.length === 0) return false;
+        if (!hasBenignD7Anchor(refOps) || !hasBenignD7Anchor(extOps)) return false;
+
+        const extHasHostileOps = extOps.some(isHostileAttrOp);
+        if (extHasHostileOps) return false;
+
+        return refHostileOps.every((refOp) => {
+          const attr = String(refOp.attr || '').toLowerCase();
+          if (/^on/i.test(attr)) {
+            return !extOps.some((extOp) => isAttrOp(extOp)
+              && String(extOp.attr || '').toLowerCase() === attr);
+          }
+          return extOps.some((extOp) => isAttrOp(extOp)
+            && String(extOp.attr || '').toLowerCase() === attr
+            && extOp.val === '');
+        });
+      }
+
+      return false;
+    },
+  },
+  {
     id: 'D2-envelope-shape',
     kind: 'documented-mapping',
     description:
@@ -213,6 +337,7 @@ export const DIVERGENCES = [
     affectedScenarios: [
       'basic-mutations', 'mutation-burst', 'structural-ops', 'scroll',
       'pause-resume', 'snapshot-only', 'dialog', 'text-childlist',
+      'sanitize-divergence',
     ],
     // Never consulted: documented-mapping divergences are absorbed by
     // normalize.js BEFORE comparison, so no mismatch can reach the ledger.
@@ -234,6 +359,7 @@ export const DIVERGENCES = [
     affectedScenarios: [
       'basic-mutations', 'mutation-burst', 'structural-ops', 'scroll',
       'pause-resume', 'snapshot-only', 'dialog', 'text-childlist',
+      'sanitize-divergence',
     ],
     appliesTo() { return false; },
   },
