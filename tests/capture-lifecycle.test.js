@@ -268,3 +268,33 @@ test('a transport without flush works through the no-op default', async () => {
     env.teardown();
   }
 });
+
+test('async transport flush rejections route to the injected logger', async () => {
+  const env = setupEnv(BODY_HTML);
+  try {
+    const errors = [];
+    const recordingLogger = {
+      info() {},
+      warn() {},
+      error(...args) { errors.push(args); },
+    };
+    const transport = {
+      send() {},
+      flush() { return Promise.reject(new Error('flush-down')); },
+    };
+    env.capture = createCapture({ transport, logger: recordingLogger });
+
+    env.capture.start();
+    env.capture.stop();
+    await Promise.resolve();
+
+    assert.ok(
+      errors.some((args) => String(args[0]) === '[DOM Stream] transport flush failed'
+        && args[1] instanceof Error
+        && args[1].message === 'flush-down'),
+      'async flush rejection was routed to the injected logger'
+    );
+  } finally {
+    env.teardown();
+  }
+});

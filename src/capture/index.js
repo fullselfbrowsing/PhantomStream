@@ -561,7 +561,12 @@ export function createCapture(config) {
   function safeFlush() {
     try {
       if (typeof transport.flush === 'function') {
-        transport.flush();
+        var result = transport.flush();
+        if (result && typeof result.catch === 'function') {
+          result.catch(function (err) {
+            logger.error('[DOM Stream] transport flush failed', err);
+          });
+        }
       }
     } catch (err) {
       logger.error('[DOM Stream] transport flush failed', err);
