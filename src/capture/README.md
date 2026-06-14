@@ -27,6 +27,10 @@ const capture = createCapture({ transport, logger, overlayProvider, skipElement 
 | `logger` | no | console-backed (`info`/`warn`/`error`) | Receives lifecycle logs and every contained transport error. |
 | `overlayProvider` | no | `null` | `() => ({ glow, progress, ...customKinds })` — read host overlay state for the overlay side channel. **All** own enumerable provider keys are forwarded on the wire as overlay kinds (extension E1 below); `glow`/`progress` default `null` when omitted; the identity keys (`streamSessionId`/`snapshotId`) are reserved and never overwritten. With no provider, overlay messages carry `{ glow: null, progress: null }` (reference wire shape for an overlay-free page). |
 | `skipElement` | no | `() => false` | `(el) => boolean` — predicate marking elements the host wants excluded from capture (its own UI). Applied **ancestor-inclusively** (like `closest()`, matching the reference's overlay handling): an element is excluded when the predicate matches it or any of its ancestors, so a root-only predicate (e.g. `el.id === 'my-overlay'`) excludes its whole subtree. Skipped subtrees receive no node-id assignment during serialization, and mutations anywhere inside them are dropped during diffing. |
+| `blockSelector` | no | `null` | CSS selector for private regions that must never reach the wire. Matching elements serialize as placeholders with `data-fsb-nid`, `rr_width`, and `rr_height` only; their attrs, children, and text are omitted. |
+| `maskTextSelector` | no | `null` | CSS selector for text that should be masked before transport. Non-whitespace chars become `*` by default, preserving whitespace and length. |
+| `maskInputs` | no | `false` | When true, masks form control values. Password inputs are always masked even when this is false. |
+| `maskTextFn` / `maskInputFn` | no | asterisk mask | Custom masking functions. They are fail-closed: thrown errors are logged and the default mask is used. |
 
 A readiness ping (`STREAM.READY`) is emitted once, at factory creation
 (divergence-ledger entry D3 — the reference pinged at script-load time).
@@ -117,14 +121,24 @@ divergence, so it lives here rather than in the differential ledger):
   containers drift in the mirror until the next snapshot/resync — text
   drift, never structural flattening. Pinned by the mixed-content shapes
   in `tests/renderer-loopback.test.js`.
+- **E3 (Phase 3, SEC-01/SEC-03)** — capture-side sanitization and privacy
+  masking now run before transport through the named `sanitizeForWire`
+  chokepoint. Snapshot walks, add-op subtrees, attr ops, characterData text
+  ops, E2 text-childlist ops, and inline head CSS all route through the
+  chokepoint; `on*` attrs, dangerous URL schemes, `srcdoc`, object/embed
+  subtrees, hostile CSS values, and configured private text/form values are
+  stripped, neutralized, dropped, or masked before they can leave the page.
+  Password values are always masked, `blockSelector` placeholders use the
+  rrweb vocabulary (`rr_width`/`rr_height`), and selector validation fails
+  at factory time. This is the deliberate reference divergence ledgered as
+  **D7** in `tests/differential/divergence-ledger.js`, backed by
+  `tests/security-sanitize-capture.test.js`, `tests/security-mask.test.js`,
+  and the sanitize-divergence oracle scenario.
 
 ## Behavioral changes queued for the standalone version
 
 - Capture computed styles for nodes added after the snapshot (Phase 8;
   reference gap #2 in ARCHITECTURE.md §6).
-- Sanitize `on*` attributes and `javascript:` URLs in all serialization paths,
-  not just the html/body shell (Phase 3 SEC-01; accepted threat T-01-03 until
-  then — gap #5).
 - Optional stylesheet-centric capture mode (CSSOM) for the paper's ablation
   study (Phase 9).
 

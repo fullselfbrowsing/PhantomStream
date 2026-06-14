@@ -239,36 +239,36 @@ vendored.
   (reference parity): mutations carrying the new identity apply without
   waiting for a new load event.
 
-## Behavioral changes queued for Phase 3+
+## Phase 3 security behavior
 
-Accepted, visible, owned — not forgotten:
+The Phase 3 security pipeline is always on and documented in
+`docs/SECURITY.md`:
 
-- **Raw inline-style insertion (Phase 3, SEC-02).** `payload.inlineStyles`
-  join into the srcdoc head as `'<style>' + css + '</style>'` with no
-  escaping (reference parity): a `</style>` inside captured CSS breaks out
-  into markup inside the mirror document. The sandbox (no `allow-scripts`)
-  keeps broken-out markup from executing script; `buildSnapshotHtml` is the
-  render-side sanitizer chokepoint Phase 3 owns.
-- **`on*` attributes survive capture (Phase 3, SEC-01/SEC-02).** The capture
-  shell-attribute path drops `on*`/`style`, but serialized body content can
-  still carry inline handlers. The `allow-same-origin`-only sandbox is the
-  backstop until both sanitization chokepoints land.
+- **Inline CSS is scrubbed and backed by CSP.** `payload.inlineStyles` route
+  through `scrubCssText` before srcdoc assembly, and the srcdoc head carries
+  the adopted Content-Security-Policy meta. `payload.html` intentionally
+  remains raw at the string layer because string-scrub-then-reparse is the
+  mutation-XSS anti-pattern; the capture chokepoint, post-parse
+  `sanitizeFragment` scrub, CSP, and sandbox form the defense chain.
+- **`on*` attributes and dangerous URLs are scrubbed at both chokepoints.**
+  Capture strips or neutralizes before transport, and render applies
+  `sanitizeFragment` / `sanitizeAttrValue` before reconstructed content
+  reaches the mirror document.
+- **Template-context add-op parsing is live.** The add op parses `m.html`
+  through `<template>`, then runs `sanitizeFragment` before `importNode`.
+  Context-dependent elements (`<tr>`, `<td>`, `<tbody>`, `<col>`, and
+  friends) no longer disappear through a div-context parser.
+- **Embed contract is explicit.** The mirror iframe sandbox is exactly
+  `allow-same-origin`; hosts must never add `allow-scripts` or render wire
+  payloads outside `createViewer`.
+
+## Known remaining behaviors
+
 - **Pre-onload mutation drop (parity, self-healing).** Mutations arriving
   between the srcdoc write and the load event are dropped (the reference
   gates on streaming state). The miss accounting + `CONTROL.START` resync
   self-heals any resulting drift; do not write tests that assume zero loss
   before the first load.
-- **Div-context add-op parsing drops context-dependent elements (Phase 3).**
-  The add op parses `m.html` through a `<div>` fragment (reference parity,
-  dashboard.js:3241-3244): `<tr>`, `<td>`, `<tbody>`, `<col>` and friends
-  parse to no element in that context, so a live table-row insertion never
-  reaches the mirror. Since review WR-02 the drop is no longer silent — a
-  dedicated `logger.warn` names the cause and the drop counts through the
-  stale-miss accounting, so the ≥ 3 `CONTROL.START` resync threshold
-  self-heals the missing subtree via a fresh snapshot. The queued proper
-  fix is `<template>`-context parsing (accepts any content context),
-  allowed only with the full renderer/loopback/oracle suite green and
-  unchanged behavior for currently-passing shapes.
 - **Per-op `querySelector` nid lookups (Phase 7).** Every diff op resolves
   its target via `doc.querySelector('[data-fsb-nid="..."]')` (reference
   parity). The planned `Map<nid, Node>` index replaces the hot path when the
@@ -283,7 +283,8 @@ Accepted, visible, owned — not forgotten:
   fails loudly instead of weakening the sandbox silently. `allow-same-origin`
   keeps `contentDocument` parent-accessible for diff applies and overlay
   rect reads while the mirror cannot execute script. The full embed security
-  contract (CSP guidance, sanitization guarantees) is documented in Phase 3.
+  contract (CSP guidance, sanitization guarantees, and host must-nevers) is
+  documented in `docs/SECURITY.md`.
 - **jsdom srcdoc limitation:** jsdom 29 never parses the `srcdoc` attribute
   into `contentDocument` (the attribute round-trips; the document stays
   empty). Tests must never assert mirror content through `contentDocument`

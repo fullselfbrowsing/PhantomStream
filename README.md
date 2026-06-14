@@ -37,7 +37,8 @@ research paper.
 └────────────────────┘    └──────────────────┘    └────────────────┘    └─────────────────────┘
 ```
 
-Core mechanisms (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full treatment):
+Core mechanisms (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full treatment
+and [docs/SECURITY.md](docs/SECURITY.md) for the embed security contract):
 
 - **Stable node identity.** Every element is stamped with a `data-fsb-nid`; all diff ops
   (`add`/`rm`/`attr`/`text`) and remote-control actions address nodes by this key.
@@ -72,6 +73,7 @@ reference/            Verbatim source as it shipped in FSB (provenance pinned to
   tests/              Stream-related test suites from FSB
 docs/
   ARCHITECTURE.md     End-to-end technical description of the shipped system
+  SECURITY.md         Embed security contract: sanitization, masking, CSP, sandbox
   DESIGN-HISTORY.md   How it evolved, what failed, known limitations
   paper/OUTLINE.md    Research paper outline and evaluation plan
 ```
