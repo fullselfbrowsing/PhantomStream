@@ -107,7 +107,7 @@ Plans:
 - [x] 03-04-PLAN.md — Differential-oracle discipline: sanitize-corpus fixture + sanitize-divergence scenario + load-bearing D7 ledger entry
 
 **Wave 4** *(blocked on all)*
-- [ ] 03-05-PLAN.md — Chokepoint-purity static scan + docs/SECURITY.md embed contract + full-suite gate + demo dogfood checkpoint
+- [x] 03-05-PLAN.md — Chokepoint-purity static scan + docs/SECURITY.md embed contract + full-suite gate + demo dogfood checkpoint
 
 ### Phase 4: Relay, WS Transport & Two-Tab Demo
 **Goal**: The mirror works across the network — `npx phantom-stream demo` captures a page in one tab and mirrors it live in another through the bundled relay
