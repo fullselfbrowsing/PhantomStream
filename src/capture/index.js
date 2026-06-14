@@ -761,6 +761,41 @@ export function createCapture(config) {
   }
 
   /**
+   * True when the element itself matches blockSelector. Runtime selector
+   * errors are contained like maskTextSelector errors: logged and treated as
+   * not-blocked so capture never wedges after factory-time validation.
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function blockMatches(el) {
+    if (!blockSelector) return false;
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    try {
+      return !!(el.matches && el.matches(blockSelector));
+    } catch (err) {
+      logger.error('[DOM Stream] blockSelector match failed', err);
+      return false;
+    }
+  }
+
+  /**
+   * Ancestor-inclusive blockSelector predicate. Used by the differ skip
+   * guards so mutations ON or INSIDE a blocked subtree emit nothing.
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function blockedWithAncestors(el) {
+    if (!blockSelector) return false;
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    try {
+      return !!(el.closest && el.closest(blockSelector));
+    } catch (err) {
+      logger.error('[DOM Stream] blockSelector match failed', err);
+      return false;
+    }
+  }
+
+  /**
    * Apply the text mask: maskTextFn when provided, with fail-CLOSED
    * containment -- a throwing custom fn falls back to the DEFAULT asterisk
    * mask (raw text NEVER leaks, threat T-03-16) and routes to the logger.
@@ -778,6 +813,73 @@ export function createCapture(config) {
       }
     }
     return defaultMaskText(text);
+  }
+
+  /**
+   * Apply the input-value mask: maskInputFn when provided, with the same
+   * fail-CLOSED containment as safeMaskText.
+   * @param {string} text
+   * @param {Element} el
+   * @returns {string}
+   */
+  function safeMaskInput(text, el) {
+    if (maskInputFn) {
+      try {
+        return String(maskInputFn(String(text), el));
+      } catch (err) {
+        logger.error('[DOM Stream] maskInputFn failed; default mask applied', err);
+        return defaultMaskText(text);
+      }
+    }
+    return defaultMaskText(text);
+  }
+
+  /**
+   * True when an element's value/text value must be masked. Password inputs
+   * are always masked; maskInputs extends masking to input/textarea/select.
+   * Select option display text is intentionally not masked here (T-03-18,
+   * accepted residual); a future Phase 8 input-event capture path must route
+   * typed values through safeMaskInput as well.
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function shouldMaskInput(el) {
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    var tag = el.tagName ? String(el.tagName).toLowerCase() : '';
+    if (tag === 'input') {
+      var inputType = '';
+      try {
+        inputType = String(el.type || el.getAttribute('type') || '').toLowerCase();
+      } catch (e) {
+        inputType = String(el.getAttribute && el.getAttribute('type') || '').toLowerCase();
+      }
+      if (inputType === 'password') return true;
+      return maskInputs;
+    }
+    if (tag === 'textarea' || tag === 'select') return maskInputs;
+    return false;
+  }
+
+  /**
+   * Mask a clone's input/textarea/select wire value in place.
+   * @param {Element} clone
+   * @param {Element} owner
+   */
+  function maskInputCloneValue(clone, owner) {
+    if (!shouldMaskInput(owner)) return;
+    var tag = clone.tagName ? String(clone.tagName).toLowerCase() : '';
+    if (tag === 'textarea') {
+      maskDirectChildText(clone, owner, safeMaskInput, 'maskedInputs');
+      return;
+    }
+    if (clone.hasAttribute && clone.hasAttribute('value')) {
+      var value = clone.getAttribute('value');
+      var maskedValue = safeMaskInput(value == null ? '' : value, owner);
+      if (maskedValue !== value) {
+        clone.setAttribute('value', maskedValue);
+        sanitizeCounters.maskedInputs++;
+      }
+    }
   }
 
   /**
@@ -804,6 +906,56 @@ export function createCapture(config) {
       }
       child = child.nextSibling;
     }
+  }
+
+  /**
+   * Read the live dimensions used by rrweb-compatible block placeholders.
+   * @param {Element} el
+   * @returns {{width: number, height: number}}
+   */
+  function readBlockRect(el) {
+    try {
+      var rect = el.getBoundingClientRect();
+      return {
+        width: rect && typeof rect.width === 'number' ? rect.width : 0,
+        height: rect && typeof rect.height === 'number' ? rect.height : 0
+      };
+    } catch (e) {
+      return { width: 0, height: 0 };
+    }
+  }
+
+  /**
+   * Build the placeholder for a blocked element. It carries only dimensions
+   * and nid: no original attributes, no children, no text.
+   * @param {Document} doc
+   * @param {string} nid
+   * @param {{width: number, height: number}} rect
+   * @returns {Element}
+   */
+  function createBlockPlaceholder(doc, nid, rect) {
+    var placeholder = doc.createElement('div');
+    placeholder.setAttribute('rr_width', String(rect.width || 0) + 'px');
+    placeholder.setAttribute('rr_height', String(rect.height || 0) + 'px');
+    if (nid) placeholder.setAttribute(NID_ATTR, nid);
+    return placeholder;
+  }
+
+  /**
+   * Replace a detached clone element with its blocked placeholder.
+   * @param {Element} liveEl
+   * @param {Element} cloneEl
+   * @param {{width: number, height: number}} rect
+   * @returns {Element|null}
+   */
+  function replaceWithBlockPlaceholder(liveEl, cloneEl, rect) {
+    if (!cloneEl || !cloneEl.parentNode) return null;
+    var nid = cloneEl.getAttribute ? cloneEl.getAttribute(NID_ATTR) : '';
+    if (!nid && liveEl && liveEl.getAttribute) nid = liveEl.getAttribute(NID_ATTR) || '';
+    var placeholder = createBlockPlaceholder(cloneEl.ownerDocument, nid, rect);
+    cloneEl.parentNode.replaceChild(placeholder, cloneEl);
+    sanitizeCounters.blockedSubtrees++;
+    return placeholder;
   }
 
   // =========================================================================
@@ -1011,6 +1163,9 @@ export function createCapture(config) {
       // touched, threat T-03-06).
       if (!clone._psMasked) {
         clone._psMasked = true;
+        if (payload.orig) {
+          maskInputCloneValue(clone, payload.orig);
+        }
         // maskTextSelector: the LIVE element's ancestry decides (orig is
         // null for detached subtree descendants -- those are masked by the
         // 'subtree' dispatch, which knows the inherited root state).
@@ -1030,26 +1185,27 @@ export function createCapture(config) {
       if (rootResult && rootResult.drop) {
         return { drop: true };
       }
-      // SEC-03: the ROOT's text-mask state comes from the LIVE node's FULL
-      // ancestry (payload.liveRoot's closest() walk) -- the detached wire
-      // clone cannot see its insertion context. Each descendant is masked
-      // when it matches clone-locally OR inherits the root state. The
-      // root's own direct text was already masked by the 'element' call
-      // above (orig = liveRoot).
-      var rootTextMasked = maskTextMatches(payload.liveRoot);
+      // SEC-03: every descendant uses its LIVE counterpart when available,
+      // so maskTextSelector sees full live ancestry (detached clones cannot)
+      // and maskInputs/password rules consult the real form control type.
+      var liveDescendants = (payload.liveRoot && payload.liveRoot.querySelectorAll)
+        ? payload.liveRoot.querySelectorAll('*')
+        : [];
       var descendants = root.querySelectorAll('*');
       for (var d = 0; d < descendants.length; d++) {
         var desc = descendants[d];
+        var liveDesc = liveDescendants[d] || null;
         // Skip nodes already detached with a removed forbidden ancestor
         // (querySelectorAll is static; removal does not re-enumerate).
         if (!root.contains(desc)) continue;
-        var descResult = sanitizeForWire('element', { orig: null, clone: desc });
-        if (descResult && descResult.drop && desc.parentNode) {
-          desc.parentNode.removeChild(desc);
+        if (liveDesc && blockedWithAncestors(liveDesc.parentElement)) continue;
+        if (liveDesc && blockMatches(liveDesc)) {
+          replaceWithBlockPlaceholder(liveDesc, desc, readBlockRect(liveDesc));
           continue;
         }
-        if (rootTextMasked || maskTextMatches(desc)) {
-          maskDirectChildText(desc, desc, safeMaskText, 'maskedTextNodes');
+        var descResult = sanitizeForWire('element', { orig: liveDesc, clone: desc });
+        if (descResult && descResult.drop && desc.parentNode) {
+          desc.parentNode.removeChild(desc);
         }
       }
       return {};
@@ -1093,10 +1249,13 @@ export function createCapture(config) {
         sanitizeCounters.blockedUrlSchemes++;
         return { value: '' };
       }
-      // The 'value' attribute passes through unchanged THIS plan: this is
-      // the plan 03-03 maskInputs seam (the always-on password mask and the
-      // maskInputs config consult payload.target here; Phase 8 CAPT-05
-      // typed-text capture reuses the same rule).
+      if (attrName === 'value' && shouldMaskInput(payload.target)) {
+        var maskedAttrValue = safeMaskInput(payload.value == null ? '' : payload.value, payload.target);
+        if (maskedAttrValue !== payload.value) {
+          sanitizeCounters.maskedInputs++;
+        }
+        return { value: maskedAttrValue };
+      }
       return { value: payload.value };
     }
 
@@ -1281,6 +1440,7 @@ export function createCapture(config) {
 
     // Elements to remove from clone (scripts, noscript, host-flagged elements)
     var toRemove = [];
+    var blockedPairs = [];
 
     for (var i = 0; i < pairs.length; i++) {
       var orig = pairs[i].orig;
@@ -1314,6 +1474,19 @@ export function createCapture(config) {
       // removing the skipped root above already drops the whole subtree
       // from the clone.
       if (skipElementWithAncestors(cl)) {
+        continue;
+      }
+
+      // blockSelector: descendants of a blocked root get no nid assignment
+      // (the root swap discards the whole cloned subtree). The blocked root
+      // itself is still nid-stamped, then replaced after this walk by a
+      // dimension-preserving placeholder.
+      if (blockedWithAncestors(orig.parentElement)) {
+        continue;
+      }
+      if (blockMatches(orig)) {
+        var blockedNid = assignNodeId(orig, cl);
+        blockedPairs.push({ orig: orig, clone: cl, nid: blockedNid });
         continue;
       }
 
@@ -1390,11 +1563,23 @@ export function createCapture(config) {
       sanitizeForWire('element', { orig: orig, clone: cl });
     }
 
+    // Read all blocked live rects together after the pair walk and before
+    // clone writes. This preserves the single-pass layout-read discipline:
+    // dimensions come from the original elements, never detached clones.
+    var blockedRects = [];
+    for (var bp = 0; bp < blockedPairs.length; bp++) {
+      blockedRects.push(readBlockRect(blockedPairs[bp].orig));
+    }
+
     // Remove marked elements
     for (var r = 0; r < toRemove.length; r++) {
       if (toRemove[r].parentNode) {
         toRemove[r].parentNode.removeChild(toRemove[r]);
       }
+    }
+
+    for (var br = 0; br < blockedPairs.length; br++) {
+      replaceWithBlockPlaceholder(blockedPairs[br].orig, blockedPairs[br].clone, blockedRects[br]);
     }
 
     // Collect stylesheet URLs from document.head
@@ -1546,6 +1731,15 @@ export function createCapture(config) {
 
     // Live-node stamping + absolutification (reference parity, unchanged).
     el.setAttribute(NID_ATTR, String(nextNodeId++));
+    if (blockMatches(el)) {
+      var blockedRootPlaceholder = createBlockPlaceholder(
+        document,
+        el.getAttribute(NID_ATTR) || '',
+        readBlockRect(el)
+      );
+      sanitizeCounters.blockedSubtrees++;
+      return blockedRootPlaceholder.outerHTML || '';
+    }
     for (var a = 0; a < URL_ATTRS.length; a++) {
       var val = el.getAttribute(URL_ATTRS[a]);
       if (val) el.setAttribute(URL_ATTRS[a], absolutifyUrl(val));
@@ -1557,7 +1751,9 @@ export function createCapture(config) {
     var descendants = el.querySelectorAll('*');
     for (var d = 0; d < descendants.length; d++) {
       var desc = descendants[d];
+      if (blockedWithAncestors(desc.parentElement)) continue;
       desc.setAttribute(NID_ATTR, String(nextNodeId++));
+      if (blockMatches(desc)) continue;
       for (var b = 0; b < URL_ATTRS.length; b++) {
         var dv = desc.getAttribute(URL_ATTRS[b]);
         if (dv) desc.setAttribute(URL_ATTRS[b], absolutifyUrl(dv));
@@ -1595,11 +1791,13 @@ export function createCapture(config) {
       // Skip mutations on host-flagged elements (skipElement seam).
       // Ancestor-inclusive, matching the reference's isFsbOverlay closest()
       // semantics: mutations anywhere inside a skipped subtree are dropped.
-      if (m.target && m.target.nodeType === Node.ELEMENT_NODE && skipElementWithAncestors(m.target)) {
+      if (m.target && m.target.nodeType === Node.ELEMENT_NODE &&
+          (skipElementWithAncestors(m.target) || blockedWithAncestors(m.target))) {
         continue;
       }
       if (m.target && m.target.nodeType === Node.TEXT_NODE &&
-          m.target.parentElement && skipElementWithAncestors(m.target.parentElement)) {
+          m.target.parentElement &&
+          (skipElementWithAncestors(m.target.parentElement) || blockedWithAncestors(m.target.parentElement))) {
         continue;
       }
 
@@ -1622,6 +1820,7 @@ export function createCapture(config) {
           var added = m.addedNodes[a];
           if (added.nodeType === Node.ELEMENT_NODE) {
             if (skipElementWithAncestors(added)) continue;
+            if (blockedWithAncestors(added.parentElement)) continue;
 
             // Node identity is read through the NID_ATTR protocol constant
             // (single source of truth, src/protocol/messages.js) -- never a
