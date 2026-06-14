@@ -104,7 +104,7 @@ Plans:
 - [x] 03-03-PLAN.md — Privacy masking: blockSelector placeholder, maskTextSelector, maskInputs, always-on password mask, custom mask fns (SEC-03)
 
 **Wave 3** *(blocked on 03-01 + 03-03)*
-- [ ] 03-04-PLAN.md — Differential-oracle discipline: sanitize-corpus fixture + sanitize-divergence scenario + load-bearing D7 ledger entry
+- [x] 03-04-PLAN.md — Differential-oracle discipline: sanitize-corpus fixture + sanitize-divergence scenario + load-bearing D7 ledger entry
 
 **Wave 4** *(blocked on all)*
 - [ ] 03-05-PLAN.md — Chokepoint-purity static scan + docs/SECURITY.md embed contract + full-suite gate + demo dogfood checkpoint

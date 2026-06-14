@@ -23,7 +23,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Security & Privacy (SEC)
 
-- [ ] **SEC-01**: All serialization paths (snapshot, `add`-op subtrees, `attr` ops) strip `on*` event-handler attributes and `javascript:` URLs
+- [x] **SEC-01**: All serialization paths (snapshot, `add`-op subtrees, `attr` ops) strip `on*` event-handler attributes and `javascript:` URLs
 - [ ] **SEC-02**: Viewer renders exclusively in a sandboxed iframe without `allow-scripts`; the embed security contract is documented
 - [x] **SEC-03**: Capture-side privacy masking with rrweb-compatible vocabulary (`blockSelector`, `maskTextSelector`, `maskInputs`, custom mask fns) applied in all serialization paths — masked content never leaves the captured page
 - [ ] **SEC-04**: Remote control activation is gated by a host-provided consent/authorization hook
@@ -122,7 +122,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CAPT-09 | Phase 8 | Pending |
 | CAPT-10 | Phase 9 | Pending |
 | CAPT-11 | Phase 8 | Pending |
-| SEC-01 | Phase 3 | Pending |
+| SEC-01 | Phase 3 | Complete |
 | SEC-02 | Phase 3 | Pending |
 | SEC-03 | Phase 3 | Complete |
 | SEC-04 | Phase 5 | Pending |
