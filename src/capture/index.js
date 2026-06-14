@@ -291,6 +291,19 @@ function scrubCssText(css) {
 }
 
 /**
+ * rrweb-compatible default text mask (SEC-03, 03-RESEARCH Pattern 5 / Code
+ * Examples; cited from rrweb-snapshot snapshot.ts:
+ * textContent.replace(/[\S]/g, '*')). Every non-whitespace character becomes
+ * '*'; whitespace and string length are preserved so masked text keeps its
+ * layout shape. Idempotent: masking masked output is a no-op.
+ * @param {string} text
+ * @returns {string}
+ */
+function defaultMaskText(text) {
+  return String(text).replace(/[\S]/g, '*');
+}
+
+/**
  * The host-injected message sink. `send` mirrors the fire-and-forget
  * semantics of the reference's messaging call: the capture core never awaits
  * delivery and never lets a transport failure propagate into the capture
@@ -352,6 +365,29 @@ function scrubCssText(css) {
  *   ancestors, and skipped subtrees receive NO node-id assignment during
  *   serialization -- a root-only predicate (e.g. el.id === 'my-overlay')
  *   therefore excludes its whole subtree from both snapshots and diffs.
+ * @property {string} [blockSelector]
+ *   Optional (SEC-03). CSS selector: matching elements are replaced on the
+ *   wire by a dimension-preserving placeholder carrying ONLY rr_width /
+ *   rr_height (px, from the live rect) and the nid -- no attributes, no
+ *   children, no text; mutations anywhere inside a blocked subtree emit
+ *   nothing. Invalid selectors THROW Error('invalid-mask-selector') at
+ *   factory time (fail closed and loud -- a silently dropped mask selector
+ *   would be a privacy leak).
+ * @property {string} [maskTextSelector]
+ *   Optional (SEC-03). CSS selector: text of matching elements AND their
+ *   descendants is masked (default mask: '*' per non-whitespace character,
+ *   whitespace and length preserved -- rrweb-compatible). Same factory-time
+ *   validation as blockSelector.
+ * @property {boolean} [maskInputs]
+ *   Optional (SEC-03), default false. When true, ALL input/textarea/select
+ *   values are masked. Independent of this option, input[type=password]
+ *   values are ALWAYS masked (non-configurable rrweb-parity default).
+ * @property {(text: string, element: Element) => string} [maskTextFn]
+ *   Optional (SEC-03). Custom text mask (rrweb signature). A THROWING fn
+ *   falls back to the default asterisk mask -- raw text never leaks.
+ * @property {(text: string, element: Element) => string} [maskInputFn]
+ *   Optional (SEC-03). Custom input-value mask (rrweb signature). Same
+ *   fail-closed containment as maskTextFn.
  */
 
 /**
@@ -391,6 +427,23 @@ export function createCapture(config) {
     ? cfg.skipElement
     : null;
   var skipElement = hostSkipElement || function () { return false; };
+
+  // SEC-03 privacy-masking config (plan 03-03, rrweb-compatible vocabulary
+  // per 03-RESEARCH Pattern 5). Every option defaults OFF: with no masking
+  // config the wire is byte-identical to the unmasked output. The one
+  // non-configurable rule: input[type=password] values are ALWAYS masked
+  // regardless of these options. Selectors are compiled (validated) ONCE here
+  // at factory time -- an invalid selector THROWS Error('invalid-mask-
+  // selector') from compileMaskSelector (factory-time validation is the one
+  // allowed throwing site, the transport-send-required precedent above;
+  // silent masking failure would be a privacy leak, so misconfiguration
+  // fails closed and LOUD). Runtime matcher errors are contained
+  // per-element instead (Pitfall 6: capture never wedges).
+  var maskInputs = cfg.maskInputs === true;
+  var maskTextFn = (typeof cfg.maskTextFn === 'function') ? cfg.maskTextFn : null;
+  var maskInputFn = (typeof cfg.maskInputFn === 'function') ? cfg.maskInputFn : null;
+  var blockSelector = compileMaskSelector(cfg.blockSelector);
+  var maskTextSelector = compileMaskSelector(cfg.maskTextSelector);
 
   /**
    * Ancestor-inclusive form of the skipElement seam (reference parity:
@@ -499,8 +552,8 @@ export function createCapture(config) {
   // pattern). Lifecycle is PER-SESSION (03-RESEARCH.md Pitfall 3): reset in
   // beginStreamSession only, never per snapshot or per flush, so strip
   // totals accumulate across one whole stream session. The masked* pair is
-  // declared here but incremented by the SEC-03 masking pass (plan 03-03)
-  // through the same chokepoint.
+  // incremented by the SEC-03 masking pass (plan 03-03) through the same
+  // chokepoint.
   var sanitizeCounters = {
     strippedHandlers: 0,  // on* handler attributes removed
     blockedUrlSchemes: 0, // javascript:/vbscript:/data:text/html values neutralized
@@ -613,6 +666,19 @@ export function createCapture(config) {
   /**
    * Listen for dialog events from the page-level interceptor and relay them
    * through the transport.
+   *
+   * SEC-03 side-channel masking disposition (threat T-03-26, accepted --
+   * the CONTEXT masking decision's "and side channels" clause, discharged
+   * explicitly here, never silently): dialog detail.message and
+   * detail.defaultValue (and the overlay payload text relayed by
+   * broadcastOverlayState) are NOT routed through the masking helpers.
+   * They are string-only payloads with no owner element, so blockSelector /
+   * maskTextSelector matching has nothing to match against; a page script
+   * that echoes masked content into an alert/prompt is outside capture-side
+   * masking's reach (the rrweb-parity boundary). The viewer renders these
+   * via textContent only (overlays.js, threat T-02-04), so the residual is
+   * privacy-scoped, not markup injection. docs/SECURITY.md lists this
+   * residual (plan 03-05).
    */
   function setupDialogRelay() {
     if (dialogRelayActive) return;
@@ -640,6 +706,104 @@ export function createCapture(config) {
         })
       });
     });
+  }
+
+  // =========================================================================
+  // 0.4 SEC-03 Privacy-masking helpers (plan 03-03)
+  // =========================================================================
+
+  /**
+   * Validate a host-provided mask selector at factory time. Returns the
+   * selector string, or null when the option was not provided. Any provided
+   * value that is not a non-empty string, or that the ambient document's
+   * selector engine rejects, THROWS Error('invalid-mask-selector'):
+   * factory-time validation is the one allowed throwing site (D-07
+   * transport-send-required precedent, 03-PATTERNS Shared Patterns), and a
+   * silently dropped mask selector would be a privacy leak -- fail closed
+   * and loud. Runtime matcher errors on exotic elements are contained
+   * per-element by the predicates below instead (Pitfall 6).
+   * @param {*} raw - cfg.blockSelector / cfg.maskTextSelector as provided
+   * @returns {string|null}
+   */
+  function compileMaskSelector(raw) {
+    if (raw === undefined || raw === null) return null;
+    if (typeof raw !== 'string' || raw === '') {
+      throw new Error('invalid-mask-selector');
+    }
+    try {
+      document.querySelector(raw);
+    } catch (err) {
+      throw new Error('invalid-mask-selector');
+    }
+    return raw;
+  }
+
+  /**
+   * Ancestor-inclusive maskTextSelector predicate (closest()-shaped, the
+   * skipElementWithAncestors analog -- 03-RESEARCH Pattern 6). True when el
+   * or any ancestor (within el's tree: full live ancestry for live
+   * elements, clone-local ancestry for detached clones) matches
+   * maskTextSelector. A runtime matches/closest error on an exotic element
+   * is contained in the safeSkipElement shape: routed to the logger,
+   * treated as not-matched -- the capture never wedges (Pitfall 6).
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function maskTextMatches(el) {
+    if (!maskTextSelector) return false;
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    try {
+      return !!(el.closest && el.closest(maskTextSelector));
+    } catch (err) {
+      logger.error('[DOM Stream] maskTextSelector match failed', err);
+      return false;
+    }
+  }
+
+  /**
+   * Apply the text mask: maskTextFn when provided, with fail-CLOSED
+   * containment -- a throwing custom fn falls back to the DEFAULT asterisk
+   * mask (raw text NEVER leaks, threat T-03-16) and routes to the logger.
+   * @param {string} text
+   * @param {Element} el - element owning the text (rrweb fn signature)
+   * @returns {string}
+   */
+  function safeMaskText(text, el) {
+    if (maskTextFn) {
+      try {
+        return String(maskTextFn(String(text), el));
+      } catch (err) {
+        logger.error('[DOM Stream] maskTextFn failed; default mask applied', err);
+        return defaultMaskText(text);
+      }
+    }
+    return defaultMaskText(text);
+  }
+
+  /**
+   * Mask every DIRECT child text node of a detached clone element in place.
+   * Descendant elements are deliberately NOT recursed into: each
+   * serialization walk visits every element, so descendant text is covered
+   * by the descendant's own visit. Counters move only when a value actually
+   * changes (SEC-01 idempotence discipline).
+   * @param {Element} el - detached clone whose direct text children to mask
+   * @param {Element} owner - element handed to the custom mask fn
+   * @param {(text: string, el: Element) => string} maskFn - safeMaskText
+   *   (or safeMaskInput for textarea values)
+   * @param {string} counterKey - sanitizeCounters key to increment
+   */
+  function maskDirectChildText(el, owner, maskFn, counterKey) {
+    var child = el.firstChild;
+    while (child) {
+      if (child.nodeType === Node.TEXT_NODE && child.nodeValue) {
+        var maskedValue = maskFn(child.nodeValue, owner);
+        if (maskedValue !== child.nodeValue) {
+          child.nodeValue = maskedValue;
+          sanitizeCounters[counterKey]++;
+        }
+      }
+      child = child.nextSibling;
+    }
   }
 
   // =========================================================================
@@ -696,15 +860,17 @@ export function createCapture(config) {
   //   3. attr-op branch                   -- 'attr' dispatch, after
   //      absolutifyUrl/absolutifySrcset so the scheme check runs on final
   //      wire values
-  //   4. characterData text branch       -- 'text' dispatch (identity this
-  //      plan; SEC-03 masking seam, plan 03-03)
+  //   4. characterData text branch       -- 'text' dispatch (SEC-03
+  //      masking seam, plan 03-03)
   //   5. E2 text-childlist branch        -- 'text' dispatch (same seam)
   // Head inline <style> text additionally routes through the 'css' dispatch
   // at the serializeDOM collection site (a value scrub, not a markup walk).
-  // Side channels that BYPASS the markup scrub BY DESIGN: the dialog relay
-  // (setupDialogRelay) and the overlay broadcast (broadcastOverlayState)
-  // carry text/metadata only and are rendered via textContent in the viewer
-  // (overlays.js, threat T-02-04) -- no HTML parse path exists for them.
+  // Side channels that BYPASS the markup scrub AND the masking helpers BY
+  // DESIGN: the dialog relay (setupDialogRelay -- see the T-03-26
+  // disposition comment there) and the overlay broadcast
+  // (broadcastOverlayState) carry text/metadata only and are rendered via
+  // textContent in the viewer (overlays.js, threat T-02-04) -- no HTML
+  // parse path exists for them.
 
   /**
    * The capture-side sanitization chokepoint (SEC-01): the single named
@@ -727,8 +893,8 @@ export function createCapture(config) {
    *     neutralize to '', style values are CSS-scrubbed; everything else
    *     passes through unchanged.
    *   'text',    { text, owner }         -> { text }
-   *     IDENTITY HOOK this plan: the SEC-03 masking seam -- plan 03-03
-   *     fills maskTextSelector/maskTextFn here (incrementing
+   *     SEC-03 masking seam (plan 03-03): maskTextSelector / maskTextFn
+   *     applied against the LIVE owner element's ancestry (incrementing
    *     maskedTextNodes); Phase 8 CAPT-05 typed-text capture plugs into the
    *     same seam.
    *   'css',     { css }                 -> { css }
@@ -837,6 +1003,21 @@ export function createCapture(config) {
           }
         }
       }
+      // SEC-03 masking pass (plan 03-03), applied ONCE per clone: the pairs
+      // walk routes each pair through this dispatch twice (drop decision +
+      // final-wire-value re-scrub), and a second application would corrupt
+      // custom mask fn output -- so the pass marks the clone with a JS-only
+      // property that never serializes (clone-only; live nodes are never
+      // touched, threat T-03-06).
+      if (!clone._psMasked) {
+        clone._psMasked = true;
+        // maskTextSelector: the LIVE element's ancestry decides (orig is
+        // null for detached subtree descendants -- those are masked by the
+        // 'subtree' dispatch, which knows the inherited root state).
+        if (payload.orig && maskTextMatches(payload.orig)) {
+          maskDirectChildText(clone, payload.orig, safeMaskText, 'maskedTextNodes');
+        }
+      }
       return {};
     }
 
@@ -849,6 +1030,13 @@ export function createCapture(config) {
       if (rootResult && rootResult.drop) {
         return { drop: true };
       }
+      // SEC-03: the ROOT's text-mask state comes from the LIVE node's FULL
+      // ancestry (payload.liveRoot's closest() walk) -- the detached wire
+      // clone cannot see its insertion context. Each descendant is masked
+      // when it matches clone-locally OR inherits the root state. The
+      // root's own direct text was already masked by the 'element' call
+      // above (orig = liveRoot).
+      var rootTextMasked = maskTextMatches(payload.liveRoot);
       var descendants = root.querySelectorAll('*');
       for (var d = 0; d < descendants.length; d++) {
         var desc = descendants[d];
@@ -858,6 +1046,10 @@ export function createCapture(config) {
         var descResult = sanitizeForWire('element', { orig: null, clone: desc });
         if (descResult && descResult.drop && desc.parentNode) {
           desc.parentNode.removeChild(desc);
+          continue;
+        }
+        if (rootTextMasked || maskTextMatches(desc)) {
+          maskDirectChildText(desc, desc, safeMaskText, 'maskedTextNodes');
         }
       }
       return {};
@@ -909,10 +1101,19 @@ export function createCapture(config) {
     }
 
     if (kind === 'text') {
-      // IDENTITY HOOK (this plan): the SEC-03 masking seam. Plan 03-03
-      // consults payload.owner against maskTextSelector / maskTextFn here
-      // and increments maskedTextNodes; Phase 8 CAPT-05 typed-text capture
-      // plugs into the same seam. Until then text passes through unchanged.
+      // SEC-03 masking (plan 03-03): BOTH text-op branches (characterData
+      // and the E2 text-childlist branch) route through this one hook. The
+      // owner element is LIVE, so closest() sees the full ancestry. Phase 8
+      // CAPT-05 typed-text capture plugs into the same seam. Unmasked text
+      // passes through unchanged (default-off: zero wire change without
+      // masking config).
+      if (maskTextMatches(payload.owner)) {
+        var maskedOpText = safeMaskText(payload.text, payload.owner);
+        if (maskedOpText !== payload.text) {
+          sanitizeCounters.maskedTextNodes++;
+        }
+        return { text: maskedOpText };
+      }
       return { text: payload.text };
     }
 
@@ -1479,8 +1680,9 @@ export function createCapture(config) {
           var textTargetNid = m.target.getAttribute ? m.target.getAttribute(NID_ATTR) : null;
           if (textTargetNid && !textOpNids[textTargetNid]) {
             textOpNids[textTargetNid] = true;
-            // SEC-03 masking seam (plan 03-03): identity transform this
-            // plan; owner is the mutation target itself for E2.
+            // SEC-03 masking seam (plan 03-03): maskTextSelector /
+            // maskTextFn applied inside the chokepoint; owner is the
+            // mutation target itself for E2.
             var e2TextResult = sanitizeForWire('text', {
               text: m.target.textContent,
               owner: m.target
@@ -1528,7 +1730,8 @@ export function createCapture(config) {
         var textNid = (parentEl && parentEl.getAttribute) ? parentEl.getAttribute(NID_ATTR) : null;
         if (!textNid) continue;
 
-        // SEC-03 masking seam (plan 03-03): identity transform this plan.
+        // SEC-03 masking seam (plan 03-03): maskTextSelector / maskTextFn
+        // applied inside the chokepoint; owner is the LIVE parent element.
         var textResult = sanitizeForWire('text', {
           text: m.target.textContent,
           owner: parentEl
