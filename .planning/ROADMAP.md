@@ -101,7 +101,7 @@ Plans:
 - [x] 03-02-PLAN.md — Render-side chokepoint `sanitizeFragment` + template-context add-op parsing + srcdoc CSP meta + per-session strip counters (SEC-02)
 
 **Wave 2** *(blocked on 03-01)*
-- [ ] 03-03-PLAN.md — Privacy masking: blockSelector placeholder, maskTextSelector, maskInputs, always-on password mask, custom mask fns (SEC-03)
+- [x] 03-03-PLAN.md — Privacy masking: blockSelector placeholder, maskTextSelector, maskInputs, always-on password mask, custom mask fns (SEC-03)
 
 **Wave 3** *(blocked on 03-01 + 03-03)*
 - [ ] 03-04-PLAN.md — Differential-oracle discipline: sanitize-corpus fixture + sanitize-divergence scenario + load-bearing D7 ledger entry
