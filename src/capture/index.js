@@ -187,6 +187,42 @@ function hasDangerousScheme(value) {
 }
 
 /**
+ * Minimal srcset candidate parser for the URL+descriptor forms this project
+ * emits. Unlike split(','), it keeps commas inside data:image URLs attached
+ * to the URL token, so a benign data candidate cannot turn into a bogus
+ * relative fetch candidate when one hostile sibling forces a rebuild.
+ * @param {string} srcset
+ * @returns {{url: string, descriptor: string}[]}
+ */
+function parseSrcsetCandidates(srcset) {
+  var raw = String(srcset == null ? '' : srcset);
+  var out = [];
+  var i = 0;
+  while (i < raw.length) {
+    while (i < raw.length && /[\s,]/.test(raw.charAt(i))) i++;
+    var urlStart = i;
+    var isData = raw.slice(i, i + 5).toLowerCase() === 'data:';
+    while (i < raw.length
+        && !/\s/.test(raw.charAt(i))
+        && (isData || raw.charAt(i) !== ',')) {
+      i++;
+    }
+    var url = raw.slice(urlStart, i);
+    while (i < raw.length && /\s/.test(raw.charAt(i))) i++;
+    var descriptorStart = i;
+    while (i < raw.length && raw.charAt(i) !== ',') i++;
+    var descriptor = raw.slice(descriptorStart, i).trim();
+    if (url) out.push({ url: url, descriptor: descriptor });
+    if (raw.charAt(i) === ',') i++;
+  }
+  return out;
+}
+
+function formatSrcsetCandidate(candidate) {
+  return candidate.descriptor ? candidate.url + ' ' + candidate.descriptor : candidate.url;
+}
+
+/**
  * Neutralize dangerous-scheme candidate URLs inside a srcset value
  * (comma-separated URL + descriptor entries). Returns the ORIGINAL string
  * untouched when no candidate is dangerous, so benign srcset values stay
@@ -197,18 +233,15 @@ function hasDangerousScheme(value) {
 function scrubSrcset(srcset) {
   if (!srcset) return srcset;
   try {
-    var entries = srcset.split(',');
+    var entries = parseSrcsetCandidates(srcset);
     var kept = [];
     var changed = false;
     for (var i = 0; i < entries.length; i++) {
-      var entry = entries[i].trim();
-      if (!entry) continue;
-      var parts = entry.split(/\s+/);
-      if (parts[0] && hasDangerousScheme(parts[0])) {
+      if (entries[i].url && hasDangerousScheme(entries[i].url)) {
         changed = true;
         continue;
       }
-      kept.push(entry);
+      kept.push(formatSrcsetCandidate(entries[i]));
     }
     return changed ? kept.join(', ') : srcset;
   } catch (e) {
@@ -1324,12 +1357,13 @@ export function createCapture(config) {
    */
   function absolutifySrcset(srcset) {
     if (!srcset) return srcset;
-    return srcset.split(',').map(function(entry) {
-      var parts = entry.trim().split(/\s+/);
-      if (parts.length > 0) {
-        parts[0] = absolutifyUrl(parts[0]);
-      }
-      return parts.join(' ');
+    var candidates = parseSrcsetCandidates(srcset);
+    if (!candidates.length) return srcset;
+    return candidates.map(function(candidate) {
+      return formatSrcsetCandidate({
+        url: absolutifyUrl(candidate.url),
+        descriptor: candidate.descriptor
+      });
     }).join(', ');
   }
 

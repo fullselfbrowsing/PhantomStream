@@ -175,7 +175,7 @@ test('xlink:href javascript: inside an svg subtree is neutralized; srcset is neu
   try {
     const frag = env.makeFragment(
       '<svg><a xlink:href="javascript:alert(1)"><text>c</text></a></svg>'
-        + '<img srcset="javascript:alert(1) 1x, https://x.test/img.png 2x">'
+        + '<img srcset="javascript:alert(1) 1x, data:image/png;base64,AAAA 2x, https://x.test/img.png 3x">'
     );
     sanitizeFragment(frag, freshCounters(), recordingLogger());
     assert.deepEqual(
@@ -184,9 +184,31 @@ test('xlink:href javascript: inside an svg subtree is neutralized; srcset is neu
     );
     const img = frag.querySelector('img');
     assert.ok(
-      img.getAttribute('srcset').includes('https://x.test/img.png 2x'),
-      'benign srcset candidate preserved (neutralization is per-candidate)'
+      img.getAttribute('srcset').includes('data:image/png;base64,AAAA 2x'),
+      'data:image srcset candidate preserved without comma-splitting corruption'
     );
+    assert.ok(
+      img.getAttribute('srcset').includes('https://x.test/img.png 3x'),
+      'benign https srcset candidate preserved (neutralization is per-candidate)'
+    );
+    assert.ok(!/\/AAAA/.test(img.getAttribute('srcset')), 'data payload did not become a relative URL');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('sanitizeFragment scrubs hostile <style> element text', () => {
+  const env = setupEnv();
+  try {
+    const frag = env.makeFragment(
+      '<style>.x{background:url(javascript:alert(1));width:expression(alert(2));}</style>'
+    );
+    const counters = freshCounters();
+    sanitizeFragment(frag, counters, recordingLogger());
+    const css = frag.querySelector('style').textContent;
+    assert.ok(!/url\(\s*javascript/i.test(css), 'style element text has no url(javascript:)');
+    assert.ok(!/expression\(/i.test(css), 'style element text has no expression()');
+    assert.equal(counters.cssScrubs, 1, 'style element text scrub counted');
   } finally {
     env.teardown();
   }
@@ -420,6 +442,30 @@ test("chokepoint integration: a hostile 'add' op inserts a node with neither onc
   }
 });
 
+test("chokepoint integration: a hostile 'add' op scrubs <style> element text", () => {
+  const env = setupEnv();
+  try {
+    const doc = makeDoc(env, '<div ' + NID_ATTR + '="1"></div>');
+    const sc = freshCounters();
+    const rec = diffHooks(sc);
+    applyMutations(doc, [
+      {
+        op: DIFF_OP.ADD,
+        parentNid: '1',
+        html: '<div ' + NID_ATTR + '="9">'
+          + '<style>.x{background:url(javascript:alert(1));width:expression(alert(2));}</style>'
+          + '</div>',
+      },
+    ], freshDiffCounters(), rec.hooks);
+    const css = doc.querySelector('style').textContent;
+    assert.ok(!/url\(\s*javascript/i.test(css), 'add-op style text has no url(javascript:)');
+    assert.ok(!/expression\(/i.test(css), 'add-op style text has no expression()');
+    assert.ok(sc.cssScrubs >= 1, 'style text scrub counted through hooks.sanitizeCounters');
+  } finally {
+    env.teardown();
+  }
+});
+
 test("chokepoint integration: an 'attr' op with an on* name is DROPPED -- no setAttribute, counter moves, no stale miss", () => {
   const env = setupEnv();
   try {
@@ -589,6 +635,7 @@ test('post-parse scrub (behavioral): a hostile snapshot fed to the viewer yields
       html: '<div ' + NID_ATTR + '="1">'
         + '<button ' + NID_ATTR + '="2" onclick="alert(1)">x</button>'
         + '<a ' + NID_ATTR + '="3" href="javascript:alert(1)">y</a>'
+        + '<style>.x{background:url(javascript:alert(1));width:expression(alert(2));}</style>'
         + '</div>',
     }));
 
@@ -615,6 +662,9 @@ test('post-parse scrub (behavioral): a hostile snapshot fed to the viewer yields
       attrValuesMatching(cd.body, /javascript:/i), [],
       'no javascript: URL anywhere in the mirror body'
     );
+    const css = cd.body.querySelector('style').textContent;
+    assert.ok(!/url\(\s*javascript/i.test(css), 'post-parse style text has no url(javascript:)');
+    assert.ok(!/expression\(/i.test(css), 'post-parse style text has no expression()');
     assert.ok(
       log.warns.some((args) => String(args[0]).startsWith('[Renderer] sanitization strips')),
       'the aggregated sanitization warn reached the injected logger'

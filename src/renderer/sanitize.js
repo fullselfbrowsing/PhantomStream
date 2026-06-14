@@ -93,6 +93,34 @@ function hasDangerousScheme(value) {
     || probe.indexOf('data:text/html') === 0;
 }
 
+function parseSrcsetCandidates(srcset) {
+  var raw = String(srcset == null ? '' : srcset);
+  var out = [];
+  var i = 0;
+  while (i < raw.length) {
+    while (i < raw.length && /[\s,]/.test(raw.charAt(i))) i++;
+    var urlStart = i;
+    var isData = raw.slice(i, i + 5).toLowerCase() === 'data:';
+    while (i < raw.length
+        && !/\s/.test(raw.charAt(i))
+        && (isData || raw.charAt(i) !== ',')) {
+      i++;
+    }
+    var url = raw.slice(urlStart, i);
+    while (i < raw.length && /\s/.test(raw.charAt(i))) i++;
+    var descriptorStart = i;
+    while (i < raw.length && raw.charAt(i) !== ',') i++;
+    var descriptor = raw.slice(descriptorStart, i).trim();
+    if (url) out.push({ url: url, descriptor: descriptor });
+    if (raw.charAt(i) === ',') i++;
+  }
+  return out;
+}
+
+function formatSrcsetCandidate(candidate) {
+  return candidate.descriptor ? candidate.url + ' ' + candidate.descriptor : candidate.url;
+}
+
 /**
  * Neutralize dangerous srcset candidates per-candidate; benign candidates
  * pass through. Returns the rebuilt value plus the blocked count so the
@@ -106,16 +134,13 @@ function neutralizeSrcset(value) {
   var raw = String(value == null ? '' : value);
   var kept = [];
   var blocked = 0;
-  var candidates = raw.split(',');
+  var candidates = parseSrcsetCandidates(raw);
   for (var i = 0; i < candidates.length; i++) {
-    var candidate = candidates[i].trim();
-    if (!candidate) continue;
-    var url = candidate.split(/\s+/)[0];
-    if (hasDangerousScheme(url)) {
+    if (hasDangerousScheme(candidates[i].url)) {
       blocked += 1;
       continue;
     }
-    kept.push(candidate);
+    kept.push(formatSrcsetCandidate(candidates[i]));
   }
   return { value: kept.join(', '), blocked: blocked };
 }
@@ -260,6 +285,14 @@ export function sanitizeFragment(root, counters, logger) {
         if (el.parentNode) el.parentNode.removeChild(el);
         tallies.droppedSubtrees += 1;
         continue;
+      }
+      if (tag === 'style') {
+        var styleText = el.textContent || '';
+        var scrubbedStyleText = scrubCssText(styleText);
+        if (scrubbedStyleText !== styleText) {
+          el.textContent = scrubbedStyleText;
+          tallies.cssScrubs += 1;
+        }
       }
 
       // Enumerate attribute names FIRST (removal mutates the live
