@@ -37,6 +37,7 @@ standalone framework.
 - ✓ Extracted capture verified against `reference/` via a dual-jsdom differential oracle on frozen fixtures, with machine-enforced divergence ledger (D1 mismatch + D2–D5 mappings) — Validated in Phase 1 (CAPT-04)
 - ✓ Renderer decoupled from the FSB dashboard into an embeddable viewer (`createViewer({ container, transport })`, sandboxed iframe, scale-to-fit, extensible overlay registry, scroll/dialog parity) — Validated in Phase 2 (VIEW-01, VIEW-04, VIEW-06)
 - ✓ Embedded-SDK adapter + first-light loopback demo (`npm run example:loopback`) — a page mirrors itself live with zero infrastructure, verified in real Chrome — Validated in Phase 2 (ADPT-04)
+- ✓ Security pipeline for embeddable/publishable mirroring — capture-side sanitization in all serialization paths, renderer defense-in-depth with sandbox/CSP contract, and capture-side privacy masking vocabulary (`blockSelector`, `maskTextSelector`, `maskInputs`, custom mask fns) — Validated in Phase 3 (SEC-01, SEC-02, SEC-03)
 
 ### Active
 
@@ -44,8 +45,7 @@ standalone framework.
 
 **Framework extraction (first priority):**
 - [ ] Transport-agnostic relay with pluggable backends (WebSocket reference implementation)
-- [ ] All six inherited limitations fixed in the standalone v1:
-  - [ ] Sanitization as a first-class stage (`on*` attrs, `javascript:` URLs stripped in all serialization paths; sandboxed rendering enforced)
+- [ ] Remaining inherited limitations fixed in the standalone v1:
   - [ ] Stylesheet-centric capture mode (CSSOM) — fixes frozen-style drift, shrinks payloads, enables the paper's ablation
   - [ ] Computed styles for nodes added after the snapshot
   - [ ] On-demand subtree fetch to close the truncation gap interactively
@@ -82,8 +82,9 @@ standalone framework.
   relay), pinned to FSB commit `867d6f0c`. Eleven phases of original planning docs, UAT, and
   verification live under `reference/planning/`. The codebase map is at `.planning/codebase/`.
 - **Extraction state:** `src/protocol/` is done (messages, envelope, constants — clean ESM,
-  dependency-free, tested with `node --test`). `src/capture/`, `src/relay/`, `src/renderer/`
-  are README stubs specifying the planned module splits and decoupling seams.
+  dependency-free, tested with `node --test`). `src/capture/` and `src/renderer/` now hold the
+  extracted capture/viewer cores plus Phase 3 sanitization and masking gates. `src/relay/` is the
+  next unbuilt framework module.
 - **Docs are strong:** `docs/ARCHITECTURE.md` (full system description + 6 known limitations),
   `docs/DESIGN-HISTORY.md` (what failed and why — e.g. the 45 s YouTube serialize that forced
   curated style capture), `docs/paper/OUTLINE.md` (paper structure + evaluation plan).
@@ -118,6 +119,7 @@ standalone framework.
 | FSB integration verified from this repo via published npm package | Keeps "SDK that plugs back into FSB" an observable success criterion here, while FSB code stays in its own repo | — Pending |
 | Full system-track paper (WWW/UIST/CHI tier), no fixed deadline | Deep evaluation valued over fast turnaround; arXiv/workshop versions can derive from the full draft | — Pending |
 | Both demos: two-tab + Playwright-driven | Two-tab proves plug-and-play; Playwright proves the agent-observability story the paper leads with | — Pending |
+| Security pipeline is enforced before relay/publishing work | Anything embeddable or published must be safe to render and must not leak masked content | Validated in Phase 3 |
 
 ## Evolution
 
@@ -137,4 +139,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-11 after Phase 2 completion (embeddable viewer + loopback mirror live; text-node fidelity fix D6)*
+*Last updated: 2026-06-14 after Phase 3 completion (security pipeline, sandbox contract, and capture-side privacy masking validated)*
