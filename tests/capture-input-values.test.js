@@ -300,3 +300,31 @@ test('maskInputFn return value is used for event-driven value diffs', async () =
     env.teardown();
   }
 });
+
+test('Plan 08-06 can attach value listeners to same-origin iframe frame document roots', {
+  todo: 'Plan 08-05 exposes observed frame document roots; Plan 08-06 wires input/change listeners to them.',
+}, async () => {
+  const env = setupEnv('<main><iframe id="same-frame"></iframe></main>');
+  try {
+    const frame = env.document.getElementById('same-frame');
+    const frameDoc = frame.contentDocument;
+    frameDoc.open();
+    frameDoc.write('<!DOCTYPE html><html><body><input id="inside-frame" value="initial"></body></html>');
+    frameDoc.close();
+
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    assert.equal(typeof env.capture.getObservedFrameDocuments, 'function', 'frame root registry is exposed');
+    const roots = env.capture.getObservedFrameDocuments();
+    assert.ok(roots.some((entry) => (
+      entry.frameNid === env.capture.getNodeId(frame)
+      && entry.document === frameDoc
+      && entry.root === frameDoc
+    )), 'same-origin iframe document root is registered for downstream value listeners');
+  } finally {
+    env.teardown();
+  }
+});

@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { createCapture } from '../src/capture/index.js';
-import { STREAM } from '../src/protocol/messages.js';
+import { STREAM, DIFF_OP } from '../src/protocol/messages.js';
 
 const AUDITED_GLOBALS = [
   'window', 'document', 'Node', 'NodeFilter', 'MutationObserver',
@@ -79,6 +79,12 @@ function snapshotPayload(transport) {
   const snapshots = transport.sent.filter((m) => m.type === STREAM.SNAPSHOT);
   assert.equal(snapshots.length, 1, 'start() emits exactly one snapshot');
   return snapshots[0].payload;
+}
+
+function mutationOps(transport) {
+  return transport.sent
+    .filter((m) => m.type === STREAM.MUTATIONS)
+    .flatMap((m) => m.payload.mutations || []);
 }
 
 function populateFrame(frame, html) {
@@ -194,6 +200,122 @@ test('D-11 frame descendant nids are opaque Phase 7 ids while capture is active'
     assert.ok(payload.frames[0].nodeIds.includes(buttonNid), 'frame nodeIds sidecar includes descendant nid');
     assert.equal(frameDoc.querySelectorAll('[data-fsb-nid]').length, 0, 'frame document carries no framework nid attrs');
     assert.equal(JSON.stringify(transport.sent).includes('data-fsb-nid'), false, 'wire identity is sidecar-only');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-08 added same-origin iframes carry frames metadata on add ops', async () => {
+  const env = setupEnv('<main id="root"></main>');
+  try {
+    const root = env.document.getElementById('root');
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const frame = env.document.createElement('iframe');
+    frame.id = 'added-frame';
+    frame.setAttribute('src', '/added-frame.html');
+    root.appendChild(frame);
+    const frameDoc = populateFrame(frame,
+      '<!DOCTYPE html><html><body><button id="added-frame-button">Added frame button</button></body></html>'
+    );
+    const button = frameDoc.getElementById('added-frame-button');
+    await settle(env.window);
+
+    const frameNid = env.capture.getNodeId(frame);
+    const buttonNid = env.capture.getNodeId(button);
+    const addOp = mutationOps(transport).find((op) => (
+      op.op === DIFF_OP.ADD
+      && typeof op.html === 'string'
+      && op.html.includes('added-frame')
+    ));
+
+    assert.ok(addOp, 'added iframe emits an add op');
+    assert.equal(Array.isArray(addOp.frames), true, 'add op carries frames sidecar');
+    const framePayload = addOp.frames.find((entry) => entry.frameNid === frameNid);
+    assert.ok(framePayload, 'add-op frame sidecar is keyed by frameNid');
+    assert.equal(framePayload.kind, 'same-origin');
+    assert.ok(framePayload.html.includes('Added frame button'), 'same-origin added frame content is serialized');
+    assert.ok(framePayload.nodeIds.includes(buttonNid), 'added frame descendant nid is in frame sidecar');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-11 same-origin iframe document mutations emit frameNid-scoped diffs', async () => {
+  const env = setupEnv('<main id="root"><iframe id="same-frame" src="/frame.html"></iframe></main>');
+  try {
+    const frame = env.document.getElementById('same-frame');
+    const frameDoc = populateFrame(frame,
+      '<!DOCTYPE html><html><body><section id="frame-root"></section></body></html>'
+    );
+
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const frameNid = env.capture.getNodeId(frame);
+    const late = frameDoc.createElement('span');
+    late.id = 'late-frame-child';
+    late.textContent = 'Late frame child';
+    frameDoc.getElementById('frame-root').appendChild(late);
+    await settle(env.window);
+
+    const lateNid = env.capture.getNodeId(late);
+    assert.ok(
+      mutationOps(transport).some((op) => (
+        op.op === DIFF_OP.ADD
+        && op.frameNid === frameNid
+        && typeof op.html === 'string'
+        && op.html.includes('late-frame-child')
+        && Array.isArray(op.nodeIds)
+        && op.nodeIds.includes(lateNid)
+      )),
+      'same-origin frame document mutation emits an add op scoped by frameNid'
+    );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-11 iframe load re-registers navigated same-origin frame documents', async () => {
+  const env = setupEnv('<main id="root"><iframe id="same-frame" src="/frame.html"></iframe></main>');
+  try {
+    const frame = env.document.getElementById('same-frame');
+    populateFrame(frame,
+      '<!DOCTYPE html><html><body><p id="before-load">Before load</p></body></html>'
+    );
+
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const frameNid = env.capture.getNodeId(frame);
+    const nextDoc = populateFrame(frame,
+      '<!DOCTYPE html><html><body><div id="after-load-root"></div></body></html>'
+    );
+    frame.dispatchEvent(new env.window.Event('load'));
+    await settle(env.window);
+
+    const child = nextDoc.createElement('strong');
+    child.id = 'after-load-child';
+    child.textContent = 'After load child';
+    nextDoc.getElementById('after-load-root').appendChild(child);
+    await settle(env.window);
+
+    assert.ok(
+      mutationOps(transport).some((op) => (
+        op.op === DIFF_OP.ADD
+        && op.frameNid === frameNid
+        && typeof op.html === 'string'
+        && op.html.includes('after-load-child')
+      )),
+      'iframe load listener re-registers the new same-origin frame document'
+    );
   } finally {
     env.teardown();
   }
