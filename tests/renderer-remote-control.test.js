@@ -12,7 +12,7 @@ import {
   createViewer,
   mapHostPointToViewport,
 } from '../src/renderer/index.js';
-import { STREAM, NID_ATTR } from '../src/protocol/messages.js';
+import { STREAM } from '../src/protocol/messages.js';
 
 function setupEnv() {
   const dom = new JSDOM(
@@ -69,7 +69,8 @@ function silentLogger() {
 function snapshotPayload(overrides) {
   return Object.assign(
     {
-      html: '<main ' + NID_ATTR + '="1">remote</main>',
+      html: '<main>remote</main>',
+      nodeIds: ['1'],
       stylesheets: [],
       inlineStyles: [],
       htmlAttrs: {},

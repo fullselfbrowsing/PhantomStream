@@ -9,17 +9,19 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const FILES = [
+  'src/capture/index.js',
   'src/renderer/diff.js',
   'src/renderer/index.js',
   'src/renderer/overlays.js',
 ];
 
 const FORBIDDEN = [
+  'data-fsb-nid',
+  'NID_ATTR',
   "querySelector('[' + NID_ATTR",
-  '[data-fsb-nid',
 ];
 
-test('renderer nid resolution does not use the retired identity selector hot path', () => {
+test('runtime node identity does not use retired framework identity attributes', () => {
   for (const file of FILES) {
     const source = readFileSync(file, 'utf8');
     for (const needle of FORBIDDEN) {
