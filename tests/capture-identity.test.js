@@ -138,6 +138,51 @@ test('page-owned data-fsb-nid remains ordinary page data and getNodeId returns i
   }
 });
 
+test('getNodeId fails softly for inactive, skipped, non-element, untracked, and stale nodes', async () => {
+  const env = setupEnv('<main id="root">'
+    + '<section id="tracked"><span>tracked</span></section>'
+    + '<aside id="skip"><button id="skipped-child">skip</button></aside>'
+    + '</main>');
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({
+      transport,
+      logger: silentLogger(),
+      skipElement(el) {
+        return el.id === 'skip';
+      },
+    });
+
+    const tracked = env.document.getElementById('tracked');
+    assert.equal(env.capture.getNodeId(tracked), null, 'inactive capture returns null');
+
+    env.capture.start();
+    const nid = env.capture.getNodeId(tracked);
+    assert.equal(typeof nid, 'string', 'tracked live element resolves');
+    assert.equal(env.capture.getNodeId(null), null, 'null returns null');
+    assert.equal(
+      env.capture.getNodeId(env.document.createTextNode('text')),
+      null,
+      'non-elements return null'
+    );
+    assert.equal(
+      env.capture.getNodeId(env.document.createElement('aside')),
+      null,
+      'untracked detached elements return null'
+    );
+    assert.equal(env.capture.getNodeId(env.document.getElementById('skip')), null);
+    assert.equal(env.capture.getNodeId(env.document.getElementById('skipped-child')), null);
+
+    tracked.remove();
+    assert.equal(env.capture.getNodeId(tracked), null, 'detached tracked nodes return null');
+
+    env.capture.stop();
+    assert.equal(env.capture.getNodeId(tracked), null, 'stale nodes after stop return null');
+  } finally {
+    env.teardown();
+  }
+});
+
 test('snapshot payload includes preorder nodeIds sidecar matching serialized elements', async () => {
   const env = setupEnv('<main id="root"><section id="one"><p>hello</p></section><section id="two">world</section></main>');
   try {

@@ -433,6 +433,7 @@ function defaultMaskText(text) {
  * @property {() => void} pause   Stop observers, keep the session alive.
  * @property {() => void} resume  Re-arm observers; same session, no snapshot.
  * @property {(element: Element) => string|null} getNodeId
+ *   getNodeId(element) -> string|null
  *   Return the active PhantomStream nid for a tracked live element, or null
  *   for untracked, skipped, disconnected, or inactive-session nodes.
  */
@@ -2512,6 +2513,8 @@ export function createCapture(config) {
 
   function getNodeId(element) {
     if (!streaming) return null;
+    if (!element || element.nodeType !== Node.ELEMENT_NODE) return null;
+    if (element.isConnected === false) return null;
     return getTrackedNodeId(element);
   }
 
