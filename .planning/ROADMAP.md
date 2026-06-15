@@ -203,9 +203,9 @@ Plans:
 
 Plans:
 **Wave 0**
-- [ ] 08-01-PLAN.md — RED shadow DOM and iframe fidelity tests
-- [ ] 08-02-PLAN.md — RED form value and late-added style tests
-- [ ] 08-03-PLAN.md — RED subtree fetch and Playwright fidelity tests
+- [x] 08-01-PLAN.md — RED shadow DOM and iframe fidelity tests
+- [x] 08-02-PLAN.md — RED form value and late-added style tests
+- [x] 08-03-PLAN.md — RED subtree fetch and Playwright fidelity tests
 
 **Wave 1** *(blocked on Wave 0)*
 - [ ] 08-04-PLAN.md — Protocol contracts and open shadow DOM implementation
@@ -296,7 +296,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 5. Playwright/CDP Adapter, Remote Control & Agent Demo | 6/6 | Complete    | 2026-06-15 |
 | 6. Extension MV3 + Bookmarklet Adapters | 5/5 | Complete   | 2026-06-15 |
 | 7. WeakMap Node Identity + Semantic Addressing API | 4/4 | Complete   | 2026-06-15 |
-| 8. Shadow DOM, Iframes & Fidelity Completion | 0/TBD | Not started | - |
+| 8. Shadow DOM, Iframes & Fidelity Completion | 3/9 | In Progress|  |
 | 9. CSSOM Capture Mode | 0/TBD | Not started | - |
 | 10. npm Packaging & 0.x Publish | 0/TBD | Not started | - |
 | 11. FSB Swap-In → 1.0 | 0/TBD | Not started | - |
