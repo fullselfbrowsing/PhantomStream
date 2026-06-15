@@ -26,7 +26,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **SEC-01**: All serialization paths (snapshot, `add`-op subtrees, `attr` ops) strip `on*` event-handler attributes and `javascript:` URLs
 - [x] **SEC-02**: Viewer renders exclusively in a sandboxed iframe without `allow-scripts`; the embed security contract is documented
 - [x] **SEC-03**: Capture-side privacy masking with rrweb-compatible vocabulary (`blockSelector`, `maskTextSelector`, `maskInputs`, custom mask fns) applied in all serialization paths — masked content never leaves the captured page
-- [ ] **SEC-04**: Remote control activation is gated by a host-provided consent/authorization hook
+- [x] **SEC-04**: Remote control activation is gated by a host-provided consent/authorization hook
 
 ### Viewer (VIEW)
 
@@ -34,7 +34,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **VIEW-02**: Host can subscribe to lifecycle/connection-state events (`connecting`/`live`/`stale`/`disconnected`) and stream-health telemetry via `on()`
 - [ ] **VIEW-03**: Host can address mirrored elements semantically through a public node-identity API (e.g. highlight/query the node an agent is about to touch)
 - [x] **VIEW-04**: Overlay channel is a documented, extensible message type — action glow and progress ship as built-ins; hosts can define custom DOM-anchored overlays
-- [ ] **VIEW-05**: Remote control works through the mirror: click/type/scroll reverse-mapped from viewer coordinates and replayed in the real tab
+- [x] **VIEW-05**: Remote control works through the mirror: click/type/scroll reverse-mapped from viewer coordinates and replayed in the real tab
 - [x] **VIEW-06**: Scroll position and native `alert`/`confirm`/`prompt` dialogs are mirrored (parity with reference)
 
 ### Transport & Relay (RELY)
@@ -125,12 +125,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SEC-01 | Phase 3 | Complete |
 | SEC-02 | Phase 3 | Complete |
 | SEC-03 | Phase 3 | Complete |
-| SEC-04 | Phase 5 | Pending |
+| SEC-04 | Phase 5 | Complete |
 | VIEW-01 | Phase 2 | Complete |
 | VIEW-02 | Phase 4 | Complete |
 | VIEW-03 | Phase 7 | Pending |
 | VIEW-04 | Phase 2 | Complete |
-| VIEW-05 | Phase 5 | Pending |
+| VIEW-05 | Phase 5 | Complete |
 | VIEW-06 | Phase 2 | Complete |
 | RELY-01 | Phase 4 | Complete |
 | RELY-02 | Phase 4 | Complete |

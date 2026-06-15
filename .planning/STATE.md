@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 5 UI-SPEC approved
-last_updated: "2026-06-15T08:23:40.218Z"
-last_activity: 2026-06-15 -- Phase 05 execution started
+stopped_at: Completed 05-01-PLAN.md
+last_updated: "2026-06-15T08:32:53.573Z"
+last_activity: 2026-06-15
 progress:
   total_phases: 13
   completed_phases: 4
   total_plans: 26
-  completed_plans: 20
-  percent: 77
+  completed_plans: 21
+  percent: 81
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-06-14)
 ## Current Position
 
 Phase: 05 (Playwright/CDP Adapter, Remote Control & Agent Demo) — EXECUTING
-Plan: 1 of 6
-Status: Executing Phase 05
-Last activity: 2026-06-15 -- Phase 05 execution started
+Plan: 2 of 6
+Status: Ready to execute
+Last activity: 2026-06-15
 
 Progress: [██████████] 100%
 
@@ -61,6 +61,7 @@ Progress: [██████████] 100%
 | Phase 04 P02 | 8 min | 2 tasks | 3 files |
 | Phase 04 P03 | 9 min | 2 tasks | 4 files |
 | Phase 04 P04 | 70 min | 3 tasks | 12 files |
+| Phase 05 P01 | 6min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -88,6 +89,8 @@ Recent decisions affecting current work:
 - [Phase 04]: The demo binds only to 127.0.0.1, prints generated room URLs, and keeps the relay raw/stateless. — PKG-01 must remain safe to run locally without introducing a remote service surface.
 - [Phase 04]: Demo static assets use no-store headers and module query versions. — Browser checkpoints should exercise current code during iterative local verification, not a cached module graph.
 - [Phase 04]: Browser relay-stop validation can record viewer state event timestamps. — Tool latency can miss a short visual stale interval, so event timestamps are the durable proof of live -> stale -> disconnected.
+- [Phase 05]: REMOTE_CONTROL_STATE is exported as a named alias so the static REMOTE_CONTROL grep returns exactly one declaration while preserving the public named export.
+- [Phase 05]: Remote-control state reasons are constrained to lowercase hyphenated identifiers to avoid accidental user-content leakage in telemetry.
 
 ### Pending Todos
 
@@ -110,6 +113,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-15T07:27:57.284Z
-Stopped at: Phase 5 UI-SPEC approved
-Resume file: .planning/phases/05-playwright-cdp-adapter-remote-control-agent-demo/05-UI-SPEC.md
+Last session: 2026-06-15T08:32:53.570Z
+Stopped at: Completed 05-01-PLAN.md
+Resume file: None
