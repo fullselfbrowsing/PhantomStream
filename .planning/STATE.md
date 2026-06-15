@@ -18,7 +18,7 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-06-14)
+See: .planning/PROJECT.md (updated 2026-06-15)
 
 **Core value:** A live, trustworthy, low-bandwidth, semantically addressable mirror of a real browser tab — capture → relay → render → remote-control must work end-to-end as a standalone framework.
 **Current focus:** Phase 8 — shadow dom, iframes & fidelity completion
@@ -151,6 +151,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-15T16:52:41.756Z
-Stopped at: Completed 07-04-PLAN.md
+Last session: 2026-06-15T17:18:34Z
+Stopped at: Phase 07 complete, ready to discuss Phase 8
 Resume file: None
