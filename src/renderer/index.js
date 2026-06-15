@@ -90,6 +90,14 @@ import { STREAM, CONTROL, isCurrentStream } from '../protocol/messages.js';
  * @property {() => {scale: Object, viewport: Object, container: Object}} getViewportMapping
  *   Return cloned scale, viewport, and container geometry for host-owned
  *   input overlays.
+ * @property {(nid: string|number) => ({nid: string, exists: boolean, rect: Object, streamSessionId: string, snapshotId: number}|null)} resolveNode
+ *   Resolve an opaque PhantomStream nid to host-document geometry and stream
+ *   identity. Missing or stale nids return null.
+ * @property {(nid: string|number, options?: {label?: string}) => boolean} highlightNode
+ *   Show or update a local host-document highlight for a resolved nid.
+ *   Returns false for stale or missing nids.
+ * @property {() => void} clearHighlight
+ *   Hide the local node highlight. Idempotent.
  * @property {(kind: string, renderFn: (payload: *, anchorRect: ?Object, layer: Element) => void) => void} registerOverlay
  *   Register a custom overlay kind (delegates to the overlays registry --
  *   the host-facing extension seam from D-10).
@@ -295,6 +303,7 @@ export function createViewer(options) {
   var destroyed = false;
   var nidToNode = new Map();
   var nodeToNid = new WeakMap();
+  var nodeHighlightEl = null;
 
   function incrementCounter(counter, type) {
     var key = typeof type === 'string' && type ? type : 'unknown';
@@ -628,6 +637,14 @@ export function createViewer(options) {
     }
   }
 
+  function hostRectForElement(el) {
+    var rect = el.getBoundingClientRect();
+    return mapRectToHost(
+      { x: rect.left, y: rect.top, w: rect.width, h: rect.height },
+      scaleState
+    );
+  }
+
   /**
    * Resolve a captured node id to a host-document overlay rect. Reads the
    * mirror contentDocument FRESH per call (never cached -- re-snapshots
@@ -641,17 +658,80 @@ export function createViewer(options) {
     try {
       var el = resolveIndexedNode(nid);
       if (!el) return null;
-      var rect = el.getBoundingClientRect();
-      return mapRectToHost(
-        { x: rect.left, y: rect.top, w: rect.width, h: rect.height },
-        scaleState
-      );
+      return hostRectForElement(el);
     } catch (err) {
       // Containment: a malformed nid (selector syntax) or a torn-down
       // mirror must never break the overlay kind loop.
       logger.warn('[Renderer] nid rect resolution failed', nid, err);
       return null;
     }
+  }
+
+  function resolveNode(nid) {
+    if (nid === undefined || nid === null) return null;
+    var key = String(nid);
+    try {
+      var el = resolveIndexedNode(key);
+      if (!el) return null;
+      var rect = hostRectForElement(el);
+      return {
+        nid: key,
+        exists: true,
+        rect: {
+          top: rect.top,
+          left: rect.left,
+          width: rect.width,
+          height: rect.height
+        },
+        streamSessionId: active.streamSessionId || '',
+        snapshotId: active.snapshotId || 0
+      };
+    } catch (err) {
+      logger.warn('[Renderer] node resolution failed', key, err);
+      return null;
+    }
+  }
+
+  function ensureNodeHighlight() {
+    if (nodeHighlightEl && nodeHighlightEl.parentNode === overlays.layer) {
+      return nodeHighlightEl;
+    }
+    nodeHighlightEl = doc.createElement('div');
+    nodeHighlightEl.className = 'ps-node-highlight';
+    nodeHighlightEl.setAttribute('aria-hidden', 'true');
+    nodeHighlightEl.style.zIndex = '15';
+    nodeHighlightEl.style.display = 'none';
+    overlays.layer.appendChild(nodeHighlightEl);
+    return nodeHighlightEl;
+  }
+
+  function clearHighlight() {
+    if (!nodeHighlightEl) return;
+    nodeHighlightEl.hidden = true;
+    nodeHighlightEl.style.display = 'none';
+    nodeHighlightEl.textContent = '';
+  }
+
+  function highlightNode(nid, options) {
+    var resolved = resolveNode(nid);
+    if (!resolved) return false;
+    var el = ensureNodeHighlight();
+    var rect = resolved.rect;
+    el.hidden = false;
+    el.style.top = rect.top + 'px';
+    el.style.left = rect.left + 'px';
+    el.style.width = rect.width + 'px';
+    el.style.height = rect.height + 'px';
+    el.style.display = 'block';
+    el.textContent = '';
+    var opts = options || {};
+    if (opts.label !== undefined && opts.label !== null && String(opts.label) !== '') {
+      var label = doc.createElement('div');
+      label.className = 'ps-node-highlight-label';
+      label.textContent = String(opts.label);
+      el.appendChild(label);
+    }
+    return true;
   }
 
   /**
@@ -678,6 +758,7 @@ export function createViewer(options) {
     resyncPending = false; // the latch's ONLY release site
     lastSnapshotAt = Date.now();
     overlays.resetOverlays();
+    clearHighlight();
     lastScroll.x = p.scrollX || 0;
     lastScroll.y = p.scrollY || 0;
     lastSnapshotPayload = p;
@@ -871,6 +952,8 @@ export function createViewer(options) {
     if (destroyed) return;
     destroyed = true;
     overlays.resetOverlays();
+    clearHighlight();
+    nodeHighlightEl = null;
     clearIdentityIndex();
     lastSnapshotPayload = null;
     active.streamSessionId = '';
@@ -898,8 +981,8 @@ export function createViewer(options) {
   /**
    * Register a custom overlay kind (delegates to the overlays registry --
    * the host-facing extension seam, D-10). Viewer state/health events live
-   * on on(); node addressing remains a later-phase surface. See
-   * overlays.register() for the
+   * on on(); semantic node addressing lives on resolveNode/highlightNode.
+   * See overlays.register() for the
    * renderFn contract (raw payload, host rect or null, layer element).
    * @param {string} kind
    * @param {(payload: *, anchorRect: ?Object, layer: Element) => void} renderFn
@@ -911,9 +994,12 @@ export function createViewer(options) {
   return {
     detach: detach,
     destroy: destroy,
+    clearHighlight: clearHighlight,
     getViewportMapping: getViewportMapping,
+    highlightNode: highlightNode,
     on: on,
-    registerOverlay: registerOverlay
+    registerOverlay: registerOverlay,
+    resolveNode: resolveNode
   };
 }
 
