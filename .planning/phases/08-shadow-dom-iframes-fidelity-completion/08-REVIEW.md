@@ -1,6 +1,6 @@
 ---
 phase: 08-shadow-dom-iframes-fidelity-completion
-reviewed: 2026-06-15T20:21:37Z
+reviewed: 2026-06-15T20:36:46Z
 depth: standard
 files_reviewed: 34
 files_reviewed_list:
@@ -40,86 +40,103 @@ files_reviewed_list:
   - tests/semantic-addressing.test.js
 findings:
   critical: 3
-  warning: 1
+  warning: 0
   info: 0
-  total: 4
+  total: 3
 status: issues_found
 ---
 
-# Phase 08: Code Review Report
+# Phase 8: Code Review Report
 
-**Reviewed:** 2026-06-15T20:21:37Z
+**Reviewed:** 2026-06-15T20:36:46Z
 **Depth:** standard
 **Files Reviewed:** 34
 **Status:** issues_found
 
 ## Summary
 
-Reviewed the Phase 8 runtime implementation, generated Playwright injection artifact, protocol/docs, and test coverage. The main defects are in the new shadow/frame sidecar paths: iframe `src` mutations bypass the inert frame policy, sidecar payloads are outside the relay budget, and frame snapshots do not carry shadow-root sidecars. These are correctness/security blockers for the fidelity completion phase.
+Re-reviewed the listed source, documentation, and tests after commit `33ae99c`. The prior iframe `src` mutation, frame-local URL resolution, and same-origin frame shadow-root fixes are present. Remaining issues are in the capture/renderer budgeting and recovery paths: the snapshot sidecar pruner can create unrecoverable missing regions, byte limits are still checked with JavaScript string length, and non-snapshot messages can exceed the relay cap.
 
 ## Critical Issues
 
-### CR-01: BLOCKER - iframe `src` mutations reintroduce live remote frames
+### CR-01: BLOCKER - Pruned frame and shadow sidecars are not recoverable
 
-**File:** `src/capture/index.js:3022`, `src/renderer/diff.js:271`, `src/adapters/playwright-inject.js:3058`
-**Issue:** Snapshot/add serialization removes iframe `src` and routes frame content through `frames[]`, but later attribute mutations use the generic attr path. A post-snapshot `iframe.setAttribute('src', 'https://remote.example/private')` emits `{ op: 'attr', attr: 'src', val: 'https://remote.example/private' }`, and the renderer applies it with `target.setAttribute`. That violates the documented Phase 8 contract that same-origin frames are inert `srcdoc` mirrors and cross-origin frames are content-free placeholders, and it can cause the viewer to fetch/render live remote iframe URLs.
+**File:** `src/capture/index.js:1911`, `src/capture/index.js:2722`, `src/renderer/index.js:1007`, `src/adapters/playwright-inject.js:1947`
+
+**Issue:** `pruneSnapshotSidecarsForBudget` removes the largest `shadowRoots` or `frames` entries from the snapshot sidecars, but the corresponding host or iframe remains in the serialized HTML as a normal element. The renderer only applies a `STREAM.SUBTREE_RESPONSE` when the target has `data-phantomstream-truncated="true"`, so a sidecar omitted for budget cannot be rehydrated through the existing subtree recovery path. The capture tests assert the sidecar was dropped and the host nid still exists, but they do not verify renderer recovery. This leaves over-budget shadow roots and same-origin frames permanently blank or missing while the payload only reports `truncated`/`missingDescendants`.
+
 **Fix:**
+
 ```js
-var attrName = String(m.attributeName || '').toLowerCase();
-var tag = m.target && m.target.tagName ? String(m.target.tagName).toLowerCase() : '';
-if (tag === 'iframe' && attrName === 'src') {
-  registerFrameLoadListener(m.target, targetNid);
-  // Emit a sanitized frame refresh/full snapshot, but never a generic ATTR src op.
-  continue;
+function pruneSnapshotSidecarsForBudget(base, budgetBytes) {
+  const omitted = { shadowHostNids: new Set(), frameNids: new Set() };
+
+  // When removing a sidecar, record the owning nid instead of silently
+  // splicing it out with no renderable placeholder.
+  const removed = base.shadowRoots.splice(largestIndex, 1)[0];
+  omitted.shadowHostNids.add(removed.hostNid);
+
+  return omitted;
+}
+
+// Before final html/nodeIds are emitted, replace each omitted host/frame in the
+// cloned document with a data-phantomstream-truncated placeholder using the
+// same nid, or add an explicit renderer response path that installs a requested
+// shadow/frame sidecar onto a non-placeholder target.
+```
+
+Add end-to-end tests that force a shadow-root sidecar and a same-origin frame sidecar to be pruned, request each omitted nid, and verify the renderer installs the returned content instead of discarding the response.
+
+### CR-02: BLOCKER - Snapshot budget checks use UTF-16 string length instead of UTF-8 relay bytes
+
+**File:** `src/capture/index.js:1899`, `src/capture/index.js:1917`, `src/adapters/playwright-inject.js:1935`, `tests/capture-shadow-dom.test.js:239`
+
+**Issue:** `jsonWireLength` returns `JSON.stringify(value).length`, and the sidecar budget loop compares that character count to `SNAPSHOT_BUDGET_BYTES`. The relay limit is byte-based, so non-ASCII content can pass the capture budget while serializing to more than the allowed byte count on the wire. The current test repeats ASCII text and also checks `.length`, so it cannot catch a snapshot that is under the character count but over the actual UTF-8 message limit.
+
+**Fix:**
+
+```js
+function wireByteLength(value) {
+  var json = JSON.stringify(value);
+  if (typeof TextEncoder !== 'undefined') {
+    return new TextEncoder().encode(json).byteLength;
+  }
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.byteLength(json, 'utf8');
+  }
+  return utf8ByteLength(json);
 }
 ```
-Also add a render-side defense in `applyMutations`: if the resolved target is an iframe and `m.attr` is `src`, remove/ignore it unless it is handled by an explicit frame-refresh operation.
 
-### CR-02: BLOCKER - frame and shadow sidecars bypass the snapshot size budget
+Use the byte-length helper for snapshot, sidecar, mutation, and subtree-response budget checks, keep the generated Playwright injection bundle synchronized, and add a non-ASCII fixture that asserts `TextEncoder().encode(JSON.stringify(payload)).byteLength <= SNAPSHOT_BUDGET_BYTES`.
 
-**File:** `src/capture/index.js:2594`, `src/capture/index.js:2634`, `src/adapters/playwright-inject.js:2630`, `src/adapters/playwright-inject.js:2670`
-**Issue:** The truncation budget still checks only `html.length`, then appends unbounded `shadowRoots[]` and `frames[]` afterward. A small top-level body with a huge same-origin iframe or shadow root can exceed the relay's hard per-message limit, causing dropped snapshots/data loss. It can also serialize sidecar content for nids whose cloned elements were replaced with truncation placeholders.
-**Fix:** Budget the complete serialized payload, including nested frame/shadow sidecars, before sending. When over budget, omit or placeholder oversized sidecars, increment `missingDescendants`, and make those regions recoverable through `CONTROL.SUBTREE_REQUEST`. Do not collect sidecars for live hosts whose clone mapping now points at a `data-phantomstream-truncated` placeholder.
+### CR-03: BLOCKER - Mutation add and subtree response payloads are unbounded
 
-### CR-03: BLOCKER - same-origin iframe snapshots omit shadow roots
+**File:** `src/capture/index.js:2877`, `src/capture/index.js:2926`, `src/capture/index.js:3050`, `src/adapters/playwright-inject.js:2913`, `src/adapters/playwright-inject.js:2962`, `src/adapters/playwright-inject.js:3086`
 
-**File:** `src/capture/index.js:1073`, `src/renderer/index.js:744`, `src/adapters/playwright-inject.js:1109`
-**Issue:** `serializeFrameDocument()` returns frame HTML, node ids, and nested frames, but never includes `shadowRoots`. The renderer's `indexFrameDocument()` indexes frame nodes and installs nested frames, but never installs frame-local shadow roots. Static open shadow DOM inside a same-origin iframe is therefore missing from the initial mirror until a later mutation happens to trigger a `shadow-root` op.
+**Issue:** The snapshot path has a sidecar budget pass, but later `childList` add mutations and `CONTROL.SUBTREE_REQUEST` responses serialize full HTML, `nodeIds`, `shadowRoots`, and `frames` without any byte-budget enforcement. A large node appended after the snapshot, or a request for a previously truncated large subtree, can produce a `STREAM.MUTATIONS` or `STREAM.SUBTREE_RESPONSE` message larger than the relay hard cap. That loses the exact content path that is supposed to recover truncation.
+
 **Fix:**
+
 ```js
-var frameShadowRoots = collectShadowRootPayloads(frameDoc.body, nodeIds);
-return {
-  frameNid: String(frameNid),
-  kind: 'same-origin',
-  html: bodyClone.innerHTML || '',
-  nodeIds: nodeIds,
-  shadowRoots: frameShadowRoots,
-  frames: nestedFrames,
-  // ...
-};
+function boundCapturePayload(payload, rootNid) {
+  if (wireByteLength(payload) <= SNAPSHOT_BUDGET_BYTES) return payload;
+
+  return {
+    html: '<div data-phantomstream-nid="' + escapeAttr(rootNid) + '" data-phantomstream-truncated="true"></div>',
+    nodeIds: [{ nid: rootNid, path: payload.nodeIds && payload.nodeIds[0] && payload.nodeIds[0].path }],
+    shadowRoots: [],
+    frames: [],
+    truncated: true,
+    missingDescendants: 1
+  };
+}
 ```
-Then, after indexing the frame document in the renderer, call `installShadowRoots(frameDoc, p.shadowRoots || [])` before installing nested frames. Update `FramePayload` docs/tests and keep `playwright-inject.js` in sync.
 
-## Warnings
-
-### WR-01: WARNING - frame-local added subtrees resolve relative URLs against the top document
-
-**File:** `src/capture/index.js:2709`, `src/capture/index.js:2731`, `src/adapters/playwright-inject.js:2745`
-**Issue:** `processAddedNode()` is now used for mutations and subtree responses inside same-origin frame documents, but its URL/srcset absolutification calls omit the `baseDoc` argument. Relative URLs in frame-local added content are resolved against the top-level `document.baseURI`, and the live frame DOM is mutated to those wrong absolute URLs.
-**Fix:**
-```js
-var baseDoc = el.ownerDocument || document;
-if (val) el.setAttribute(URL_ATTRS[a], absolutifyUrl(val, baseDoc));
-if (srcset) el.setAttribute('srcset', absolutifySrcset(srcset, baseDoc));
-
-var descDoc = desc.ownerDocument || baseDoc;
-if (dv) desc.setAttribute(URL_ATTRS[b], absolutifyUrl(dv, descDoc));
-if (ds) desc.setAttribute('srcset', absolutifySrcset(ds, descDoc));
-```
-Apply the same base-document discipline to frame metadata helpers such as `safeFrameSrc` / `safeFrameOrigin` when handling nested iframes.
+Apply the same byte-budget guard before emitting add mutation payloads and before sending `STREAM.SUBTREE_RESPONSE`. If a requested subtree cannot fit, return a bounded recoverable placeholder, a `too-large` status, or a chunked response protocol; do not send an over-cap `ok` response. Add tests for late-added large shadow/frame content and for requesting a huge truncated subtree.
 
 ---
 
-_Reviewed: 2026-06-15T20:21:37Z_
+_Reviewed: 2026-06-15T20:36:46Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: standard_
