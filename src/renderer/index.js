@@ -53,6 +53,9 @@ import { STREAM, CONTROL, NID_ATTR, isCurrentStream } from '../protocol/messages
  * @property {(handler: (type: string, payload: Object) => void) => (() => void)} onMessage
  *   Subscribe to capture-host -> viewer (STREAM.*) messages. Returns an
  *   unsubscribe function; detach() invokes it.
+ * @property {(handler: (status: Object) => void) => (() => void)} [onStatus]
+ *   Optional Phase 4 status subscription implemented by WebSocket transports.
+ *   Status objects are telemetry only; mirrored payloads never flow here.
  */
 
 /**
@@ -72,6 +75,9 @@ import { STREAM, CONTROL, NID_ATTR, isCurrentStream } from '../protocol/messages
  *   or onMessage is not a function.
  * @property {ViewerLogger} [logger]
  *   Optional. Defaults to a console-backed logger.
+ * @property {number} [disconnectDelayMs]
+ *   Optional stale-to-disconnected delay for closed transports. Defaults to a
+ *   short demo-friendly window; tests may set a smaller value.
  */
 
 /**
@@ -84,6 +90,8 @@ import { STREAM, CONTROL, NID_ATTR, isCurrentStream } from '../protocol/messages
  * @property {(kind: string, renderFn: (payload: *, anchorRect: ?Object, layer: Element) => void) => void} registerOverlay
  *   Register a custom overlay kind (delegates to the overlays registry --
  *   the host-facing extension seam from D-10).
+ * @property {(eventName: 'state', handler: (event: Object) => void) => (() => void)} on
+ *   Subscribe to host-facing lifecycle events. Returns unsubscribe.
  */
 
 /**
@@ -143,6 +151,9 @@ export function createViewer(options) {
     warn: function () { console.warn.apply(console, arguments); },
     error: function () { console.error.apply(console, arguments); }
   };
+  var disconnectDelayMs = typeof cfg.disconnectDelayMs === 'number'
+    ? Math.max(0, cfg.disconnectDelayMs)
+    : 750;
 
   // All DOM construction happens in the container's own document so the
   // viewer works in any window (host page, jsdom test, future multi-doc).
@@ -243,6 +254,14 @@ export function createViewer(options) {
 
   // --- Viewer state (reference module state -> factory closure state) ---
   var viewerState = 'waiting'; // 'waiting' | 'streaming' minimal gate
+  var publicState = 'connecting'; // 'connecting' | 'live' | 'stale' | 'disconnected'
+  var publicStateEvent = {
+    state: publicState,
+    reason: 'viewer-created',
+    ts: Date.now()
+  };
+  var stateListeners = new Set();
+  var disconnectTimer = null;
   var active = { streamSessionId: '', snapshotId: 0 };
   var lastScroll = { x: 0, y: 0 };
   var counters = { staleMisses: 0, applyFailures: 0 };
@@ -261,6 +280,71 @@ export function createViewer(options) {
   var scaleState = computeScale(1920, 1080, container.clientWidth, container.clientHeight);
   var detached = false;
   var destroyed = false;
+
+  function cloneStateEvent(event) {
+    return {
+      state: event.state,
+      reason: event.reason,
+      ts: event.ts
+    };
+  }
+
+  function notifyState() {
+    var event = cloneStateEvent(publicStateEvent);
+    stateListeners.forEach(function (handler) {
+      try {
+        handler(cloneStateEvent(event));
+      } catch (err) {
+        logger.error('[Renderer] event handler failed', 'state', err);
+      }
+    });
+  }
+
+  function clearDisconnectTimer() {
+    if (!disconnectTimer) return;
+    clearTimeout(disconnectTimer);
+    disconnectTimer = null;
+  }
+
+  function setPublicState(state, reason) {
+    if (state !== 'connecting' && state !== 'live' &&
+        state !== 'stale' && state !== 'disconnected') {
+      return;
+    }
+    if (state !== 'stale') clearDisconnectTimer();
+    if (publicState === state) return;
+    publicState = state;
+    publicStateEvent = {
+      state: state,
+      reason: reason || '',
+      ts: Date.now()
+    };
+    notifyState();
+  }
+
+  function scheduleDisconnected(reason) {
+    clearDisconnectTimer();
+    disconnectTimer = setTimeout(function () {
+      disconnectTimer = null;
+      if (detached || destroyed || publicState !== 'stale') return;
+      setPublicState('disconnected', reason || 'transport-closed');
+    }, disconnectDelayMs);
+  }
+
+  function on(eventName, handler) {
+    if (eventName !== 'state' || typeof handler !== 'function') {
+      throw new Error('viewer-event-unsupported');
+    }
+    stateListeners.add(handler);
+    try {
+      handler(cloneStateEvent(publicStateEvent));
+    } catch (err) {
+      logger.error('[Renderer] event handler failed', eventName, err);
+    }
+    return function unsubscribeViewerEvent() {
+      stateListeners.delete(handler);
+    };
+  }
 
   /**
    * Deliver one CONTROL message through the injected transport. Capture-
@@ -295,10 +379,44 @@ export function createViewer(options) {
   function requestResync(reason, details) {
     if (resyncPending) return;
     resyncPending = true;
+    setPublicState('stale', reason || 'preview-resync');
     safeSend(CONTROL.START, {
       trigger: 'preview-resync',
       reason: reason || 'unknown'
     });
+  }
+
+  function markLive(reason) {
+    setPublicState('live', reason || 'frame');
+  }
+
+  function handleTransportStatus(status) {
+    if (detached) return;
+    var s = status && (status.state || status.status);
+    if (s === 'closed') {
+      setPublicState('stale', 'transport-closed');
+      scheduleDisconnected('transport-closed');
+    } else if (s === 'reconnecting' || s === 'error') {
+      setPublicState('stale', 'transport-' + s);
+    } else if (s === 'open' || s === 'connected') {
+      if (viewerState === 'streaming' || lastSnapshotPayload) {
+        markLive('transport-open');
+      } else {
+        setPublicState('connecting', 'transport-open');
+      }
+    } else if (s === 'connecting') {
+      if (publicState !== 'live') setPublicState('connecting', 'transport-connecting');
+    }
+  }
+
+  function handleStreamState(payload) {
+    var p = payload || {};
+    var state = p.state || p.status;
+    if (state !== 'connecting' && state !== 'live' &&
+        state !== 'stale' && state !== 'disconnected') {
+      return;
+    }
+    setPublicState(state, p.reason || 'stream-state');
   }
 
   /**
@@ -377,6 +495,7 @@ export function createViewer(options) {
     lastScroll.y = p.scrollY || 0;
     lastSnapshotPayload = p;
     iframe.srcdoc = buildSnapshotHtml(p);
+    markLive('snapshot');
   }
 
   /**
@@ -396,6 +515,7 @@ export function createViewer(options) {
       requestResync: requestResync,
       sanitizeCounters: sanitizeCounters
     });
+    if (!resyncPending) markLive('mutations');
     try {
       iframe.contentWindow.scrollTo(lastScroll.x, lastScroll.y);
     } catch (e) { /* ignore: scroll maintenance is best-effort */ }
@@ -413,6 +533,7 @@ export function createViewer(options) {
     lastScroll.x = (payload && payload.scrollX) || 0;
     lastScroll.y = (payload && payload.scrollY) || 0;
     if (viewerState !== 'streaming') return;
+    markLive('scroll');
     try {
       iframe.contentWindow.scrollTo({
         left: lastScroll.x,
@@ -434,6 +555,7 @@ export function createViewer(options) {
       scale: scaleState,
       resolveNidRect: resolveNidRect
     });
+    markLive('overlay');
   }
 
   /**
@@ -448,6 +570,7 @@ export function createViewer(options) {
     if (viewerState !== 'streaming') return;
     if (!isCurrentStream(payload, active)) return;
     overlays.handleDialogMessage(payload);
+    markLive('dialog');
   }
 
   /**
@@ -477,6 +600,9 @@ export function createViewer(options) {
         case STREAM.DIALOG:
           handleDialog(payload);
           break;
+        case STREAM.STATE:
+          handleStreamState(payload);
+          break;
         default:
           break;
       }
@@ -486,6 +612,10 @@ export function createViewer(options) {
   }
 
   var unsubscribe = transport.onMessage(dispatch);
+  var unsubscribeStatus = null;
+  if (typeof transport.onStatus === 'function') {
+    unsubscribeStatus = transport.onStatus(handleTransportStatus);
+  }
 
   // --- Resize wiring (dashboard.js:3194-3207): window resize listener
   // plus a typeof-guarded ResizeObserver on the container (jsdom lacks
@@ -518,6 +648,12 @@ export function createViewer(options) {
     } catch (err) {
       logger.error('[Renderer] transport unsubscribe failed', err);
     }
+    try {
+      if (typeof unsubscribeStatus === 'function') unsubscribeStatus();
+    } catch (err) {
+      logger.error('[Renderer] transport status unsubscribe failed', err);
+    }
+    clearDisconnectTimer();
     if (win && typeof win.removeEventListener === 'function') {
       win.removeEventListener('resize', onWindowResize);
     }
@@ -550,14 +686,15 @@ export function createViewer(options) {
     sanitizeCounters.droppedSubtrees = 0;
     sanitizeCounters.cssScrubs = 0;
     resyncPending = false;
+    stateListeners.clear();
     viewerState = 'waiting';
   }
 
   /**
    * Register a custom overlay kind (delegates to the overlays registry --
-   * the host-facing extension seam, D-10). The handle stays minimal per
-   * D-01: no events, no addressing; this is THIS phase's locked overlay
-   * decision, not a later-phase surface. See overlays.register() for the
+   * the host-facing extension seam, D-10). Viewer state/health events live
+   * on on(); node addressing remains a later-phase surface. See
+   * overlays.register() for the
    * renderFn contract (raw payload, host rect or null, layer element).
    * @param {string} kind
    * @param {(payload: *, anchorRect: ?Object, layer: Element) => void} renderFn
@@ -569,6 +706,7 @@ export function createViewer(options) {
   return {
     detach: detach,
     destroy: destroy,
+    on: on,
     registerOverlay: registerOverlay
   };
 }
