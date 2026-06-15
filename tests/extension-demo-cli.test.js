@@ -67,11 +67,22 @@ test('startExtensionDemoServer binds local host and returns extension demo contr
 
     const serviceWorker = await readFile(join(demo.extensionDir, 'service-worker.js'), 'utf8');
     const contentScript = await readFile(join(demo.extensionDir, 'content-script.js'), 'utf8');
+    const pageBridge = await readFile(join(demo.extensionDir, 'page-bridge.js'), 'utf8');
+    const browserInject = await readFile(join(demo.extensionDir, 'browser-inject.js'), 'utf8');
     assert.match(serviceWorker, /phantomstream-watchdog/);
     assert.match(serviceWorker, /mv3-watchdog-resnapshot/);
-    assert.match(contentScript, /window\.__phantomStreamBridge/);
+    assert.match(serviceWorker, /chrome\.scripting\.executeScript/);
+    assert.match(serviceWorker, /world:"MAIN"/);
+    assert.match(contentScript, /phantomstream:init/);
     assert.match(contentScript, /window\.postMessage/);
     assert.match(contentScript, /chrome\.runtime\.sendMessage/);
+    assert.equal(contentScript.includes('script.text'), false);
+    assert.equal(contentScript.includes('textContent'), false);
+    assert.match(pageBridge, /window\.__phantomStreamBridge/);
+    assert.match(pageBridge, /__phantomStreamDisableDialogInterceptor/);
+    assert.match(pageBridge, /window\.postMessage/);
+    assert.match(browserInject, /window\.__phantomStreamStart/);
+    assert.match(browserInject, /__phantomStreamDisableDialogInterceptor/);
   });
 });
 

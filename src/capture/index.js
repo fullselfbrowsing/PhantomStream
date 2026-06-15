@@ -658,6 +658,7 @@ export function createCapture(config) {
    */
   function injectDialogInterceptor() {
     // Only inject once
+    if (window.__phantomStreamDisableDialogInterceptor) return;
     if (document.getElementById('fsb-dialog-interceptor')) return;
 
     var script = document.createElement('script');

@@ -1,8 +1,8 @@
 ---
 phase: 06-extension-mv3-bookmarklet-adapters
-verified: 2026-06-15T10:52:43Z
-status: human_needed
-score: "7/7 automated must-haves verified; 5 browser checks pending"
+verified: 2026-06-15T13:51:11Z
+status: complete
+score: "7/7 automated must-haves verified; 3/5 browser UAT checks passed, 2 skipped by user"
 overrides_applied: 0
 human_verification:
   - test: "Load the generated MV3 extension fixture in Chromium and confirm the service worker starts cleanly"
@@ -36,15 +36,15 @@ test_evidence:
   - command: "gsd-sdk query verify.codebase-drift"
     result: "WARN only, non-blocking structural drift detected under examples and project files"
 browser_checkpoint:
-  status: human_needed
-  evidence: "06-BROWSER-VERIFICATION.md records generated extension-demo and bookmarklet-demo commands plus pending browser evidence rows. No browser was opened in this session."
+  status: complete_with_skips
+  evidence: "06-HUMAN-UAT.md records MV3 extension load, MV3 live mirror, and bookmarklet live mirror as passed. MV3 watchdog recovery and bookmarklet blocked-injection diagnostics were skipped by user instruction."
 ---
 
 # Phase 06: Extension MV3 + Bookmarklet Adapters Verification Report
 
 **Phase Goal:** The remaining injection contexts work - the extension content-script path FSB will swap onto, plus the bookmarklet loader.
-**Verified:** 2026-06-15T10:52:43Z
-**Status:** human_needed
+**Verified:** 2026-06-15T13:51:11Z
+**Status:** complete
 
 ## Goal Achievement
 
@@ -62,21 +62,21 @@ browser_checkpoint:
 
 **Automated score:** 7/7 must-haves verified.
 
-### Browser Truths Requiring Human Verification
+### Browser Truths
 
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| 1 | A real loaded MV3 extension mirrors source to viewer in Chromium. | HUMAN NEEDED | `06-BROWSER-VERIFICATION.md` has the generated extension directory/source/viewer evidence, but no Chromium extension load was performed in this session. |
-| 2 | Forced or natural MV3 service-worker restart recovers via watchdog-triggered resnapshot. | HUMAN NEEDED | Unit tests cover alarm rehydration; real service-worker eviction/restart still requires a browser runtime check. |
-| 3 | Executing the generated bookmarklet in a browser produces a live mirror and mutation updates. | HUMAN NEEDED | `06-BROWSER-VERIFICATION.md` records the generated bookmarklet and URLs, but the bookmarklet was not executed in a browser in this session. |
-| 4 | Bookmarklet policy-block diagnostics are visible and content-free. | HUMAN NEEDED | Generated source and loader emit `phantomstream:bookmarklet-error`; a browser policy/CSP block path still needs manual exercise. |
+| 1 | A real loaded MV3 extension mirrors source to viewer in Chromium. | VERIFIED | `06-HUMAN-UAT.md` records the extension load and live mirror checks as passed. FSB saw page-world bridge functions after reload; Playwright confirmed the viewer iframe contained `Row 2` after source mutation. |
+| 2 | Forced or natural MV3 service-worker restart recovers via watchdog-triggered resnapshot. | SKIPPED | User deferred this UAT checkpoint. Unit tests still cover alarm rehydration and `mv3-watchdog-resnapshot`. |
+| 3 | Executing the generated bookmarklet in a browser produces a live mirror and mutation updates. | VERIFIED | FSB executed the generated bookmarklet loader on the source page, confirmed bridge/start/stop functions, then verified the viewer iframe contained `Row 2` after `Add row`. |
+| 4 | Bookmarklet policy-block diagnostics are visible and content-free. | SKIPPED | User asked to move on during UAT. Generated source and loader still emit `phantomstream:bookmarklet-error`; automated tests cover the content-free failure event shape. |
 
 ## Requirements Coverage
 
 | Requirement | Status | Evidence |
 |-------------|--------|----------|
-| ADPT-01 | SATISFIED, pending browser evidence | `src/adapters/extension.js`, `examples/extension-mv3/server.js`, package export, adapter tests, demo CLI tests, and watchdog tests exist and pass. Real Chromium extension load and watchdog restart evidence remains in HUMAN-UAT. |
-| ADPT-03 | SATISFIED, pending browser evidence | `src/adapters/bookmarklet.js`, `examples/bookmarklet-demo/server.js`, package export, adapter tests, demo CLI tests, loader diagnostics, and no-eval assertions exist and pass. Real browser bookmarklet execution remains in HUMAN-UAT. |
+| ADPT-01 | SATISFIED | `src/adapters/extension.js`, `examples/extension-mv3/server.js`, package export, adapter tests, demo CLI tests, watchdog tests, and passed MV3 load/live-mirror UAT exist. Real watchdog-recovery UAT was skipped by user instruction. |
+| ADPT-03 | SATISFIED | `src/adapters/bookmarklet.js`, `examples/bookmarklet-demo/server.js`, package export, adapter tests, demo CLI tests, loader diagnostics, no-eval assertions, and passed bookmarklet live-mirror UAT exist. Blocked-injection browser diagnostics UAT was skipped by user instruction. |
 
 No orphaned Phase 06 requirement IDs were found in `.planning/REQUIREMENTS.md`; ADPT-01 and ADPT-03 are both mapped to Phase 6 and marked Complete.
 
@@ -98,7 +98,7 @@ No orphaned Phase 06 requirement IDs were found in `.planning/REQUIREMENTS.md`; 
 | `tests/bookmarklet-adapter.test.js` | Bookmarklet source/loader/diagnostic/no-eval coverage | VERIFIED |
 | `tests/extension-demo-cli.test.js` | Extension demo server, fixture, no-store, and CLI output coverage | VERIFIED |
 | `tests/bookmarklet-demo-cli.test.js` | Bookmarklet demo server, loader, no-store, and CLI output coverage | VERIFIED |
-| `06-BROWSER-VERIFICATION.md` | Browser evidence checklist | VERIFIED, pending human execution |
+| `06-HUMAN-UAT.md` | Browser evidence checklist | VERIFIED, complete with skips |
 | `06-REVIEW.md` | Code review report | VERIFIED |
 
 ## Key Link Verification
@@ -122,8 +122,8 @@ No orphaned Phase 06 requirement IDs were found in `.planning/REQUIREMENTS.md`; 
 | Schema drift gate | `gsd-sdk query verify.schema-drift 06` | `drift_detected=false`, `blocking=false` | PASS |
 | Codebase drift gate | `gsd-sdk query verify.codebase-drift` | Non-blocking warn: structural additions under `.github`, `.gitignore`, `CLAUDE.md`, `LICENSE`, `examples`, `package-lock.json` | WARN |
 | Code review | `06-REVIEW.md` | Clean after fixing the extension demo page-world bridge issue in commit `6050401` | PASS |
-| Extension demo browser checkpoint | `06-BROWSER-VERIFICATION.md` | Generated command output recorded; browser not opened | HUMAN NEEDED |
-| Bookmarklet demo browser checkpoint | `06-BROWSER-VERIFICATION.md` | Generated command output and bookmarklet recorded; browser not opened | HUMAN NEEDED |
+| Extension demo browser checkpoint | `06-HUMAN-UAT.md` | Extension load and live mirror passed; watchdog recovery skipped by user | PASS WITH SKIP |
+| Bookmarklet demo browser checkpoint | `06-HUMAN-UAT.md` | Bookmarklet live mirror passed; blocked-injection diagnostics skipped by user | PASS WITH SKIP |
 
 ## Test Quality Audit
 
@@ -145,50 +145,51 @@ No orphaned Phase 06 requirement IDs were found in `.planning/REQUIREMENTS.md`; 
 |------|---------|----------|--------|
 | none | No blocking TODO/stub/placeholder markers found in Phase 6 source or tests | - | Intended throw paths and test assertions for `eval(` / `Function(` are not implementation gaps. |
 
-## Human Verification Required
+## Human Verification Outcomes
 
 ### 1. Load generated MV3 extension fixture
 
 **Test:** Run `node bin/phantom-stream.js extension-demo --port 0 --no-open`, open Chromium extension management, load the printed `Extension directory`, and inspect the service-worker console.
 **Expected:** The extension loads cleanly, no service-worker console errors appear, and the `phantomstream-watchdog` alarm is registered.
-**Why human:** Requires real Chromium extension loading and extension DevTools inspection.
+**Result:** PASS in `06-HUMAN-UAT.md`.
 
 ### 2. Verify MV3 extension live mirror
 
 **Test:** With the unpacked extension enabled, open the printed extension demo source and viewer URLs, then click `Add row` or `Edit text` on the source page.
 **Expected:** The viewer receives the initial snapshot and then reflects source mutations.
-**Why human:** Node fakes cannot prove Chrome content-script injection and page-world bridge execution.
+**Result:** PASS in `06-HUMAN-UAT.md`.
 
 ### 3. Verify MV3 watchdog recovery
 
 **Test:** Stop/evict the extension service worker or wait/fire the watchdog alarm while the demo is active.
 **Expected:** The extension requests a fresh `CONTROL.START` with reason `mv3-watchdog-resnapshot`, and the viewer returns to live mirrored state.
-**Why human:** Real service-worker eviction and alarm lifecycle behavior are browser runtime concerns.
+**Result:** SKIPPED by user in `06-HUMAN-UAT.md`; covered by automated adapter tests only.
 
 ### 4. Execute generated bookmarklet
 
 **Test:** Run `node bin/phantom-stream.js bookmarklet-demo --port 0 --no-open`, open the printed source and viewer URLs, execute the printed bookmarklet on the source page, then click `Add row` or `Edit text`.
 **Expected:** `window.__phantomStreamBridge` installs, the viewer receives an initial snapshot, and source mutations appear in the viewer.
-**Why human:** Node tests validate source shape and loader code but not browser bookmarklet execution.
+**Result:** PASS in `06-HUMAN-UAT.md`.
 
 ### 5. Verify bookmarklet blocked-injection diagnostics
 
 **Test:** Exercise the bookmarklet on a page or policy setup that blocks script injection or loader fetch.
 **Expected:** The page emits `phantomstream:bookmarklet-error` with a content-free reason such as `script-load-failed`.
-**Why human:** Requires a browser-enforced policy/CSP block.
+**Result:** SKIPPED by user in `06-HUMAN-UAT.md`; generated source and loader diagnostics remain covered by automated tests.
 
 ## Gaps Summary
 
-No implementation gaps found. Automated checks verify adapter exports, MV3 storage/watchdog behavior, extension/bookmarklet demo server contracts, and bookmarklet loader safety. Browser-only evidence remains pending and has been persisted to `06-HUMAN-UAT.md`.
+No implementation gaps found. Automated checks verify adapter exports, MV3 storage/watchdog behavior, extension/bookmarklet demo server contracts, and bookmarklet loader safety. Browser UAT passed the MV3 live mirror and bookmarklet live mirror paths; the MV3 watchdog recovery and blocked-injection diagnostics checkpoints were explicitly skipped by user instruction.
 
 ## Non-Blocking Follow-Ups
 
 | Item | Status | Recommendation |
 |------|--------|----------------|
 | Codebase drift warning | advisory | Run `$gsd-map-codebase --paths .github,.gitignore,CLAUDE.md,LICENSE,examples,package-lock.json` when refreshing planning context. |
-| Browser evidence | pending | Run `$gsd-verify-work 06` or manually complete `06-HUMAN-UAT.md` after executing the Chromium extension/bookmarklet checks. |
+| Skipped watchdog browser recovery | deferred | Re-run `$gsd-verify-work 06` later if real MV3 service-worker eviction evidence is required. |
+| Skipped bookmarklet policy-block diagnostic | deferred | Re-run `$gsd-verify-work 06` later if real browser CSP/policy-block evidence is required. |
 
 ---
 
-_Verified: 2026-06-15T10:52:43Z_
+_Verified: 2026-06-15T13:51:11Z_
 _Verifier: Codex (local gsd-verifier fallback)_

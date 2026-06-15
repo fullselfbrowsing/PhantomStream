@@ -12,6 +12,7 @@ import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { getBrowserInjectSource } from '../../src/adapters/browser-inject.js';
+import { CONTROL } from '../../src/protocol/messages.js';
 import { createRelay, createWebSocketRelayBackend } from '../../src/relay/index.js';
 
 const ROOT = resolve(fileURLToPath(new URL('../../', import.meta.url)));
@@ -136,7 +137,9 @@ async function createExtensionFixture() {
   await Promise.all([
     writeFile(join(extensionDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n', 'utf8'),
     writeFile(join(extensionDir, 'service-worker.js'), createServiceWorkerSource(), 'utf8'),
-    writeFile(join(extensionDir, 'content-script.js'), createContentScriptSource(), 'utf8')
+    writeFile(join(extensionDir, 'content-script.js'), createContentScriptSource(), 'utf8'),
+    writeFile(join(extensionDir, 'page-bridge.js'), createPageBridgeSource(), 'utf8'),
+    writeFile(join(extensionDir, 'browser-inject.js'), getBrowserInjectSource(), 'utf8')
   ]);
   return extensionDir;
 }
@@ -150,7 +153,8 @@ function createServiceWorkerSource() {
     "function getSocket(wsUrl){var socket=sockets.get(wsUrl);if(socket&&socket.readyState<=1)return socket;socket=new WebSocket(wsUrl);sockets.set(wsUrl,socket);return socket;}",
     "function sendFrame(wsUrl,type,payload){if(!wsUrl)return;var socket=getSocket(wsUrl);var frame=JSON.stringify({type:type,payload:payload||{},ts:Date.now()});if(socket.readyState===1){socket.send(frame);return;}socket.addEventListener('open',function sendWhenOpen(){try{socket.send(frame);}catch(e){}},{once:true});}",
     "async function persistIntent(wsUrl,tabId){await chrome.storage.session.set({[PHANTOMSTREAM_SESSION_KEY]:{roomKey:null,wsUrl:wsUrl||null,tabId:typeof tabId==='number'?tabId:null,streamingActive:true,lifecycleIntent:CONTROL_START,pendingResnapshotReason:null,updatedAt:Date.now()}});}",
-    "chrome.runtime.onMessage.addListener(function(request,sender){if(!request||request.type!=='phantomstream:bridge'||!request.message)return;var tabId=sender&&sender.tab?sender.tab.id:null;persistIntent(request.wsUrl,tabId).catch(function(){});sendFrame(request.wsUrl,request.message.type,request.message.payload||{});return true;});",
+    "async function injectPageScripts(tabId){if(typeof tabId!=='number')return;await chrome.scripting.executeScript({target:{tabId:tabId},world:\"MAIN\",files:[\"page-bridge.js\"]});await chrome.scripting.executeScript({target:{tabId:tabId},world:\"MAIN\",files:[\"browser-inject.js\"]});}",
+    "chrome.runtime.onMessage.addListener(function(request,sender){if(!request)return false;var tabId=sender&&sender.tab?sender.tab.id:null;if(request.type==='phantomstream:init'){injectPageScripts(tabId).catch(function(){});return true;}if(request.type!=='phantomstream:bridge'||!request.message)return false;persistIntent(request.wsUrl,tabId).catch(function(){});sendFrame(request.wsUrl,request.message.type,request.message.payload||{});return true;});",
     "chrome.alarms.create(PHANTOMSTREAM_WATCHDOG_ALARM,{periodInMinutes:1});",
     "chrome.alarms.onAlarm.addListener(async function(alarm){if(!alarm||alarm.name!==PHANTOMSTREAM_WATCHDOG_ALARM)return;var out=await chrome.storage.session.get(PHANTOMSTREAM_SESSION_KEY);var state=out&&out[PHANTOMSTREAM_SESSION_KEY];if(!state||!state.streamingActive||typeof state.tabId!=='number')return;state.pendingResnapshotReason='mv3-watchdog-resnapshot';state.updatedAt=Date.now();await chrome.storage.session.set({[PHANTOMSTREAM_SESSION_KEY]:state});chrome.tabs.sendMessage(state.tabId,{type:'phantomstream:control',message:{type:CONTROL_START,payload:{reason:'mv3-watchdog-resnapshot'}}}).catch(function(){});});",
     ''
@@ -162,16 +166,24 @@ function createContentScriptSource() {
     '(function(){',
     'var wsUrl=new URL(window.location.href).searchParams.get("ws");',
     'window.addEventListener("message",function(event){try{if(event.source!==window)return;var data=event.data||{};if(data.source!=="phantomstream-extension-demo"||data.type!=="phantomstream:bridge")return;var result=chrome.runtime.sendMessage({type:"phantomstream:bridge",message:data.message,wsUrl:wsUrl});if(result&&typeof result.catch==="function")result.catch(function(){});}catch(e){}});',
-    'var pageBridge="(function(){window.__phantomStreamBridge=function(msg){try{window.postMessage({source:\\"phantomstream-extension-demo\\",type:\\"phantomstream:bridge\\",message:msg},window.location.origin);}catch(e){}};}());";',
-    'var bridgeScript=document.createElement("script");',
-    'bridgeScript.text=pageBridge;',
-    '(document.documentElement||document.head||document.body).appendChild(bridgeScript);',
-    'if(bridgeScript.parentNode)bridgeScript.parentNode.removeChild(bridgeScript);',
-    'var source=', JSON.stringify(getBrowserInjectSource()), ';',
-    'var script=document.createElement("script");',
-    'script.text=source;',
-    '(document.documentElement||document.head||document.body).appendChild(script);',
-    'if(script.parentNode)script.parentNode.removeChild(script);',
+    'chrome.runtime.onMessage.addListener(function(request){try{if(!request||request.type!=="phantomstream:control"||!request.message)return;window.postMessage({source:"phantomstream-extension-demo",type:"phantomstream:control",message:request.message},window.location.origin);}catch(e){}});',
+    'var ready=chrome.runtime.sendMessage({type:"phantomstream:init",wsUrl:wsUrl});',
+    'if(ready&&typeof ready.catch==="function")ready.catch(function(){});',
+    '}());',
+    ''
+  ].join('');
+}
+
+function createPageBridgeSource() {
+  return [
+    '(function(){',
+    'window.__phantomStreamDisableDialogInterceptor=true;',
+    'window.__phantomStreamBridge=function(msg){try{window.postMessage({source:"phantomstream-extension-demo",type:"phantomstream:bridge",message:msg},window.location.origin);}catch(e){}};',
+    'window.addEventListener("message",function(event){try{if(event.source!==window)return;var data=event.data||{};if(data.source!=="phantomstream-extension-demo"||data.type!=="phantomstream:control")return;var message=data.message||{};if(message.type===', JSON.stringify(CONTROL.START), '&&window.__phantomStreamStart)window.__phantomStreamStart();',
+    'else if(message.type===', JSON.stringify(CONTROL.STOP), '&&window.__phantomStreamStop)window.__phantomStreamStop();',
+    'else if(message.type===', JSON.stringify(CONTROL.PAUSE), '&&window.__phantomStreamCapture&&window.__phantomStreamCapture.pause)window.__phantomStreamCapture.pause();',
+    'else if(message.type===', JSON.stringify(CONTROL.RESUME), '&&window.__phantomStreamCapture&&window.__phantomStreamCapture.resume)window.__phantomStreamCapture.resume();',
+    '}catch(e){}});',
     '}());',
     ''
   ].join('');
