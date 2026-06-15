@@ -214,7 +214,7 @@ Plans:
 - [x] 08-05-PLAN.md — Same-origin iframe mirroring and cross-origin placeholders
 
 **Wave 3** *(blocked on 08-05)*
-- [ ] 08-06-PLAN.md — Live value diffs and late-added computed styles
+- [x] 08-06-PLAN.md — Live value diffs and late-added computed styles
 
 **Wave 4** *(blocked on 08-06)*
 - [ ] 08-07-PLAN.md — Bounded on-demand subtree fetch
@@ -296,7 +296,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 5. Playwright/CDP Adapter, Remote Control & Agent Demo | 6/6 | Complete    | 2026-06-15 |
 | 6. Extension MV3 + Bookmarklet Adapters | 5/5 | Complete   | 2026-06-15 |
 | 7. WeakMap Node Identity + Semantic Addressing API | 4/4 | Complete   | 2026-06-15 |
-| 8. Shadow DOM, Iframes & Fidelity Completion | 5/9 | In Progress|  |
+| 8. Shadow DOM, Iframes & Fidelity Completion | 6/9 | In Progress|  |
 | 9. CSSOM Capture Mode | 0/TBD | Not started | - |
 | 10. npm Packaging & 0.x Publish | 0/TBD | Not started | - |
 | 11. FSB Swap-In → 1.0 | 0/TBD | Not started | - |
