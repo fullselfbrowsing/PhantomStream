@@ -180,6 +180,7 @@ test('viewer resolves and locally highlights nodes by opaque nid', () => {
         'highlightNode',
         'on',
         'registerOverlay',
+        'requestSubtree',
         'resolveNode',
       ],
       'viewer exposes semantic addressing methods on the public handle'
