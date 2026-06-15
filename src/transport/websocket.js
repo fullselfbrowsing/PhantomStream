@@ -486,7 +486,8 @@ export function createWebSocketTransport(options) {
   }
 
   async function handleMessage(event) {
-    var decoded = await decodeWireMessage(event && Object.prototype.hasOwnProperty.call(event, 'data') ? event.data : event, cfg);
+    var raw = event && Object(event) === event && 'data' in event ? event.data : event;
+    var decoded = await decodeWireMessage(raw, cfg);
     if (!decoded.ok) {
       recordError(decoded.error);
       emitStatus('error', { reason: decoded.error });

@@ -317,6 +317,28 @@ test('inbound plain native and legacy frames fan out to subscribers', async () =
   assert.deepEqual(second.map((entry) => entry.payload), [{ a: 1 }, { b: 2 }, { c: 3 }]);
 });
 
+test('browser MessageEvent data getters are decoded', async () => {
+  const FakeWebSocket = createFakeWebSocketClass();
+  const transport = createWebSocketTransport({
+    url: 'ws://example.test/ws',
+    WebSocket: FakeWebSocket
+  });
+  const ws = FakeWebSocket.instances[0];
+  const received = [];
+  transport.onMessage((type, payload) => received.push({ type, payload }));
+
+  const event = Object.create({
+    get data() {
+      return JSON.stringify({ type: 'ext:dom-mutations', payload: { ok: true }, ts: 10 });
+    }
+  });
+  ws.emit('message', event);
+  await tick();
+
+  assert.deepEqual(received, [{ type: 'ext:dom-mutations', payload: { ok: true } }]);
+  assert.equal(transport.getHealth().errors.length, 0);
+});
+
 test('status subscribers receive lifecycle states and unsubscribe', () => {
   const FakeWebSocket = createFakeWebSocketClass();
   const transport = createWebSocketTransport({
