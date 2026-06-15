@@ -154,7 +154,7 @@ Plans:
 
 **Wave 1** *(blocked on 05-01)*
 - [x] 05-02-PLAN.md — Playwright/CDP adapter, single-file inject artifact, authorization gate, and driver-native replay
-- [ ] 05-03-PLAN.md — Renderer inverse coordinate mapping and viewer mapping getter for host-owned control overlays
+- [x] 05-03-PLAN.md — Renderer inverse coordinate mapping and viewer mapping getter for host-owned control overlays
 
 **Wave 2** *(blocked on 05-02)*
 - [ ] 05-04-PLAN.md — Local-only Playwright demo server, `playwright-demo` CLI command, package wiring, and Playwright dependency
