@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { createCapture } from '../src/capture/index.js';
+import { SNAPSHOT_BUDGET_BYTES } from '../src/protocol/constants.js';
 import { STREAM, DIFF_OP } from '../src/protocol/messages.js';
 
 const AUDITED_GLOBALS = [
@@ -207,6 +208,39 @@ test('D-07 mutation inside mirrored open shadow root emits shadow-aware sidecar 
     assert.equal(Array.isArray(shadowOps[0].nodeIds), true, 'shadow mutation carries nodeIds');
     assert.ok(shadowOps[0].nodeIds.includes(env.capture.getNodeId(added)), 'added shadow node is indexed');
     assert.equal(JSON.stringify(transport.sent).includes('data-fsb-nid'), false, 'wire identity is sidecar-only');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-19 snapshot budget includes shadow sidecars before sending', async () => {
+  const env = setupEnv('<main id="root"><fs-card id="card"></fs-card></main>');
+  try {
+    const host = env.document.getElementById('card');
+    const root = host.attachShadow({ mode: 'open' });
+    root.innerHTML = '<section id="oversized-shadow">' + 'x'.repeat(SNAPSHOT_BUDGET_BYTES + 2000) + '</section>';
+
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const payload = snapshotPayload(transport);
+    const hostNid = env.capture.getNodeId(host);
+
+    assert.equal(payload.truncated, true, 'sidecar overflow marks the snapshot truncated');
+    assert.equal(payload.missingDescendants > 0, true, 'sidecar overflow increments missing descendants');
+    assert.ok(payload.nodeIds.includes(hostNid), 'oversized sidecar host remains requestable by nid');
+    assert.equal(
+      (payload.shadowRoots || []).some((entry) => entry.hostNid === hostNid),
+      false,
+      'oversized shadow sidecar is omitted from the bounded snapshot'
+    );
+    assert.equal(
+      JSON.stringify(payload).length <= SNAPSHOT_BUDGET_BYTES,
+      true,
+      'complete snapshot payload stays under the relay budget'
+    );
   } finally {
     env.teardown();
   }

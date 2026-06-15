@@ -64,8 +64,16 @@ function baseSnapshot(overrides = {}) {
     frames: [{
       frameNid: 'same-frame-nid',
       kind: 'same-origin',
-      html: '<button id="inside-frame" onclick="alert(1)">Frame button</button>',
-      nodeIds: ['frame-button-nid'],
+      html: '<button id="inside-frame" onclick="alert(1)">Frame button</button>'
+        + '<fs-frame-card id="frame-shadow-host"></fs-frame-card>',
+      nodeIds: ['frame-button-nid', 'frame-shadow-host-nid'],
+      shadowRoots: [{
+        hostNid: 'frame-shadow-host-nid',
+        mode: 'open',
+        html: '<span id="frame-shadow-child">Frame shadow child</span>',
+        nodeIds: ['frame-shadow-child-nid'],
+        slotAssignment: 'none',
+      }],
       stylesheets: [],
       inlineStyles: ['button{color:blue}'],
       htmlAttrs: { lang: 'en' },
@@ -136,9 +144,15 @@ test('D-08/D-10 same-origin frame payload installs as inert nested iframe srcdoc
     const frameDoc = glueIframe(sameFrame);
     assert.equal(frameDoc.getElementById('inside-frame').textContent, 'Frame button');
     assert.equal(frameDoc.getElementById('inside-frame').hasAttribute('onclick'), false, 'frame srcdoc is sanitized');
+    assert.ok(frameDoc.getElementById('frame-shadow-host').shadowRoot, 'frame-local shadow root is attached');
+    assert.equal(
+      frameDoc.getElementById('frame-shadow-host').shadowRoot.getElementById('frame-shadow-child').textContent,
+      'Frame shadow child'
+    );
 
     const resolved = env.viewer.resolveNode('frame-button-nid');
     assert.ok(resolved, 'frame descendant nid resolves after frame installation');
+    assert.ok(env.viewer.resolveNode('frame-shadow-child-nid'), 'frame shadow descendant nid resolves after frame installation');
     assert.deepEqual(Object.keys(resolved).sort(), ['exists', 'nid', 'rect', 'snapshotId', 'streamSessionId'].sort());
     assert.equal(resolved.nid, 'frame-button-nid');
     assert.equal(resolved.exists, true);
@@ -147,6 +161,39 @@ test('D-08/D-10 same-origin frame payload installs as inert nested iframe srcdoc
     assert.equal(Object.prototype.hasOwnProperty.call(resolved, 'html'), false, 'resolveNode exposes no HTML');
     assert.equal(Object.prototype.hasOwnProperty.call(resolved, 'text'), false, 'resolveNode exposes no text');
     assert.equal(Object.prototype.hasOwnProperty.call(resolved, 'attrs'), false, 'resolveNode exposes no attrs');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-09 iframe src attr mutations are ignored by the renderer defense layer', () => {
+  const env = setupEnv('<div id="viewer" style="width:900px;height:700px"></div>');
+  try {
+    const wire = createManualTransport();
+    env.viewer = createViewer({
+      container: env.document.getElementById('viewer'),
+      transport: wire.transport,
+      logger: silentLogger(),
+    });
+
+    wire.emit(STREAM.SNAPSHOT, baseSnapshot());
+    const mirrorDoc = glueIframe(viewerIframe(env));
+    const sameFrame = mirrorDoc.getElementById('same-frame');
+    assert.equal(sameFrame.hasAttribute('src'), false, 'same-origin frame starts inert');
+
+    wire.emit(STREAM.MUTATIONS, {
+      streamSessionId: 'stream-frames',
+      snapshotId: 1,
+      mutations: [{
+        op: DIFF_OP.ATTR,
+        nid: 'same-frame-nid',
+        attr: 'src',
+        val: 'https://remote.example/private',
+      }],
+    });
+
+    assert.equal(sameFrame.hasAttribute('src'), false, 'generic iframe src attr op cannot install a live src');
+    assert.equal(typeof sameFrame.getAttribute('srcdoc'), 'string', 'inert srcdoc mirror is preserved');
   } finally {
     env.teardown();
   }

@@ -105,9 +105,14 @@ test('D-08 same-origin iframe.contentDocument serializes as a scoped frames payl
         + '<style>.frame-button{color:blue}</style>'
         + '</head><body data-frame-body="yes">'
         + '<button id="inside-frame" class="frame-button">Frame button</button>'
+        + '<fs-frame-card id="frame-shadow-host"></fs-frame-card>'
         + '</body></html>'
     );
     const frameButton = frameDoc.getElementById('inside-frame');
+    const frameShadowHost = frameDoc.getElementById('frame-shadow-host');
+    const frameShadowRoot = frameShadowHost.attachShadow({ mode: 'open' });
+    frameShadowRoot.innerHTML = '<span id="frame-shadow-child">Frame shadow child</span>';
+    const frameShadowChild = frameShadowRoot.getElementById('frame-shadow-child');
 
     const transport = createRecordingTransport();
     env.capture = createCapture({ transport, logger: silentLogger() });
@@ -128,6 +133,11 @@ test('D-08 same-origin iframe.contentDocument serializes as a scoped frames payl
     assert.ok(framePayload.html.includes('Frame button'), 'same-origin frame text is serialized');
     assert.equal(Array.isArray(framePayload.nodeIds), true, 'frame descendants carry nodeIds sidecar');
     assert.ok(framePayload.nodeIds.includes(env.capture.getNodeId(frameButton)), 'frame descendant nid matches getNodeId');
+    assert.equal(Array.isArray(framePayload.shadowRoots), true, 'frame payload carries shadowRoots sidecar');
+    const frameShadow = framePayload.shadowRoots.find((entry) => entry.hostNid === env.capture.getNodeId(frameShadowHost));
+    assert.ok(frameShadow, 'frame-local shadow root is keyed by host nid');
+    assert.ok(frameShadow.html.includes('Frame shadow child'), 'frame-local shadow DOM is serialized');
+    assert.ok(frameShadow.nodeIds.includes(env.capture.getNodeId(frameShadowChild)), 'frame shadow descendant nid is serialized');
     assert.equal(Array.isArray(framePayload.stylesheets), true, 'frame stylesheets field exists');
     assert.equal(Array.isArray(framePayload.inlineStyles), true, 'frame inlineStyles field exists');
     assert.equal(typeof framePayload.htmlAttrs, 'object', 'frame htmlAttrs field exists');
@@ -245,7 +255,7 @@ test('D-08 added same-origin iframes carry frames metadata on add ops', async ()
 });
 
 test('D-11 same-origin iframe document mutations emit frameNid-scoped diffs', async () => {
-  const env = setupEnv('<main id="root"><iframe id="same-frame" src="/frame.html"></iframe></main>');
+  const env = setupEnv('<main id="root"><iframe id="same-frame" src="/frames/frame.html"></iframe></main>');
   try {
     const frame = env.document.getElementById('same-frame');
     const frameDoc = populateFrame(frame,
@@ -258,9 +268,10 @@ test('D-11 same-origin iframe document mutations emit frameNid-scoped diffs', as
     await settle(env.window);
 
     const frameNid = env.capture.getNodeId(frame);
-    const late = frameDoc.createElement('span');
+    const late = frameDoc.createElement('img');
     late.id = 'late-frame-child';
-    late.textContent = 'Late frame child';
+    late.setAttribute('src', 'assets/late.png');
+    late.setAttribute('alt', 'Late frame child');
     frameDoc.getElementById('frame-root').appendChild(late);
     await settle(env.window);
 
@@ -271,10 +282,42 @@ test('D-11 same-origin iframe document mutations emit frameNid-scoped diffs', as
         && op.frameNid === frameNid
         && typeof op.html === 'string'
         && op.html.includes('late-frame-child')
+        && op.html.includes('https://fixture.test/frames/assets/late.png')
         && Array.isArray(op.nodeIds)
         && op.nodeIds.includes(lateNid)
       )),
       'same-origin frame document mutation emits an add op scoped by frameNid'
+    );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-09 iframe src attribute mutations never emit a generic live-src attr op', async () => {
+  const env = setupEnv('<main id="root"><iframe id="same-frame" src="/frame.html"></iframe></main>');
+  try {
+    const frame = env.document.getElementById('same-frame');
+    populateFrame(frame,
+      '<!DOCTYPE html><html><body><p id="before-src-change">Before</p></body></html>'
+    );
+
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const frameNid = env.capture.getNodeId(frame);
+    frame.setAttribute('src', 'https://remote.example/private');
+    await settle(env.window);
+
+    assert.equal(
+      mutationOps(transport).some((op) => (
+        op.op === DIFF_OP.ATTR
+        && op.nid === frameNid
+        && String(op.attr).toLowerCase() === 'src'
+      )),
+      false,
+      'iframe src changes do not reach the wire as generic attr mutations'
     );
   } finally {
     env.teardown();

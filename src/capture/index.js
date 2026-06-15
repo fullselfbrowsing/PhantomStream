@@ -784,6 +784,7 @@ export function createCapture(config) {
   function prepareShadowClone(root, container, cloneToNid) {
     var liveDescendants = root && root.querySelectorAll ? root.querySelectorAll('*') : [];
     var cloneDescendants = container.querySelectorAll('*');
+    var baseDoc = root && root.ownerDocument ? root.ownerDocument : document;
     for (var i = 0; i < liveDescendants.length; i++) {
       var live = liveDescendants[i];
       var clone = cloneDescendants[i];
@@ -797,10 +798,10 @@ export function createCapture(config) {
       if (nid) cloneToNid.set(clone, nid);
       for (var a = 0; a < URL_ATTRS.length; a++) {
         var val = clone.getAttribute(URL_ATTRS[a]);
-        if (val) clone.setAttribute(URL_ATTRS[a], absolutifyUrl(val));
+        if (val) clone.setAttribute(URL_ATTRS[a], absolutifyUrl(val, baseDoc));
       }
       var srcset = clone.getAttribute('srcset');
-      if (srcset) clone.setAttribute('srcset', absolutifySrcset(srcset));
+      if (srcset) clone.setAttribute('srcset', absolutifySrcset(srcset, baseDoc));
       captureComputedStyles(live, clone);
     }
   }
@@ -810,7 +811,8 @@ export function createCapture(config) {
     var root = host.shadowRoot;
     if (!isOpenShadowRoot(root)) return null;
 
-    var container = document.createElement('div');
+    var ownerDoc = host.ownerDocument || document;
+    var container = ownerDoc.createElement('div');
     for (var child = root.firstChild; child; child = child.nextSibling) {
       container.appendChild(child.cloneNode(true));
     }
@@ -833,12 +835,16 @@ export function createCapture(config) {
     };
   }
 
-  function collectShadowRootPayloads(root, hostNodeIds) {
+  function collectShadowRootPayloads(root, hostNodeIds, excludedHostNodeIds) {
     var payloads = [];
     var allowed = null;
     if (Array.isArray(hostNodeIds)) {
       allowed = new Set();
       for (var h = 0; h < hostNodeIds.length; h++) allowed.add(String(hostNodeIds[h]));
+    }
+    var excluded = null;
+    if (excludedHostNodeIds && typeof excludedHostNodeIds.has === 'function') {
+      excluded = excludedHostNodeIds;
     }
 
     function visit(treeRoot) {
@@ -849,6 +855,7 @@ export function createCapture(config) {
         var hostNid = getTrackedNodeId(el) || ensureNodeId(el);
         if (!hostNid) continue;
         if (allowed && !allowed.has(String(hostNid))) continue;
+        if (excluded && excluded.has(String(hostNid))) continue;
         var payload = serializeOpenShadowRoot(el, hostNid);
         if (payload) payloads.push(payload);
         if (allowed && payload && Array.isArray(payload.nodeIds)) {
@@ -887,19 +894,21 @@ export function createCapture(config) {
     }
   }
 
-  function safeFrameSrc(src) {
+  function safeFrameSrc(src, baseDoc) {
     if (!src) return '';
     try {
-      return new URL(src, location.href).href;
+      var baseHref = baseDoc && baseDoc.location ? baseDoc.location.href : location.href;
+      return new URL(src, baseHref).href;
     } catch (err) {
       return '';
     }
   }
 
-  function safeFrameOrigin(src) {
+  function safeFrameOrigin(src, baseDoc) {
     if (!src) return '';
     try {
-      return new URL(src, location.href).origin;
+      var baseHref = baseDoc && baseDoc.location ? baseDoc.location.href : location.href;
+      return new URL(src, baseHref).origin;
     } catch (err) {
       return '';
     }
@@ -918,11 +927,12 @@ export function createCapture(config) {
       return { kind: 'same-origin', document: doc };
     }
     var src = iframe && iframe.getAttribute ? iframe.getAttribute('src') || '' : '';
+    var baseDoc = iframe && iframe.ownerDocument ? iframe.ownerDocument : document;
     return {
       kind: 'cross-origin',
       label: 'Cross-origin iframe',
-      src: safeFrameSrc(src),
-      origin: safeFrameOrigin(src)
+      src: safeFrameSrc(src, baseDoc),
+      origin: safeFrameOrigin(src, baseDoc)
     };
   }
 
@@ -1069,12 +1079,14 @@ export function createCapture(config) {
     if (subtreeResult && subtreeResult.drop) return null;
 
     var nodeIds = buildNodeIdSidecar(bodyClone, cloneToNid, false);
+    var frameShadowRoots = collectShadowRootPayloads(frameDoc.body, nodeIds);
     var nestedFrames = collectFramePayloads(frameDoc.body, cloneToNid);
     return {
       frameNid: String(frameNid),
       kind: 'same-origin',
       html: bodyClone.innerHTML || '',
       nodeIds: nodeIds,
+      shadowRoots: frameShadowRoots,
       htmlNid: htmlNid ? String(htmlNid) : '',
       bodyNid: bodyNid ? String(bodyNid) : '',
       frames: nestedFrames,
@@ -1095,7 +1107,7 @@ export function createCapture(config) {
     };
   }
 
-  function collectFramePayloads(root, cloneToNid) {
+  function collectFramePayloads(root, cloneToNid, excludedFrameNodeIds) {
     var payloads = [];
     if (!root) return payloads;
     var allowed = null;
@@ -1117,6 +1129,7 @@ export function createCapture(config) {
       var frameNid = getTrackedNodeId(iframe) || ensureNodeId(iframe);
       if (!frameNid) continue;
       if (allowed && !allowed.has(String(frameNid))) continue;
+      if (excludedFrameNodeIds && excludedFrameNodeIds.has(String(frameNid))) continue;
       var classification = classifyFrame(iframe);
       if (classification.kind === 'same-origin') {
         var sameOriginPayload = serializeFrameDocument(
@@ -1883,6 +1896,74 @@ export function createCapture(config) {
     return placeholder;
   }
 
+  function jsonWireLength(value) {
+    try {
+      return JSON.stringify(value).length;
+    } catch (err) {
+      return Infinity;
+    }
+  }
+
+  function sidecarWireLength(value) {
+    return jsonWireLength(value);
+  }
+
+  function pruneSnapshotSidecarsForBudget(basePayload, shadowRoots, frames) {
+    var base = Object.assign({}, basePayload || {});
+    var keptShadowRoots = Array.isArray(shadowRoots) ? shadowRoots.slice() : [];
+    var keptFrames = Array.isArray(frames) ? frames.slice() : [];
+    var removed = 0;
+
+    function currentWireLength() {
+      return jsonWireLength(Object.assign({}, base, {
+        shadowRoots: keptShadowRoots,
+        frames: keptFrames
+      }));
+    }
+
+    while (currentWireLength() > SNAPSHOT_BUDGET_BYTES && (keptShadowRoots.length || keptFrames.length)) {
+      var largestKind = '';
+      var largestIndex = -1;
+      var largestLength = -1;
+
+      for (var s = 0; s < keptShadowRoots.length; s++) {
+        var shadowLength = sidecarWireLength(keptShadowRoots[s]);
+        if (shadowLength > largestLength) {
+          largestLength = shadowLength;
+          largestKind = 'shadow';
+          largestIndex = s;
+        }
+      }
+      for (var f = 0; f < keptFrames.length; f++) {
+        var frameLength = sidecarWireLength(keptFrames[f]);
+        if (frameLength > largestLength) {
+          largestLength = frameLength;
+          largestKind = 'frame';
+          largestIndex = f;
+        }
+      }
+
+      if (largestKind === 'shadow') {
+        keptShadowRoots.splice(largestIndex, 1);
+      } else if (largestKind === 'frame') {
+        keptFrames.splice(largestIndex, 1);
+      } else {
+        break;
+      }
+      removed++;
+      base.truncated = true;
+      base.missingDescendants = (base.missingDescendants || 0) + 1;
+    }
+
+    return {
+      shadowRoots: keptShadowRoots,
+      frames: keptFrames,
+      truncated: !!base.truncated,
+      missingDescendants: base.missingDescendants || 0,
+      removed: removed
+    };
+  }
+
   // =========================================================================
   // 0.5 SEC-01 Sanitization chokepoint
   // =========================================================================
@@ -2559,6 +2640,7 @@ export function createCapture(config) {
     var html = clone.innerHTML;
     var truncated = false;
     var missingDescendants = 0;
+    var truncatedNodeIds = new Set();
 
     // Phase 211-02 (STREAM-03 + STREAM-04): single TreeWalker pre-pass on the
     // LIVE document reads getBoundingClientRect().top per tracked element into
@@ -2605,7 +2687,10 @@ export function createCapture(config) {
         var nidVal1 = cloneToNid.get(cloneEls1[t]);
         var top1 = topByNid.get(nidVal1);
         if (typeof top1 === 'number' && top1 > viewportCutoff) {
-          if (replaceWithTruncatedPlaceholder(cloneEls1[t], cloneToNid)) {
+          var placeholder1 = replaceWithTruncatedPlaceholder(cloneEls1[t], cloneToNid);
+          if (placeholder1) {
+            var placeholderNid1 = cloneToNid.get(placeholder1);
+            if (placeholderNid1) truncatedNodeIds.add(String(placeholderNid1));
             missingDescendants++;
           }
         }
@@ -2618,7 +2703,10 @@ export function createCapture(config) {
       if (html.length > SNAPSHOT_BUDGET_BYTES) {
         var cloneEls2 = cloneElementsWithNodeIds(clone, cloneToNid);
         for (var u = cloneEls2.length - 1; u >= 0 && clone.innerHTML.length > SNAPSHOT_BUDGET_BYTES; u--) {
-          if (replaceWithTruncatedPlaceholder(cloneEls2[u], cloneToNid)) {
+          var placeholder2 = replaceWithTruncatedPlaceholder(cloneEls2[u], cloneToNid);
+          if (placeholder2) {
+            var placeholderNid2 = cloneToNid.get(placeholder2);
+            if (placeholderNid2) truncatedNodeIds.add(String(placeholderNid2));
             missingDescendants++;
           }
         }
@@ -2632,8 +2720,34 @@ export function createCapture(config) {
     warnIfSanitizeStrips(sanBefore);
 
     var nodeIds = buildNodeIdSidecar(clone, cloneToNid, false);
-    var shadowRoots = collectShadowRootPayloads(document.body, nodeIds);
-    var frames = collectFramePayloads(document.body, cloneToNid);
+    var shadowRoots = collectShadowRootPayloads(document.body, nodeIds, truncatedNodeIds);
+    var frames = collectFramePayloads(document.body, cloneToNid, truncatedNodeIds);
+    var budgetedSidecars = pruneSnapshotSidecarsForBudget({
+      html: html,
+      nodeIds: nodeIds,
+      truncated: truncated,
+      missingDescendants: missingDescendants,
+      stylesheets: stylesheets,
+      inlineStyles: inlineStyles,
+      htmlAttrs: serializeShellAttributes(document.documentElement),
+      bodyAttrs: serializeShellAttributes(document.body),
+      htmlStyle: collectComputedStyleText(document.documentElement, SHELL_PROPS),
+      bodyStyle: collectComputedStyleText(document.body, SHELL_PROPS),
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      pageWidth: document.documentElement.scrollWidth,
+      pageHeight: document.documentElement.scrollHeight,
+      url: location.href,
+      title: document.title,
+      streamSessionId: streamSessionId || '',
+      snapshotId: currentSnapshotId || 0
+    }, shadowRoots, frames);
+    shadowRoots = budgetedSidecars.shadowRoots;
+    frames = budgetedSidecars.frames;
+    truncated = budgetedSidecars.truncated;
+    missingDescendants = budgetedSidecars.missingDescendants;
 
     return {
       html: html,
@@ -2705,13 +2819,14 @@ export function createCapture(config) {
     }
     var computedStyles = collectSubtreeComputedStyles(el);
     var rootTag = el.tagName ? String(el.tagName).toLowerCase() : '';
+    var baseDoc = el.ownerDocument || document;
     for (var a = 0; a < URL_ATTRS.length; a++) {
       if (rootTag === 'iframe' && URL_ATTRS[a] === 'src') continue;
       var val = el.getAttribute(URL_ATTRS[a]);
-      if (val) el.setAttribute(URL_ATTRS[a], absolutifyUrl(val));
+      if (val) el.setAttribute(URL_ATTRS[a], absolutifyUrl(val, baseDoc));
     }
     var srcset = el.getAttribute('srcset');
-    if (srcset) el.setAttribute('srcset', absolutifySrcset(srcset));
+    if (srcset) el.setAttribute('srcset', absolutifySrcset(srcset, baseDoc));
 
     // Process descendant elements
     var descendants = el.querySelectorAll('*');
@@ -2725,13 +2840,14 @@ export function createCapture(config) {
       ensureNodeId(desc);
       if (blockMatches(desc)) continue;
       var descTag = desc.tagName ? String(desc.tagName).toLowerCase() : '';
+      var descDoc = desc.ownerDocument || baseDoc;
       for (var b = 0; b < URL_ATTRS.length; b++) {
         if (descTag === 'iframe' && URL_ATTRS[b] === 'src') continue;
         var dv = desc.getAttribute(URL_ATTRS[b]);
-        if (dv) desc.setAttribute(URL_ATTRS[b], absolutifyUrl(dv));
+        if (dv) desc.setAttribute(URL_ATTRS[b], absolutifyUrl(dv, descDoc));
       }
       var ds = desc.getAttribute('srcset');
-      if (ds) desc.setAttribute('srcset', absolutifySrcset(ds));
+      if (ds) desc.setAttribute('srcset', absolutifySrcset(ds, descDoc));
     }
 
     // SEC-01: scrub a detached wire clone through the chokepoint and
@@ -2999,6 +3115,14 @@ export function createCapture(config) {
       } else if (m.type === 'attributes') {
         var targetNid = getTrackedNodeId(m.target);
         if (!targetNid) continue;
+
+        var attrName = String(m.attributeName || '');
+        var attrNameLower = attrName.toLowerCase();
+        var attrTargetTag = m.target && m.target.tagName ? String(m.target.tagName).toLowerCase() : '';
+        if (attrTargetTag === 'iframe' && attrNameLower === 'src') {
+          registerFrameLoadListener(m.target, targetNid);
+          continue;
+        }
 
         var attrVal = m.target.getAttribute(m.attributeName);
         // Absolutify URL attributes in mutations

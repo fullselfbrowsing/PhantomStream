@@ -761,6 +761,7 @@ export function createViewer(options) {
         p.nodeIds || [],
         'frame'
       );
+      installShadowRoots(frameDoc, p.shadowRoots || []);
       installFrames(frameDoc, p.frames || []);
       return true;
     } catch (err) {

@@ -236,6 +236,15 @@ export function applyMutations(doc, mutations, counters, hooks) {
               recordStaleMiss(DIFF_OP.ATTR, m.nid);
               break;
             }
+            var attrName = String(m.attr || '').toLowerCase();
+            var targetTag = target.tagName ? String(target.tagName).toLowerCase() : '';
+            if (targetTag === 'iframe' && attrName === 'src') {
+              target.removeAttribute('src');
+              logger.warn('[Renderer] iframe src attr op ignored', {
+                nid: m.nid || ''
+              });
+              break;
+            }
             if (m.val === null) {
               // null is a removal, not a value -- it precedes the scrub
               // by design (removing an attribute is always safe).
