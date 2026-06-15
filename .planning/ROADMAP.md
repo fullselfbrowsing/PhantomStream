@@ -133,7 +133,7 @@ Plans:
 - [x] 04-03-PLAN.md — Viewer `on('state'|'health')` events, health telemetry, and renderer tests
 
 **Wave 4** *(blocked on 04-01, 04-02, 04-03)*
-- [ ] 04-04-PLAN.md — `phantom-stream demo`, two-tab UI, automated demo tests, and browser kill-relay checkpoint
+- [x] 04-04-PLAN.md — `phantom-stream demo`, two-tab UI, automated demo tests, and browser kill-relay checkpoint
 
 ### Phase 5: Playwright/CDP Adapter, Remote Control & Agent Demo
 **Goal**: A script-driven browser is mirrored live with working, consent-gated remote control — the agent-observability story the paper leads with
