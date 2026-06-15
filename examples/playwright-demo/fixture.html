@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhantomStream Playwright Fixture</title>
+<link rel="stylesheet" href="/playwright/demo.css">
+</head>
+<body class="fixture-page">
+
+<header>
+  <div class="header-row">
+    <div>
+      <h1>Playwright driven fixture</h1>
+      <p class="subtitle">Local deterministic page for remote-control replay.</p>
+    </div>
+    <span class="badge state-live" role="status" aria-live="polite">
+      <span class="badge-dot" aria-hidden="true"></span>
+      <span>Ready</span>
+    </span>
+  </div>
+</header>
+
+<main class="fixture-grid">
+  <section class="pane fixture-panel">
+    <div class="pane-header">DRIVER TO VIEWER</div>
+    <button type="button" class="btn-secondary" id="driver-tick">Driver tick <span id="driver-count">0</span></button>
+    <div class="fixture-stat">Last driver update <span id="driver-last">never</span></div>
+  </section>
+
+  <section class="pane fixture-panel">
+    <div class="pane-header">VIEWER TO DRIVER</div>
+    <button type="button" class="btn-primary" id="click-target">Click target <span id="click-count">0</span></button>
+    <label class="field-label" for="remote-text">Remote text</label>
+    <input id="remote-text" name="remote-text" autocomplete="off" spellcheck="false">
+    <div class="fixture-echo" id="remote-text-echo">Remote text echo: empty</div>
+  </section>
+
+  <section class="pane fixture-panel">
+    <div class="pane-header">NAVIGATION</div>
+    <button type="button" class="btn-secondary" id="navigate-fixture">Navigate fixture</button>
+    <div class="fixture-stat">Navigation count <span id="fixture-navigation-count">0</span></div>
+  </section>
+
+  <section class="pane fixture-panel fixture-scroll-panel">
+    <div class="pane-header">SCROLL TARGET</div>
+    <div class="scroll-region" id="scroll-region" tabindex="0">
+      <div class="scroll-marker" id="scroll-marker">Scroll marker</div>
+      <ol id="scroll-rows" class="scroll-rows"></ol>
+    </div>
+  </section>
+</main>
+
+<script type="module" src="/examples/playwright-demo/fixture.js?v=05-demo"></script>
+</body>
+</html>

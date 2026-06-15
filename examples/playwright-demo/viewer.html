@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhantomStream Playwright Remote Demo</title>
+<link rel="stylesheet" href="/playwright/demo.css">
+</head>
+<body>
+
+<header>
+  <div class="header-row">
+    <div>
+      <h1>PhantomStream — Playwright Remote Demo</h1>
+      <p class="subtitle">Script-driven page mirrored through the local relay.</p>
+    </div>
+    <span class="badge state-connecting" id="lifecycle-badge" role="status" aria-live="polite">
+      <span class="badge-dot" aria-hidden="true"></span>
+      <span id="lifecycle-label">Connecting</span>
+    </span>
+  </div>
+</header>
+
+<section class="status-strip" aria-label="Playwright remote demo status">
+  <div class="metric">
+    <span class="metric-label">Lifecycle</span>
+    <span class="metric-value" id="viewer-lifecycle">Connecting</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Room</span>
+    <span class="metric-value selectable" id="viewer-room">unknown</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Relay</span>
+    <span class="metric-value" id="viewer-relay">connecting</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Adapter</span>
+    <span class="metric-value" id="adapter-state">locked</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Last frame</span>
+    <span class="metric-value" id="viewer-last-frame">never</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Navs</span>
+    <span class="metric-value" id="navigation-count">0</span>
+  </div>
+</section>
+
+<section class="auth-strip" aria-label="Remote control authorization">
+  <div class="strip-header">REMOTE CONTROL</div>
+  <fieldset class="segmented" aria-labelledby="authorization-label">
+    <legend id="authorization-label">Authorization hook</legend>
+    <label class="segment-option">
+      <input type="radio" name="authorization-mode" value="approve">
+      <span>Approve</span>
+    </label>
+    <label class="segment-option">
+      <input type="radio" name="authorization-mode" value="deny" checked>
+      <span>Deny</span>
+    </label>
+  </fieldset>
+  <span class="badge state-locked" id="control-badge" role="status" aria-live="polite">
+    <span class="badge-dot" aria-hidden="true"></span>
+    <span id="control-label">locked</span>
+  </span>
+  <button type="button" class="btn-primary" id="request-control" aria-disabled="true">Request control</button>
+  <button type="button" class="btn-secondary" id="stop-control" hidden>Stop control</button>
+  <div class="auth-message" id="control-last-action">Action blocked: control locked</div>
+  <div class="denial-message" id="denial-message" hidden>
+    <strong>Remote control denied</strong>
+    <span>Authorization hook returned deny. Control stayed locked.</span>
+  </div>
+</section>
+
+<section class="health-row" aria-label="HEALTH">
+  <div class="strip-header">HEALTH</div>
+  <div class="metric"><span class="metric-label">frames</span><span class="metric-value" id="health-frames">0</span></div>
+  <div class="metric"><span class="metric-label">snapshots</span><span class="metric-value" id="health-snapshots">0</span></div>
+  <div class="metric"><span class="metric-label">mutations</span><span class="metric-value" id="health-mutations">0</span></div>
+  <div class="metric"><span class="metric-label">misses</span><span class="metric-value" id="health-misses">0</span></div>
+  <div class="metric"><span class="metric-label">apply failures</span><span class="metric-value" id="health-apply-failures">0</span></div>
+  <div class="metric"><span class="metric-label">drops</span><span class="metric-value" id="health-drops">0</span></div>
+  <div class="metric"><span class="metric-label">errors</span><span class="metric-value" id="health-errors">0</span></div>
+  <div class="metric"><span class="metric-label">control requests</span><span class="metric-value" id="health-control-requests">0</span></div>
+  <div class="metric"><span class="metric-label">denied</span><span class="metric-value" id="health-denied">0</span></div>
+  <div class="metric"><span class="metric-label">dispatched</span><span class="metric-value" id="health-dispatched">0</span></div>
+  <div class="metric"><span class="metric-label">navs</span><span class="metric-value" id="health-navs">0</span></div>
+</section>
+
+<main>
+  <section class="pane mirror-pane">
+    <div class="pane-header">MIRROR</div>
+    <div class="stage" id="mirror-stage" tabindex="0">
+      <div class="empty-state" id="viewer-empty">
+        <h2>Waiting for driven page</h2>
+        <p>Start the Playwright demo and keep the local relay running.</p>
+      </div>
+      <div id="control-overlay" aria-hidden="true"></div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div>Action log</div>
+  <div class="log" id="action-log"></div>
+</footer>
+
+<script type="module" src="/examples/playwright-demo/viewer.js?v=05-demo"></script>
+</body>
+</html>
