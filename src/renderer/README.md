@@ -14,7 +14,7 @@ Module split (the seams jsdom forces — see Environment):
 
 ```
 snapshot.js   buildSnapshotHtml(payload) -> string   pure srcdoc builder
-diff.js       applyMutations(doc, ops, counters)     Document-parameterized applier
+diff.js       applyMutations(doc, ops, counters, hooks)     Document-parameterized applier
 overlays.js   createOverlays / mapRectToHost / OVERLAY_CSS
 index.js      createViewer factory + barrel re-exports of all of the above
 ```
@@ -25,7 +25,7 @@ index.js      createViewer factory + barrel re-exports of all of the above
 import { createViewer } from '@fullselfbrowsing/phantom-stream/renderer';
 
 const viewer = createViewer({ container, transport, logger });
-// -> { detach, destroy, registerOverlay, on }
+// -> { detach, destroy, registerOverlay, on, resolveNode, highlightNode, clearHighlight }
 ```
 
 Calling the factory auto-attaches a live mirror: the viewer root (stamped
@@ -111,6 +111,29 @@ streaming.
   names throw `Error('viewer-event-unsupported')` at subscription time.
   The viewer emits events only; visible badges, banners, logs, and status
   UI belong to the host application.
+- `resolveNode(nid)` — resolve a PhantomStream nid through the viewer's
+  internal identity index. Returns a fresh geometry/identity object
+  (`nid`, `exists`, `rect`, `streamSessionId`, `snapshotId`) or `null` for
+  missing, stale, or inactive ids. It does not expose mirrored HTML, text,
+  attributes, payloads, URLs, titles, or DOM nodes.
+- `highlightNode(nid, options?)` — draw a local host-side highlight for a
+  resolved nid using the existing overlay layer. Optional labels are written
+  with `textContent`. Returns `false` for unresolved ids.
+- `clearHighlight()` — remove the local semantic highlight. Idempotent.
+
+## Node identity index and semantic addressing
+
+The renderer rebuilds a private `Map<nid, Node>` index from each accepted
+snapshot's `nodeIds` sidecar after post-parse sanitization. Add ops extend
+the index from their own `nodeIds` sidecars, and remove ops delete the removed
+subtree before it leaves the mirror. A paired `WeakMap<Node, nid>` is kept
+only for internal cleanup; neither map is exposed to hosts.
+
+Diff application receives identity hooks from `createViewer`. `diff.js` does
+not own an identity selector fallback, and normal nid-addressed ops do not use
+per-op `querySelector` lookup. Overlay anchor resolution, `resolveNode`, and
+`highlightNode` all route through the same index, so stale ids fail softly in
+one place with content-free diagnostics.
 
 ## Event contract (VIEW-02)
 
@@ -313,10 +336,6 @@ The Phase 3 security pipeline is always on and documented in
   gates on streaming state). The miss accounting + `CONTROL.START` resync
   self-heals any resulting drift; do not write tests that assume zero loss
   before the first load.
-- **Per-op `querySelector` nid lookups (Phase 7).** Every diff op resolves
-  its target via `doc.querySelector('[data-fsb-nid="..."]')` (reference
-  parity). The planned `Map<nid, Node>` index replaces the hot path when the
-  addressing API lands.
 
 ## Environment
 

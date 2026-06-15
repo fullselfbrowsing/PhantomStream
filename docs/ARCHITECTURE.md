@@ -30,10 +30,20 @@ dialogs, watchdog #1         watchdog #2                                  addres
 
 ### 2.1 Node identity
 
-Every serialized element is stamped with `data-fsb-nid`, a monotonically increasing string
-ID, applied to **both** the live DOM and the serialized clone (`assignNodeId`). This is the
-keystone of the whole system: every diff op, overlay rect, and remote-control action
-addresses nodes by nid. Nodes added after the snapshot get nids in `processAddedNode`.
+The original FSB reference design stamped every serialized element with
+`data-fsb-nid`, a monotonically increasing string ID, on **both** the live DOM
+and the serialized clone (`assignNodeId`). That attribute was the original
+addressing keystone: every diff op, overlay rect, and remote-control action
+addressed nodes by nid, and nodes added after the snapshot got nids in
+`processAddedNode`.
+
+The standalone framework design after Phase 7 keeps the same opaque nid wire
+contract but removes live-page identity mutation. Capture owns identity in an
+internal `WeakMap<Element, string>` plus reverse lookup, emits `nodeIds`
+sidecars on snapshots and add ops, and exposes `getNodeId(element)` for trusted
+host code. The renderer rebuilds a private `Map<nid, Node>` from `nodeIds`
+after sanitization, so page-owned `data-fsb-nid` attributes remain ordinary
+page data rather than PhantomStream identity.
 
 ### 2.2 Full snapshot (`serializeDOM`)
 
@@ -141,9 +151,12 @@ script.
 - **Snapshot** (`handleDOMSnapshot`): rebuilds a full HTML document — stylesheet links,
   inline styles, captured shell attributes — and writes it to a preview iframe via
   `srcdoc`. On load, scales the page to the stage and applies the captured scroll offset.
-- **Diff apply**: each op resolves its target via
-  `doc.querySelector('[data-fsb-nid="…"]')`; misses are recorded (a consequence of
-  truncation or lost messages) and degrade to awaiting the next snapshot.
+- **Diff apply**: the FSB reference resolved each op with
+  `doc.querySelector('[data-fsb-nid="…"]')`. In the standalone framework after
+  Phase 7, snapshots/add ops carry `nodeIds` sidecars and the viewer resolves
+  nids through an internal `Map<nid, Node>` index. Misses are still recorded
+  (a consequence of truncation or lost messages) and degrade to awaiting the
+  next snapshot.
 - **Layout modes**: inline, maximized, picture-in-picture (drag-to-reposition), fullscreen
   (mouse-tracked exit overlay), with viewport-adaptive scale math per mode.
 - **Overlays**: action glow rect, progress card, and dialog cards positioned in mirror
@@ -176,12 +189,14 @@ part of this repository's roadmap (and the paper's discussion section):
    drifts until the next full snapshot. A stylesheet-centric capture (CSSOM /
    `adoptedStyleSheets`) would fix this and shrink payloads enough to retire most of the
    truncation machinery.
-2. **Added nodes carry no computed styles.** `processAddedNode` assigns nids and fixes URLs
-   but does not capture styles, so post-snapshot content renders inconsistently with
-   snapshot-era siblings.
-3. **nid stamping mutates the observed page.** `data-fsb-nid` is visible to the page's own
-   observers/selectors; a WeakMap-based identity scheme would be invisible but requires a
-   different wire-addressing strategy.
+2. **Added nodes carry no computed styles.** Add ops carry `nodeIds` sidecars
+   and fixed URLs, but do not capture computed styles, so post-snapshot content
+   renders inconsistently with snapshot-era siblings.
+3. **Former nid stamping limitation resolved in standalone Phase 7.** The
+   reference `data-fsb-nid` live-page mutation is now replaced by WeakMap
+   capture identity and `nodeIds` sidecars in the standalone framework. This
+   entry remains here as design history for the FSB reference behavior, not as
+   a current framework limitation.
 4. **Truncation recovery is passive.** Diff targets inside dropped subtrees miss until the
    next snapshot; an on-demand subtree fetch would close the gap.
 5. **Sanitization gap.** `on*` event-handler attributes are only stripped for `<html>`/

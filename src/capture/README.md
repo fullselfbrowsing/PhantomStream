@@ -18,7 +18,7 @@ is side-effect free.
 import { createCapture } from '@fullselfbrowsing/phantom-stream/capture';
 
 const capture = createCapture({ transport, logger, overlayProvider, skipElement });
-// -> { start, stop, pause, resume }
+// -> { start, stop, pause, resume, getNodeId }
 ```
 
 | Option | Required | Default | Purpose |
@@ -27,7 +27,7 @@ const capture = createCapture({ transport, logger, overlayProvider, skipElement 
 | `logger` | no | console-backed (`info`/`warn`/`error`) | Receives lifecycle logs and every contained transport error. |
 | `overlayProvider` | no | `null` | `() => ({ glow, progress, ...customKinds })` — read host overlay state for the overlay side channel. **All** own enumerable provider keys are forwarded on the wire as overlay kinds (extension E1 below); `glow`/`progress` default `null` when omitted; the identity keys (`streamSessionId`/`snapshotId`) are reserved and never overwritten. With no provider, overlay messages carry `{ glow: null, progress: null }` (reference wire shape for an overlay-free page). |
 | `skipElement` | no | `() => false` | `(el) => boolean` — predicate marking elements the host wants excluded from capture (its own UI). Applied **ancestor-inclusively** (like `closest()`, matching the reference's overlay handling): an element is excluded when the predicate matches it or any of its ancestors, so a root-only predicate (e.g. `el.id === 'my-overlay'`) excludes its whole subtree. Skipped subtrees receive no node-id assignment during serialization, and mutations anywhere inside them are dropped during diffing. |
-| `blockSelector` | no | `null` | CSS selector for private regions that must never reach the wire. Matching elements serialize as placeholders with `data-fsb-nid`, `rr_width`, and `rr_height` only; their attrs, children, and text are omitted. |
+| `blockSelector` | no | `null` | CSS selector for private regions that must never reach the wire. Matching elements serialize as placeholders with `rr_width` and `rr_height` only; their attrs, children, and text are omitted. Placeholder identity travels in the `nodeIds` sidecar. |
 | `maskTextSelector` | no | `null` | CSS selector for text that should be masked before transport. Non-whitespace chars become `*` by default, preserving whitespace and length. |
 | `maskInputs` | no | `false` | When true, masks form control values. Password inputs are always masked even when this is false. |
 | `maskTextFn` / `maskInputFn` | no | asterisk mask | Custom masking functions. They are fail-closed: thrown errors are logged and the default mask is used. |
@@ -66,6 +66,31 @@ A readiness ping (`STREAM.READY`) is emitted once, at factory creation
 There is no `refresh()` method in this version — deliberate: the factory
 surface is exactly the four methods above (D-05). Hosts needing a fresh view
 call `stop()` then `start()`.
+
+## Node identity and semantic addressing
+
+Capture owns node identity in closure-local state, not in the observed page.
+Tracked live elements are mapped with an internal `WeakMap<Element, string>`
+and reverse lookup used by mutation batching. PhantomStream does not write or
+read framework-owned `data-fsb-nid` attributes on the live page; page-owned
+attributes with that name remain ordinary page data.
+
+Snapshot payloads and add ops carry identity as `nodeIds` sidecars ordered by
+the serialized element preorder. The renderer pairs those sidecars with the
+sanitized mirror nodes to rebuild its own index while the HTML stays free of
+framework identity attributes.
+
+Trusted host code can call:
+
+```js
+const nid = capture.getNodeId(element);
+// -> string | null
+```
+
+`getNodeId(element)` returns the active PhantomStream nid for a tracked, live
+`Element`, or `null` for inactive sessions, skipped nodes, untracked nodes,
+non-elements, and disconnected elements. It is the capture-side bridge for
+semantic addressing; it exposes identity only, never mirrored content.
 
 ## Module layout
 
@@ -134,6 +159,11 @@ divergence, so it lives here rather than in the differential ledger):
   **D7** in `tests/differential/divergence-ledger.js`, backed by
   `tests/security-sanitize-capture.test.js`, `tests/security-mask.test.js`,
   and the sanitize-divergence oracle scenario.
+- **E4 (Phase 7, CAPT-07/VIEW-03)** — node identity moved from live-page
+  attributes to an internal `WeakMap` mirror plus `nodeIds` sidecars on
+  snapshots and add ops. The observed page is no longer mutated for
+  framework identity, page-owned `data-fsb-nid` remains page data, and
+  `getNodeId(element) -> string|null` is the public live-element lookup.
 
 ## Behavioral changes queued for the standalone version
 
