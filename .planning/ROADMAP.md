@@ -19,7 +19,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 5: Playwright/CDP Adapter, Remote Control & Agent Demo** - Script-driven page mirrored live with consent-gated remote control (completed 2026-06-15)
 - [x] **Phase 6: Extension MV3 + Bookmarklet Adapters** - Remaining injection contexts incl. the FSB swap-in surface and eviction recovery (completed 2026-06-15)
 - [x] **Phase 7: WeakMap Node Identity + Semantic Addressing API** - Stop mutating the observed page; expose node identity as public API (completed 2026-06-15)
-- [ ] **Phase 8: Shadow DOM, Iframes & Fidelity Completion** - Shadow roots, same-origin iframes, input mirroring, added-node styles, subtree fetch
+- [x] **Phase 8: Shadow DOM, Iframes & Fidelity Completion** - Shadow roots, same-origin iframes, input mirroring, added-node styles, subtree fetch (completed 2026-06-15)
 - [ ] **Phase 9: CSSOM Capture Mode** - Flag-enabled stylesheet-centric capture (last limitation fix; the paper's ablation arm)
 - [ ] **Phase 10: npm Packaging & 0.x Publish** - `@fullselfbrowsing/phantom-stream` published with clean types and quickstarts
 - [ ] **Phase 11: FSB Swap-In → 1.0** - FSB runs on the published package; API freezes at 1.0
@@ -223,7 +223,7 @@ Plans:
 - [x] 08-08-PLAN.md — Playwright inject artifact sync and adapter verification
 
 **Wave 6** *(blocked on 08-08)*
-- [ ] 08-09-PLAN.md — Docs, differential oracle, and final automated gate
+- [x] 08-09-PLAN.md — Docs, differential oracle, and final automated gate
 
 ### Phase 9: CSSOM Capture Mode
 **Goal**: Stylesheet-centric capture is available behind a config flag — fixing frozen-style drift, shrinking payloads, and powering the paper's ablation arm
@@ -296,7 +296,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 5. Playwright/CDP Adapter, Remote Control & Agent Demo | 6/6 | Complete    | 2026-06-15 |
 | 6. Extension MV3 + Bookmarklet Adapters | 5/5 | Complete   | 2026-06-15 |
 | 7. WeakMap Node Identity + Semantic Addressing API | 4/4 | Complete   | 2026-06-15 |
-| 8. Shadow DOM, Iframes & Fidelity Completion | 8/9 | In Progress|  |
+| 8. Shadow DOM, Iframes & Fidelity Completion | 9/9 | Complete   | 2026-06-15 |
 | 9. CSSOM Capture Mode | 0/TBD | Not started | - |
 | 10. npm Packaging & 0.x Publish | 0/TBD | Not started | - |
 | 11. FSB Swap-In → 1.0 | 0/TBD | Not started | - |
