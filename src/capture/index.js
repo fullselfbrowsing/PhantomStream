@@ -595,6 +595,9 @@ export function createCapture(config) {
   var staleFlushCount = 0;
   var watchdogTimer = null;
   var observedShadowRoots = new WeakSet();
+  var observedFrameDocuments = new Map();
+  var frameDocumentToNid = new WeakMap();
+  var frameLoadListeners = new Map();
   var nativeAttachShadow = null;
   var attachShadowProto = null;
 
@@ -878,6 +881,362 @@ export function createCapture(config) {
         observeOpenShadowRoot(elements[i].shadowRoot);
       }
     }
+  }
+
+  function safeFrameSrc(src) {
+    if (!src) return '';
+    try {
+      return new URL(src, location.href).href;
+    } catch (err) {
+      return '';
+    }
+  }
+
+  function safeFrameOrigin(src) {
+    if (!src) return '';
+    try {
+      return new URL(src, location.href).origin;
+    } catch (err) {
+      return '';
+    }
+  }
+
+  function classifyFrame(iframe) {
+    var doc = null;
+    try {
+      doc = iframe && iframe.contentDocument;
+    } catch (err) {
+      logger.warn('[DOM Stream] iframe contentDocument unavailable', {
+        reason: 'cross-origin-or-inaccessible'
+      });
+    }
+    if (doc && doc.documentElement && doc.body) {
+      return { kind: 'same-origin', document: doc };
+    }
+    var src = iframe && iframe.getAttribute ? iframe.getAttribute('src') || '' : '';
+    return {
+      kind: 'cross-origin',
+      label: 'Cross-origin iframe',
+      src: safeFrameSrc(src),
+      origin: safeFrameOrigin(src)
+    };
+  }
+
+  function appendStyleDeclaration(clone, declaration) {
+    if (!clone || !declaration) return;
+    var existing = clone.getAttribute('style') || '';
+    var suffix = declaration.charAt(declaration.length - 1) === ';'
+      ? declaration
+      : declaration + ';';
+    clone.setAttribute('style', existing ? existing + ';' + suffix : suffix);
+  }
+
+  function prepareIframeWireShell(live, clone) {
+    if (!clone || clone.nodeType !== Node.ELEMENT_NODE) return;
+    clone.removeAttribute('src');
+    clone.removeAttribute('srcdoc');
+    captureComputedStyles(live, clone);
+    appendStyleDeclaration(clone, 'pointer-events:none');
+    sanitizeForWire('element', { orig: live, clone: clone });
+  }
+
+  function prepareIframeWireShellsForClone(liveRoot, wireRoot) {
+    var liveElements = elementsUnderRoot(liveRoot);
+    var cloneElements = elementsUnderRoot(wireRoot);
+    for (var i = 0; i < liveElements.length && i < cloneElements.length; i++) {
+      var live = liveElements[i];
+      var clone = cloneElements[i];
+      var tag = clone && clone.tagName ? String(clone.tagName).toLowerCase() : '';
+      if (tag === 'iframe') prepareIframeWireShell(live, clone);
+    }
+  }
+
+  function collectStylesheetsFrom(doc) {
+    var stylesheets = [];
+    if (!doc || !doc.querySelectorAll) return stylesheets;
+    var links = doc.querySelectorAll('head link[rel="stylesheet"]');
+    for (var s = 0; s < links.length; s++) {
+      var href = links[s].getAttribute('href');
+      if (!href) continue;
+      var sheetHref = absolutifyUrl(href, doc);
+      if (hasDangerousScheme(sheetHref)) {
+        sanitizeCounters.blockedUrlSchemes++;
+      } else {
+        stylesheets.push(sheetHref);
+      }
+    }
+    return stylesheets;
+  }
+
+  function collectInlineStylesFrom(doc) {
+    var inlineStyles = [];
+    if (!doc || !doc.querySelectorAll) return inlineStyles;
+    var styleTags = doc.querySelectorAll('head style');
+    for (var st = 0; st < styleTags.length; st++) {
+      var cssText = styleTags[st].textContent;
+      if (cssText && cssText.length < INLINE_STYLE_MAX_BYTES) {
+        inlineStyles.push(sanitizeForWire('css', { css: cssText }).css);
+      }
+    }
+    return inlineStyles;
+  }
+
+  function prepareFrameDocumentClone(frameDoc, bodyClone, cloneToNid) {
+    var liveDescendants = frameDoc.body && frameDoc.body.querySelectorAll
+      ? frameDoc.body.querySelectorAll('*')
+      : [];
+    var cloneDescendants = bodyClone.querySelectorAll('*');
+    var toRemove = [];
+    var blockedPairs = [];
+
+    for (var i = 0; i < liveDescendants.length; i++) {
+      var live = liveDescendants[i];
+      var clone = cloneDescendants[i];
+      if (!clone) continue;
+      var tag = clone.tagName ? String(clone.tagName).toLowerCase() : '';
+
+      if (wireDroppedWithAncestors(live.parentElement)) {
+        reserveNodeId();
+        toRemove.push(clone);
+        continue;
+      }
+
+      var elemDecision = sanitizeForWire('element', { orig: live, clone: clone });
+      if (elemDecision && elemDecision.drop) {
+        toRemove.push(clone);
+        continue;
+      }
+      if (safeSkipElement(clone) || skipElementWithAncestors(clone)) {
+        toRemove.push(clone);
+        continue;
+      }
+      if (blockedWithAncestors(live.parentElement)) continue;
+      if (blockMatches(live)) {
+        assignNodeId(live, clone, cloneToNid);
+        blockedPairs.push({ orig: live, clone: clone });
+        continue;
+      }
+
+      assignNodeId(live, clone, cloneToNid);
+
+      if (tag === 'iframe') {
+        prepareIframeWireShell(live, clone);
+        continue;
+      }
+
+      for (var a = 0; a < URL_ATTRS.length; a++) {
+        var attrVal = clone.getAttribute(URL_ATTRS[a]);
+        if (attrVal) clone.setAttribute(URL_ATTRS[a], absolutifyUrl(attrVal, frameDoc));
+      }
+      var srcsetVal = clone.getAttribute('srcset');
+      if (srcsetVal) clone.setAttribute('srcset', absolutifySrcset(srcsetVal, frameDoc));
+      captureComputedStyles(live, clone);
+      sanitizeForWire('element', { orig: live, clone: clone });
+    }
+
+    for (var r = 0; r < toRemove.length; r++) {
+      if (toRemove[r].parentNode) toRemove[r].parentNode.removeChild(toRemove[r]);
+    }
+    for (var b = 0; b < blockedPairs.length; b++) {
+      replaceWithBlockPlaceholder(
+        blockedPairs[b].orig,
+        blockedPairs[b].clone,
+        readBlockRect(blockedPairs[b].orig),
+        cloneToNid
+      );
+    }
+  }
+
+  function serializeFrameDocument(iframe, frameNid, frameDoc) {
+    if (!iframe || !frameNid || !frameDoc || !frameDoc.documentElement || !frameDoc.body) {
+      return null;
+    }
+    var bodyClone = frameDoc.body.cloneNode(true);
+    var cloneToNid = new Map();
+    var htmlNid = ensureNodeId(frameDoc.documentElement);
+    var bodyNid = ensureNodeId(frameDoc.body);
+
+    prepareFrameDocumentClone(frameDoc, bodyClone, cloneToNid);
+    var subtreeResult = sanitizeForWire('subtree', {
+      root: bodyClone,
+      liveRoot: frameDoc.body,
+      cloneToNid: cloneToNid
+    });
+    if (subtreeResult && subtreeResult.drop) return null;
+
+    var nodeIds = buildNodeIdSidecar(bodyClone, cloneToNid, false);
+    var nestedFrames = collectFramePayloads(frameDoc.body, cloneToNid);
+    return {
+      frameNid: String(frameNid),
+      kind: 'same-origin',
+      html: bodyClone.innerHTML || '',
+      nodeIds: nodeIds,
+      htmlNid: htmlNid ? String(htmlNid) : '',
+      bodyNid: bodyNid ? String(bodyNid) : '',
+      frames: nestedFrames,
+      stylesheets: collectStylesheetsFrom(frameDoc),
+      inlineStyles: collectInlineStylesFrom(frameDoc),
+      htmlAttrs: serializeShellAttributes(frameDoc.documentElement),
+      bodyAttrs: serializeShellAttributes(frameDoc.body),
+      htmlStyle: collectComputedStyleText(frameDoc.documentElement, SHELL_PROPS),
+      bodyStyle: collectComputedStyleText(frameDoc.body, SHELL_PROPS),
+      scrollX: frameDoc.defaultView ? frameDoc.defaultView.scrollX : 0,
+      scrollY: frameDoc.defaultView ? frameDoc.defaultView.scrollY : 0,
+      viewportWidth: frameDoc.defaultView ? frameDoc.defaultView.innerWidth : 0,
+      viewportHeight: frameDoc.defaultView ? frameDoc.defaultView.innerHeight : 0,
+      pageWidth: frameDoc.documentElement.scrollWidth,
+      pageHeight: frameDoc.documentElement.scrollHeight,
+      url: frameDoc.location ? String(frameDoc.location.href || '') : '',
+      title: frameDoc.title || ''
+    };
+  }
+
+  function collectFramePayloads(root, cloneToNid) {
+    var payloads = [];
+    if (!root) return payloads;
+    var allowed = null;
+    if (cloneToNid && typeof cloneToNid.forEach === 'function') {
+      allowed = new Set();
+      cloneToNid.forEach(function(nid) {
+        if (nid !== undefined && nid !== null) allowed.add(String(nid));
+      });
+    }
+
+    var elements = elementsUnderRoot(root);
+    for (var i = 0; i < elements.length; i++) {
+      var iframe = elements[i];
+      var tag = iframe && iframe.tagName ? String(iframe.tagName).toLowerCase() : '';
+      if (tag !== 'iframe') continue;
+      if (skipElementWithAncestors(iframe) || blockedWithAncestors(iframe) || wireDroppedWithAncestors(iframe)) {
+        continue;
+      }
+      var frameNid = getTrackedNodeId(iframe) || ensureNodeId(iframe);
+      if (!frameNid) continue;
+      if (allowed && !allowed.has(String(frameNid))) continue;
+      var classification = classifyFrame(iframe);
+      if (classification.kind === 'same-origin') {
+        var sameOriginPayload = serializeFrameDocument(
+          iframe,
+          frameNid,
+          classification.document
+        );
+        if (sameOriginPayload) payloads.push(sameOriginPayload);
+        continue;
+      }
+      payloads.push(Object.assign({ frameNid: String(frameNid) }, classification));
+    }
+    return payloads;
+  }
+
+  function registerFrameLoadListener(iframe, frameNid) {
+    if (!iframe || !frameNid || typeof iframe.addEventListener !== 'function') return;
+    var key = String(frameNid);
+    var existing = frameLoadListeners.get(key);
+    if (existing && existing.iframe === iframe) return;
+    if (existing && existing.iframe && typeof existing.iframe.removeEventListener === 'function') {
+      existing.iframe.removeEventListener('load', existing.handler);
+    }
+    var handler = function() {
+      var classification = classifyFrame(iframe);
+      if (classification.kind === 'same-origin') {
+        registerFrameDocument(iframe, key, classification.document);
+      } else {
+        observedFrameDocuments.delete(key);
+      }
+    };
+    iframe.addEventListener('load', handler);
+    frameLoadListeners.set(key, { iframe: iframe, handler: handler });
+  }
+
+  function registerFrameDocument(iframe, frameNid, frameDoc) {
+    if (!mutationObserver || !iframe || !frameNid || !frameDoc || !frameDoc.body) return null;
+    var key = String(frameNid);
+    var record = {
+      iframe: iframe,
+      document: frameDoc,
+      root: frameDoc,
+      frameNid: key
+    };
+    observedFrameDocuments.set(key, record);
+    frameDocumentToNid.set(frameDoc, key);
+    registerFrameLoadListener(iframe, key);
+    serializeFrameDocument(iframe, key, frameDoc);
+    try {
+      mutationObserver.observe(frameDoc, mutationObserverOptions());
+    } catch (err) {
+      logger.warn('[DOM Stream] frame document observe failed', {
+        reason: 'observe-failed'
+      });
+      return record;
+    }
+    observeOpenShadowRoots(frameDoc.body);
+    observeSameOriginFrameDocuments(frameDoc.body);
+    return record;
+  }
+
+  function observeSameOriginFrameDocuments(root) {
+    var elements = elementsUnderRoot(root);
+    for (var i = 0; i < elements.length; i++) {
+      var iframe = elements[i];
+      var tag = iframe && iframe.tagName ? String(iframe.tagName).toLowerCase() : '';
+      if (tag !== 'iframe') continue;
+      if (skipElementWithAncestors(iframe) || blockedWithAncestors(iframe) || wireDroppedWithAncestors(iframe)) {
+        continue;
+      }
+      var frameNid = getTrackedNodeId(iframe) || ensureNodeId(iframe);
+      if (!frameNid) continue;
+      var classification = classifyFrame(iframe);
+      if (classification.kind === 'same-origin') {
+        registerFrameDocument(iframe, frameNid, classification.document);
+      } else {
+        registerFrameLoadListener(iframe, frameNid);
+      }
+    }
+  }
+
+  function getMutationFrameRecord(target) {
+    if (!target) return null;
+    var ownerDoc = target.nodeType === Node.DOCUMENT_NODE ? target : target.ownerDocument;
+    if (!ownerDoc) return null;
+    var frameNid = frameDocumentToNid.get(ownerDoc);
+    if (!frameNid) return null;
+    var record = observedFrameDocuments.get(String(frameNid));
+    if (!record || record.document !== ownerDoc) return null;
+    return record;
+  }
+
+  function isInactiveFrameDocumentMutation(target) {
+    if (!target) return false;
+    var ownerDoc = target.nodeType === Node.DOCUMENT_NODE ? target : target.ownerDocument;
+    if (!ownerDoc) return false;
+    var frameNid = frameDocumentToNid.get(ownerDoc);
+    if (!frameNid) return false;
+    var record = observedFrameDocuments.get(String(frameNid));
+    return !record || record.document !== ownerDoc;
+  }
+
+  function scopeFrameDiff(diff, frameRecord) {
+    if (diff && frameRecord && frameRecord.frameNid) {
+      diff.frameNid = String(frameRecord.frameNid);
+    }
+    return diff;
+  }
+
+  function clearObservedFrameDocuments() {
+    frameLoadListeners.forEach(function(record) {
+      try {
+        if (record && record.iframe && typeof record.iframe.removeEventListener === 'function') {
+          record.iframe.removeEventListener('load', record.handler);
+        }
+      } catch (err) {
+        logger.warn('[DOM Stream] frame load listener cleanup failed', {
+          reason: 'cleanup-failed'
+        });
+      }
+    });
+    frameLoadListeners.clear();
+    observedFrameDocuments.clear();
+    frameDocumentToNid = new WeakMap();
   }
 
   function wrapAttachShadow() {
@@ -1706,12 +2065,13 @@ export function createCapture(config) {
    * @param {string} val - The attribute value
    * @returns {string} Absolute URL or original value if invalid
    */
-  function absolutifyUrl(val) {
+  function absolutifyUrl(val, baseDoc) {
     if (!val || val.startsWith('data:') || val.startsWith('blob:') || val.startsWith('javascript:')) {
       return val;
     }
     try {
-      return new URL(val, document.baseURI).href;
+      var base = baseDoc && baseDoc.baseURI ? baseDoc.baseURI : document.baseURI;
+      return new URL(val, base).href;
     } catch (e) {
       return val;
     }
@@ -1722,13 +2082,13 @@ export function createCapture(config) {
    * @param {string} srcset
    * @returns {string}
    */
-  function absolutifySrcset(srcset) {
+  function absolutifySrcset(srcset, baseDoc) {
     if (!srcset) return srcset;
     var candidates = parseSrcsetCandidates(srcset);
     if (!candidates.length) return srcset;
     return candidates.map(function(candidate) {
       return formatSrcsetCandidate({
-        url: absolutifyUrl(candidate.url),
+        url: absolutifyUrl(candidate.url, baseDoc),
         descriptor: candidate.descriptor
       });
     }).join(', ');
@@ -1745,7 +2105,10 @@ export function createCapture(config) {
    */
   function collectComputedStyleText(original, props) {
     try {
-      var computed = window.getComputedStyle(original);
+      var view = original && original.ownerDocument && original.ownerDocument.defaultView
+        ? original.ownerDocument.defaultView
+        : window;
+      var computed = view.getComputedStyle(original);
       var styles = [];
       var styleProps = props || CURATED_PROPS;
 
@@ -1900,22 +2263,11 @@ export function createCapture(config) {
         continue;
       }
 
-      // Keep iframes live with absolutified src (D-04)
+      // Frame documents travel only through frames[] sidecars; the shell
+      // iframe remains inert and content-free in the main html.
       if (tag === 'iframe') {
         assignNodeId(orig, cl, cloneToNid);
-        var iframeSrc = cl.getAttribute('src');
-        if (iframeSrc) {
-          cl.setAttribute('src', absolutifyUrl(iframeSrc));
-        }
-        // Security: prevent interaction with embedded content (D-05)
-        var existingStyle = cl.getAttribute('style') || '';
-        cl.setAttribute('style', existingStyle + ';pointer-events:none');
-        // Capture computed styles for sizing/positioning
-        captureComputedStyles(orig, cl);
-        // SEC-01: iframe exits the loop early, so it gets its own
-        // final-wire-value scrub (srcdoc drop + post-absolutification
-        // scheme check on src).
-        sanitizeForWire('element', { orig: orig, clone: cl });
+        prepareIframeWireShell(orig, cl);
         continue;
       }
 
@@ -1993,32 +2345,13 @@ export function createCapture(config) {
     }
 
     // Collect stylesheet URLs from document.head
-    var stylesheets = [];
-    var links = document.querySelectorAll('head link[rel="stylesheet"]');
-    for (var s = 0; s < links.length; s++) {
-      var href = links[s].getAttribute('href');
-      if (href) {
-        var sheetHref = absolutifyUrl(href);
-        if (hasDangerousScheme(sheetHref)) {
-          sanitizeCounters.blockedUrlSchemes++;
-        } else {
-          stylesheets.push(sheetHref);
-        }
-      }
-    }
+    var stylesheets = collectStylesheetsFrom(document);
 
     // Collect inline <style> tags from document.head, value-scrubbed
     // through the chokepoint's 'css' dispatch (SEC-01: dangerous url()
     // schemes, expression(), -moz-binding, non-http(s) @import, </style
     // breakout). Benign CSS passes byte-identical.
-    var inlineStyles = [];
-    var styleTags = document.querySelectorAll('head style');
-    for (var st = 0; st < styleTags.length; st++) {
-      var cssText = styleTags[st].textContent;
-      if (cssText && cssText.length < INLINE_STYLE_MAX_BYTES) {
-        inlineStyles.push(sanitizeForWire('css', { css: cssText }).css);
-      }
-    }
+    var inlineStyles = collectInlineStylesFrom(document);
 
     var html = clone.innerHTML;
     var truncated = false;
@@ -2103,11 +2436,13 @@ export function createCapture(config) {
 
     var nodeIds = buildNodeIdSidecar(clone, cloneToNid, false);
     var shadowRoots = collectShadowRootPayloads(document.body, nodeIds);
+    var frames = collectFramePayloads(document.body, cloneToNid);
 
     return {
       html: html,
       nodeIds: nodeIds,
       shadowRoots: shadowRoots,
+      frames: frames,
       truncated: truncated,
       missingDescendants: missingDescendants,
       stylesheets: stylesheets,
@@ -2171,7 +2506,9 @@ export function createCapture(config) {
         nodeIds: rootNid ? [rootNid] : []
       };
     }
+    var rootTag = el.tagName ? String(el.tagName).toLowerCase() : '';
     for (var a = 0; a < URL_ATTRS.length; a++) {
+      if (rootTag === 'iframe' && URL_ATTRS[a] === 'src') continue;
       var val = el.getAttribute(URL_ATTRS[a]);
       if (val) el.setAttribute(URL_ATTRS[a], absolutifyUrl(val));
     }
@@ -2189,7 +2526,9 @@ export function createCapture(config) {
       if (blockedWithAncestors(desc.parentElement)) continue;
       ensureNodeId(desc);
       if (blockMatches(desc)) continue;
+      var descTag = desc.tagName ? String(desc.tagName).toLowerCase() : '';
       for (var b = 0; b < URL_ATTRS.length; b++) {
+        if (descTag === 'iframe' && URL_ATTRS[b] === 'src') continue;
         var dv = desc.getAttribute(URL_ATTRS[b]);
         if (dv) desc.setAttribute(URL_ATTRS[b], absolutifyUrl(dv));
       }
@@ -2208,6 +2547,7 @@ export function createCapture(config) {
       var liveNid = getTrackedNodeId(liveDescendants[c]);
       if (liveNid && cloneDescendants[c]) cloneToNid.set(cloneDescendants[c], liveNid);
     }
+    prepareIframeWireShellsForClone(el, wireClone);
     var subtreeResult = sanitizeForWire('subtree', {
       root: wireClone,
       liveRoot: el,
@@ -2216,10 +2556,12 @@ export function createCapture(config) {
     if (subtreeResult && subtreeResult.drop) return null;
     var nodeIds = buildNodeIdSidecar(wireClone, cloneToNid, true);
     var shadowRoots = collectShadowRootPayloads(el, nodeIds);
+    var frames = collectFramePayloads(el, cloneToNid);
     return {
       html: wireClone.outerHTML || '',
       nodeIds: nodeIds,
-      shadowRoots: shadowRoots
+      shadowRoots: shadowRoots,
+      frames: frames
     };
   }
 
@@ -2242,6 +2584,8 @@ export function createCapture(config) {
 
     for (var i = 0; i < mutations.length; i++) {
       var m = mutations[i];
+      var frameRecord = getMutationFrameRecord(m.target);
+      if (!frameRecord && isInactiveFrameDocumentMutation(m.target)) continue;
 
       // Skip mutations on host-flagged elements (skipElement seam).
       // Ancestor-inclusive, matching the reference's isFsbOverlay closest()
@@ -2264,7 +2608,12 @@ export function createCapture(config) {
           continue;
         }
         var shadowHostNid = getTrackedNodeId(shadowHost) || ensureNodeId(shadowHost);
-        if (shadowHostNid) shadowHosts.set(String(shadowHostNid), shadowHost);
+        if (shadowHostNid) {
+          shadowHosts.set(String(shadowHostNid), {
+            host: shadowHost,
+            frameRecord: frameRecord
+          });
+        }
         continue;
       }
 
@@ -2298,17 +2647,19 @@ export function createCapture(config) {
             // scrubs to nothing -- emit no add op rather than an empty op.
             if (!addedPayload || !addedPayload.html) continue;
             observeOpenShadowRoots(added);
+            observeSameOriginFrameDocuments(added);
             var nextSib = added.nextElementSibling;
             var beforeNid = getTrackedNodeId(nextSib);
 
-            diffs.push({
+            diffs.push(scopeFrameDiff({
               op: 'add',
               parentNid: parentNid,
               html: addedPayload.html,
               beforeNid: beforeNid,
               nodeIds: addedPayload.nodeIds,
-              shadowRoots: addedPayload.shadowRoots || []
-            });
+              shadowRoots: addedPayload.shadowRoots || [],
+              frames: addedPayload.frames || []
+            }, frameRecord));
           } else if (added.nodeType === Node.TEXT_NODE || added.nodeType === Node.CDATA_SECTION_NODE) {
             sawBareTextNode = true;
           }
@@ -2321,7 +2672,7 @@ export function createCapture(config) {
             if (wireDroppedWithAncestors(removed)) continue;
             var nid = getTrackedNodeId(removed);
             if (!nid) continue; // Not tracked
-            diffs.push({ op: 'rm', nid: nid });
+            diffs.push(scopeFrameDiff({ op: 'rm', nid: nid }, frameRecord));
             removedRoots.push(removed);
           } else if (removed.nodeType === Node.TEXT_NODE || removed.nodeType === Node.CDATA_SECTION_NODE) {
             sawBareTextNode = true;
@@ -2358,11 +2709,11 @@ export function createCapture(config) {
             });
             // Same wire shape as the characterData branch: the renderer's
             // DIFF_OP.TEXT applier sets textContent on the nid target.
-            diffs.push({
+            diffs.push(scopeFrameDiff({
               op: 'text',
               nid: textTargetNid,
               text: e2TextResult.text
-            });
+            }, frameRecord));
           }
         }
       } else if (m.type === 'attributes') {
@@ -2372,10 +2723,10 @@ export function createCapture(config) {
         var attrVal = m.target.getAttribute(m.attributeName);
         // Absolutify URL attributes in mutations
         if (URL_ATTRS.indexOf(m.attributeName) !== -1 && attrVal) {
-          attrVal = absolutifyUrl(attrVal);
+          attrVal = absolutifyUrl(attrVal, m.target.ownerDocument);
         }
         if (m.attributeName === 'srcset' && attrVal) {
-          attrVal = absolutifySrcset(attrVal);
+          attrVal = absolutifySrcset(attrVal, m.target.ownerDocument);
         }
 
         // SEC-01: route through the chokepoint AFTER absolutification so
@@ -2388,12 +2739,12 @@ export function createCapture(config) {
         });
         if (attrResult.drop) continue;
 
-        diffs.push({
+        diffs.push(scopeFrameDiff({
           op: 'attr',
           nid: targetNid,
           attr: m.attributeName,
           val: attrResult.value
-        });
+        }, frameRecord));
       } else if (m.type === 'characterData') {
         var parentEl = m.target.parentElement;
         var textNid = getTrackedNodeId(parentEl);
@@ -2406,18 +2757,22 @@ export function createCapture(config) {
           owner: parentEl
         });
 
-        diffs.push({
+        diffs.push(scopeFrameDiff({
           op: 'text',
           nid: textNid,
           text: textResult.text
-        });
+        }, frameRecord));
       }
     }
 
-    shadowHosts.forEach(function(host, hostNid) {
+    shadowHosts.forEach(function(entry, hostNid) {
+      var host = entry && entry.host ? entry.host : entry;
       var payload = serializeOpenShadowRoot(host, hostNid);
       if (!payload) return;
-      diffs.push(Object.assign({ op: DIFF_OP.SHADOW_ROOT }, payload));
+      diffs.push(scopeFrameDiff(
+        Object.assign({ op: DIFF_OP.SHADOW_ROOT }, payload),
+        entry && entry.frameRecord ? entry.frameRecord : null
+      ));
     });
 
     for (var rr = 0; rr < removedRoots.length; rr++) {
@@ -2473,6 +2828,7 @@ export function createCapture(config) {
 
     pendingMutations = [];
     observedShadowRoots = new WeakSet();
+    clearObservedFrameDocuments();
 
     mutationObserver = new MutationObserver(function(mutations) {
       // Accumulate mutations
@@ -2487,6 +2843,7 @@ export function createCapture(config) {
 
     mutationObserver.observe(document.body, mutationObserverOptions());
     observeOpenShadowRoots(document.body);
+    observeSameOriginFrameDocuments(document.body);
     wrapAttachShadow();
 
     // Phase 211-02 STREAM-01: 5s capture-side self-watchdog (trip wire).
@@ -2560,6 +2917,7 @@ export function createCapture(config) {
       }
     }
 
+    clearObservedFrameDocuments();
     logger.info('[DOM Stream] MutationObserver stopped');
   }
 
@@ -2738,8 +3096,23 @@ export function createCapture(config) {
   function getNodeId(element) {
     if (!streaming) return null;
     if (!element || element.nodeType !== Node.ELEMENT_NODE) return null;
-    if (element.isConnected === false) return null;
+    if (element.isConnected === false && !getMutationFrameRecord(element)) return null;
     return getTrackedNodeId(element);
+  }
+
+  function getObservedFrameDocuments() {
+    if (!streaming) return [];
+    var roots = [];
+    observedFrameDocuments.forEach(function(record) {
+      if (!record || !record.document) return;
+      roots.push({
+        iframe: record.iframe,
+        document: record.document,
+        root: record.root || record.document,
+        frameNid: record.frameNid
+      });
+    });
+    return roots;
   }
 
   // Readiness signal. The reference pinged its host once at script-load
@@ -2756,6 +3129,7 @@ export function createCapture(config) {
     stop: stop,
     pause: pause,
     resume: resume,
-    getNodeId: getNodeId
+    getNodeId: getNodeId,
+    getObservedFrameDocuments: getObservedFrameDocuments
   };
 }
