@@ -1,6 +1,6 @@
 ---
 phase: "08-shadow-dom-iframes-fidelity-completion"
-reviewed: "2026-06-15T20:54:01Z"
+reviewed: "2026-06-15T21:05:40Z"
 depth: standard
 files_reviewed: 34
 files_reviewed_list:
@@ -39,84 +39,134 @@ files_reviewed_list:
   - tests/security-chokepoint-purity.test.js
   - tests/semantic-addressing.test.js
 findings:
-  critical: 2
+  critical: 4
   warning: 0
   info: 0
-  total: 2
+  total: 4
 status: issues_found
 ---
 
 # Phase 8: Code Review Report
 
-**Reviewed:** 2026-06-15T20:54:01Z
+**Reviewed:** 2026-06-15T21:05:40Z
 **Depth:** standard
 **Files Reviewed:** 34
 **Status:** issues_found
 
 ## Summary
 
-Re-reviewed the Phase 8 source, docs, and tests after fixes in commits `33ae99c` and `794e57a`.
+Final re-review after commits `33ae99c`, `794e57a`, and `94ff5c6`.
 
-The prior issues are resolved on the covered paths: iframe `src` mutations are blocked in both capture and renderer, frame/shadow sidecars are included in snapshot budgeting and converted to requestable placeholders when pruned, frame-local shadow roots and URL bases are handled, UTF-8 byte measurement is used, subtree responses are bounded, and normal rAF mutation flushes chunk bounded add ops.
+The prior iframe `src` attr mutation bypass is blocked at capture and renderer, frame/shadow sidecars are included in snapshot budgeting and become requestable placeholders when pruned, frame-local shadow roots and URL bases are handled, UTF-8 byte measurement is used, oversized add/subtree responses are bounded, aggregate inline styles are pruned, and `stop()` now routes pending mutation batches through the chunking helper.
 
-Two relay-cap blockers remain. Both were reproduced with one-off Node probes outside the existing suite. The project test suite still passes (`npm test`: 374 passed), which means these edge cases are currently untested.
+Four blockers remain. Two are still relay-cap failures under untested payload shapes, one makes the new empty fallback snapshot unrecoverable in the renderer, and one leaves navigated same-origin iframe documents unsynchronized. The full suite currently passes (`npm test`: 376 passed), so these cases need new regression coverage.
 
 ## Critical Issues
 
-### CR-01: BLOCKER - Snapshot base payload can exceed the relay cap without any sidecars
+### CR-01: BLOCKER - Snapshot fallback still leaves `url` outside the relay budget
 
-**File:** `src/capture/index.js:985`, `src/capture/index.js:1990`, `src/capture/index.js:2750`, `src/capture/index.js:2799`, `src/adapters/playwright-inject.js:1021`, `src/adapters/playwright-inject.js:2026`, `src/adapters/playwright-inject.js:2786`, `src/adapters/playwright-inject.js:2835`
+**File:** `src/capture/index.js:2102`, `src/capture/index.js:2927`, `src/adapters/playwright-inject.js:2138`, `src/adapters/playwright-inject.js:2963`
 
-**Issue:** Snapshot truncation still starts from `wireByteLength(html)` only, and `pruneSnapshotSidecarsForBudget()` only reduces payload size while `shadowRoots` or `frames` remain. Head payloads such as `inlineStyles`, `stylesheets`, shell attrs/styles, URL, and title are part of the same wire message but cannot be reduced when the body HTML is small and no sidecars exist. `collectInlineStylesFrom()` accepts every `<style>` under `INLINE_STYLE_MAX_BYTES` individually, so several individually allowed style tags can create an over-cap `STREAM.SNAPSHOT`. I reproduced a snapshot with a tiny body and four inline styles: `snapshotBytes=1642137`, `relayLimit=1048576`, `snapshotBudget=838860`.
-
-**Fix:**
-
-Budget the complete snapshot payload, not only `html` plus sidecars. Keep pruning until the final object sent by `serializeDOM()` is below the relay cap, including aggregate caps for head styles.
-
-```js
-function fitSnapshotPayloadForBudget(payload, clone, cloneToNid, truncatedNodeIds) {
-  var next = Object.assign({}, payload);
-
-  while (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.inlineStyles.length) {
-    next.inlineStyles.pop();
-    next.truncated = true;
-  }
-
-  while (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.stylesheets.length) {
-    next.stylesheets.pop();
-    next.truncated = true;
-  }
-
-  if (wireByteLength(next) > RELAY_PER_MESSAGE_LIMIT_BYTES) {
-    next = truncateBodyAgainstFullPayload(next, clone, cloneToNid, truncatedNodeIds);
-  }
-
-  return next;
-}
-```
-
-Apply the same generated/injected change to `src/adapters/playwright-inject.js`, and add a regression test with multiple sub-500KB inline styles that asserts every emitted snapshot is below `RELAY_PER_MESSAGE_LIMIT_BYTES`.
-
-### CR-02: BLOCKER - `stop()` final mutation flush bypasses chunking and can send over-cap add batches
-
-**File:** `src/capture/index.js:3299`, `src/capture/index.js:3445`, `src/adapters/playwright-inject.js:3335`, `src/adapters/playwright-inject.js:3481`
-
-**Issue:** Normal mutation flushing uses `sendMutationDiffs()`, which drops over-budget single diffs and chunks batches before sending. The final flush inside `stopMutationStream()` processes pending mutations, then calls `safeSend(STREAM.MUTATIONS, { mutations: diffs, ... })` directly. That bypasses the chunking helper. If many individually valid add ops are queued and `stop()` runs before the rAF flush, the stop path emits one oversized mutation frame. I reproduced this by holding `requestAnimationFrame`, appending 700 small sections, and calling `stop()`: one `STREAM.MUTATIONS` payload was sent with `size=2201369`, `relayLimit=1048576`, `opCount=700`.
+**Issue:** `fitSnapshotPayloadForBudget()` strips html, sidecars, head styles, attrs, shell styles, and title in the hard fallback, but it never clears or truncates `next.url`. `serializeDOM()` always copies `location.href` into the same `STREAM.SNAPSHOT` payload. A long URL can therefore keep the final snapshot above `RELAY_PER_MESSAGE_LIMIT_BYTES` after the fallback has run. I reproduced `snapshotBytes=1049970` with `relayLimit=1048576`, `htmlLength=0`, and `urlLength=1049597`.
 
 **Fix:**
 
-Route the stop flush through the same bounded sender as the normal path. If preserving the stop-path omission of `staleFlushCount` is still required, make that an option on the helper instead of bypassing chunking.
-
 ```js
-if (diffs.length > 0) {
-  sendMutationDiffs(diffs, { includeStaleFlushCount: false });
+if (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.url) {
+  next.url = '';
+  markSnapshotPayloadTruncated(next);
+}
+
+if (wireByteLength(next) > RELAY_PER_MESSAGE_LIMIT_BYTES) {
+  next.html = '';
+  next.nodeIds = [];
+  next.shadowRoots = [];
+  next.frames = [];
+  next.inlineStyles = [];
+  next.stylesheets = [];
+  next.htmlAttrs = {};
+  next.bodyAttrs = {};
+  next.htmlStyle = '';
+  next.bodyStyle = '';
+  next.title = '';
+  next.url = '';
+  next.missingDescendants = (next.missingDescendants || 0) + 1;
+  markSnapshotPayloadTruncated(next);
 }
 ```
 
-Add a regression test that holds rAF, appends enough individually under-cap nodes to exceed the relay cap as a batch, calls `capture.stop()`, and asserts every `STREAM.MUTATIONS` payload is below `RELAY_PER_MESSAGE_LIMIT_BYTES`.
+Add a regression test with a long `location.href` that asserts the emitted snapshot payload is always `<= RELAY_PER_MESSAGE_LIMIT_BYTES`. Apply the same generated change to `src/adapters/playwright-inject.js`.
+
+### CR-02: BLOCKER - Renderer rejects the empty snapshots produced by the new hard fallback
+
+**File:** `src/renderer/index.js:941`, `tests/renderer-viewer.test.js:321`
+
+**Issue:** The capture fallback can intentionally emit a valid snapshot with `html: ''` after stripping payload fields to stay under the relay cap. The renderer treats any falsy `p.html` as missing and returns before adopting the new stream identity or writing `srcdoc`. This also rejects legitimate empty-body pages. The current renderer test codifies "missing payload.html" but does not distinguish an absent field from an empty string.
+
+**Fix:**
+
+```js
+function handleSnapshot(payload) {
+  var p = payload || {};
+  if (typeof p.html !== 'string') {
+    logger.error('[Renderer] snapshot missing html');
+    return;
+  }
+  active.streamSessionId = p.streamSessionId || '';
+  active.snapshotId = p.snapshotId || 0;
+  // existing reset + srcdoc write
+}
+```
+
+Add coverage for `{ html: '', truncated: true, nodeIds: [] }` and for an ordinary empty body snapshot. Missing or non-string `html` should still be rejected.
+
+### CR-03: BLOCKER - Event-driven value diffs bypass mutation byte budgeting
+
+**File:** `src/capture/index.js:1323`, `src/adapters/playwright-inject.js:1359`
+
+**Issue:** Normal mutation flushes and stop flushes use `sendMutationDiffs()`, which chunks batches and drops single over-cap diffs. `handleValueEvent()` sends `STREAM.MUTATIONS` directly, so a large textarea/input/select value can exceed the relay cap. I reproduced an `input` event on a textarea with `mutationBytes=1049697` against `relayLimit=1048576`; the payload carried one `DIFF_OP.VALUE` with a 1,049,576-character value.
+
+**Fix:**
+
+```js
+function handleValueEvent(event) {
+  if (!streaming || !event || !event.target) return;
+  var diff = buildValueDiff(event.target);
+  if (!diff) return;
+  sendMutationDiffs(
+    [scopeFrameDiff(diff, getMutationFrameRecord(event.target))],
+    { includeStaleFlushCount: false }
+  );
+}
+```
+
+Add a regression test with an over-1 MiB textarea value that asserts no emitted `STREAM.MUTATIONS` payload exceeds `RELAY_PER_MESSAGE_LIMIT_BYTES`. Apply the same generated change to `src/adapters/playwright-inject.js`.
+
+### CR-04: BLOCKER - Navigated same-origin iframe documents are registered but never sent to the renderer
+
+**File:** `src/capture/index.js:1156`, `src/capture/index.js:1181`, `src/renderer/index.js:983`
+
+**Issue:** On iframe `load`, the capture handler re-registers the new same-origin document, but `registerFrameDocument()` only calls `serializeFrameDocument()` for side effects and discards the returned frame payload. No snapshot, frame-refresh diff, add sidecar, or subtree response is sent for the new document. Later mutations inside that navigated frame are scoped with nids assigned from the new frame document, but the renderer never indexed those nids because it only installs frame payloads from snapshots, add ops, and subtree responses. Static content in the loaded frame is never mirrored, and later frame-local diffs become stale misses.
+
+**Fix:**
+
+Introduce an explicit frame-refresh path. Either add a `DIFF_OP.FRAME` op that carries the serialized frame payload and have the renderer call `installOneFrame()`, or trigger a bounded full snapshot when a registered same-origin frame loads.
+
+```js
+var payload = serializeFrameDocument(iframe, key, frameDoc);
+if (payload) {
+  sendMutationDiffs([{
+    op: DIFF_OP.FRAME,
+    frameNid: key,
+    frame: payload
+  }], { includeStaleFlushCount: false });
+}
+```
+
+The renderer side should handle the new op by installing the inert `srcdoc` frame and indexing `frame.nodeIds`, `frame.shadowRoots`, and nested `frame.frames`. Add an end-to-end test that changes an existing same-origin iframe document, fires `load`, and verifies the viewer can resolve and display a node from the new frame before any additional frame mutation occurs.
 
 ---
 
-_Reviewed: 2026-06-15T20:54:01Z_
+_Reviewed: 2026-06-15T21:05:40Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: standard_
