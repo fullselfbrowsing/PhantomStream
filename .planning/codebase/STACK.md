@@ -45,12 +45,19 @@
 - `ws@8.21.0` — WebSocket server/backend in `src/relay/backends/ws.js`; reference server
   still uses CommonJS `ws` in `reference/server/ws-handler.js`
 
+**Browser endpoint transport:**
+- Native `CompressionStream('deflate-raw')` / `DecompressionStream('deflate-raw')`
+  when available, with injected codec support for deterministic tests and fallback.
+- Browser `WebSocket` API through an injected constructor seam for tests and alternate hosts.
+
 ## Key Dependencies
 
 **Runtime (src/ standalone framework):**
 - `ws@8.21.0` — Node-only dependency isolated to the relay WebSocket backend and future
   demo server path. Browser-injected capture/renderer/protocol modules remain free of
   runtime npm dependencies.
+- `src/transport/websocket.js` uses native browser/Node web APIs and injected codecs only;
+  it does not import `ws` or `lz-string`.
 
 **LZ-string (reference, vendored):**
 - `lz-string` — LZ-string compression library, vendored as `reference/extension/lz-string.min.js` (4.8 KB minified). Used for wire-transport compression. NOT imported via npm — loaded via browser script tag or `importScripts()` in the extension Service Worker (background.js). The `src/protocol/envelope.js` accepts an injected codec rather than importing lz-string directly, keeping the protocol module dependency-free.
@@ -63,7 +70,7 @@
 **Package:**
 - `package.json` — name `@fullselfbrowsing/phantom-stream`, version `0.1.0`, `"type": "module"`
 - Entry point: `src/protocol/index.js` (via `"main"`). Package exports currently include
-  `./protocol`, `./capture`, `./renderer`, and `./relay`.
+  `./protocol`, `./capture`, `./renderer`, `./relay`, and `./transport/websocket`.
 
 **Environment:**
 - No `.env` files present
@@ -95,6 +102,9 @@
 **Production framework surfaces:**
 - `src/protocol/` — universal: works in any JS runtime (extension content script, service worker, browser, Node) by design (noted in `src/protocol/envelope.js` line 9)
 - `src/relay/` — Node-oriented relay core/backend surface exported as `./relay`
+- `src/transport/websocket.js` — browser-compatible endpoint transport exported as
+  `./transport/websocket`; owns native deflate envelopes, legacy `_lz` decode,
+  FIFO send/receive ordering, and content-free health/status telemetry
 - Planned extraction targets: Chrome extension content script, Playwright/CDP `Page.addScriptToEvaluateOnNewDocument`, bookmarklet, embedded SDK (see `src/capture/README.md`)
 
 ---

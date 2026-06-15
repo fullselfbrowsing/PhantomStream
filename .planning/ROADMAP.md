@@ -127,7 +127,7 @@ Plans:
 - [x] 04-01-PLAN.md — Relay core, ws backend, package dependency, and relay safety tests
 
 **Wave 2** *(blocked on 04-01)*
-- [ ] 04-02-PLAN.md — Endpoint WebSocket transport, native deflate/legacy decode, FIFO ordering tests
+- [x] 04-02-PLAN.md — Endpoint WebSocket transport, native deflate/legacy decode, FIFO ordering tests
 
 **Wave 3** *(blocked on 04-02)*
 - [ ] 04-03-PLAN.md — Viewer `on('state'|'health')` events, health telemetry, and renderer tests

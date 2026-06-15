@@ -100,6 +100,12 @@ managua/                          # Repo root
 - Status: Active implementation for RELY-01 — raw source/viewer fan-out, 1 MiB cap
   diagnostics, and per-client backpressure drops are tested
 
+**`src/transport/`:**
+- Purpose: Endpoint transports that satisfy capture/viewer fire-and-forget contracts
+- Contains: `websocket.js` browser WebSocket transport, native deflate-raw codec seam,
+  legacy `_lz` decode compatibility, FIFO queues, and status/health telemetry
+- Status: Active implementation for RELY-02 — package-exported at `./transport/websocket`
+
 **`src/renderer/`:**
 - Purpose: Placeholder for extraction of the viewer code from `reference/dashboard/dashboard.js`
   (lines 2700–3960)
@@ -167,6 +173,11 @@ managua/                          # Repo root
 - `src/relay/backends/ws.js` — Node `ws` backend with `/ws` admission validation and
   `perMessageDeflate: false`
 
+**Transport implementation:**
+- `src/transport/websocket.js` — browser WebSocket transport with `encodeWireMessage`,
+  `decodeWireMessage`, `createWebSocketTransport`, FIFO send/receive ordering, `flush()`,
+  `onMessage`, `onStatus`, `close`, and `getHealth`
+
 **Capture reference (authoritative for `src/capture/` extraction):**
 - `reference/extension/dom-stream.js` — full 1117-line content script
 
@@ -188,13 +199,14 @@ managua/                          # Repo root
 - `tests/protocol.test.js`
 - `tests/relay-core.test.js`
 - `tests/relay-ws-backend.test.js`
+- `tests/websocket-transport.test.js`
 
 **Reference tests:**
 - `reference/tests/` — 6 test files
 
 **Package manifest:**
 - `package.json` — `"type": "module"`, `"main": "src/protocol/index.js"`,
-  exports for `./protocol`, `./capture`, `./renderer`, and `./relay`,
+  exports for `./protocol`, `./capture`, `./renderer`, `./relay`, and `./transport/websocket`,
   test command: `node --test tests/*.test.js tests/differential/*.test.js`
 
 ## Naming Conventions
@@ -244,6 +256,11 @@ managua/                          # Repo root
 **New `src/relay/` module file:**
 - Place in `src/relay/<name>.js`; backend implementations in `src/relay/backends/<name>.js`
 - Entry point: `src/relay/index.js` → `createRelay({ backend, limits })`
+
+**New `src/transport/` module file:**
+- Place endpoint transports in `src/transport/<name>.js`
+- Keep endpoint compression/decompression in the transport layer, never in relay code
+- Use injected codecs or native runtime APIs; do not add browser-injected runtime dependencies
 
 **New `src/renderer/` module file:**
 - Place in `src/renderer/<name>.js`

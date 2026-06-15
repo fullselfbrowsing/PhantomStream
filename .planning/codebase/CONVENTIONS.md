@@ -61,6 +61,8 @@ All new code in `src/` follows the **new-style** conventions described below. Th
 - Explicit `.js` extensions on all relative imports (required for native ESM): `import { ... } from './constants.js'`
 - Barrel `index.js` re-exports everything: `export * from './constants.js'; export * from './messages.js'; export * from './envelope.js'`
 - Package `exports` field maps subpath to module: `"./protocol": "./src/protocol/index.js"`
+- Endpoint modules can be exported directly by subpath when no barrel exists yet, e.g.
+  `"./transport/websocket": "./src/transport/websocket.js"`
 
 **Reference `reference/` code:**
 - Extension content scripts: IIFEs with `window.FSB` namespace attachment
@@ -87,7 +89,7 @@ import { ... } from '../src/protocol/index.js';  // 3. Local source (relative, .
 
 ## Dependency Philosophy
 
-**`src/` modules are dependency-free by design.** The LZ-string codec in `src/protocol/envelope.js` is injected at call time (`encodeEnvelope(msg, lz, threshold)`) rather than imported. This keeps the module usable in any runtime: extension content script, service worker, browser page, or Node.
+**Browser-facing `src/` modules are dependency-free by design.** The LZ-string codec in `src/protocol/envelope.js` is injected at call time (`encodeEnvelope(msg, lz, threshold)`) rather than imported. The WebSocket transport follows the same rule: native `CompressionStream`/`DecompressionStream` or injected codecs are used at endpoints, and neither `ws` nor `lz-string` is imported into browser transport code.
 
 ```js
 // Correct: caller provides the codec

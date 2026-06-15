@@ -214,6 +214,20 @@ The relay core routes raw source/viewer frames to the opposite role, enforces
 validates `/ws?room=<key>&role=source|viewer`, disables `perMessageDeflate`, handles
 local ping/pong, and delegates all routing/limit decisions to the relay core.
 
+### Implemented: `src/transport/`
+
+Endpoint WebSocket transport for browser capture/viewer clients. Compression and
+decompression stay at endpoints so relay frames remain raw and independently decodable.
+
+| File | Exports |
+|------|---------|
+| `src/transport/websocket.js` | `createWebSocketTransport()`, `encodeWireMessage()`, `decodeWireMessage()` |
+
+The transport encodes large outbound frames as `{ _ps: 'deflate-raw', d }` using native
+`CompressionStream('deflate-raw')` when available, decodes legacy FSB `{ _lz, d }` envelopes
+through an injected LZ codec, serializes async send and receive work through FIFO promise
+queues, and exposes `onStatus()` / `getHealth()` telemetry without mirrored payload content.
+
 ### Planned: `src/renderer/`
 
 Extraction of viewer code from `reference/dashboard/dashboard.js` (~lines 2700–3960).
@@ -238,6 +252,7 @@ Planned module split: `snapshot-renderer.js`, `diff-applier.js`, `overlays.js`,
 | Protocol envelope | LZ encode/decode | `src/protocol/envelope.js` |
 | Relay core | Raw room fan-out, cap checks, diagnostics, backpressure drops | `src/relay/relay.js`, `src/relay/limits.js` |
 | WebSocket backend | Node `ws` admission and socket lifecycle adapter | `src/relay/backends/ws.js` |
+| WebSocket transport | Browser endpoint encode/decode, FIFO queues, status/health | `src/transport/websocket.js` |
 
 ## Data Flow
 
@@ -320,6 +335,12 @@ Planned module split: `snapshot-renderer.js`, `diff-applier.js`, `overlays.js`,
 **Protocol module** (`src/protocol/index.js`):
 - ESM entry point for the standalone framework
 - Exported at `package.json` `"./protocol"` path
+
+**WebSocket transport** (`src/transport/websocket.js`):
+- ESM endpoint transport exported at package path `"./transport/websocket"`
+- Capture/viewer callers keep the fire-and-forget `send(type, payload)` contract
+- `flush()` drains queued async encoding/sends; inbound decode fan-out is also ordered
+- Health/status payloads carry counters, timestamps, drops, and error codes only
 
 ## Architectural Constraints
 
