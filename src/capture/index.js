@@ -2306,6 +2306,21 @@ export function createCapture(config) {
     }
   }
 
+  function collectSubtreeComputedStyles(root) {
+    var styles = new WeakMap();
+    if (!root || root.nodeType !== Node.ELEMENT_NODE) return styles;
+    var liveElements = [root];
+    if (root.querySelectorAll) {
+      var descendants = root.querySelectorAll('*');
+      for (var i = 0; i < descendants.length; i++) liveElements.push(descendants[i]);
+    }
+    for (var e = 0; e < liveElements.length; e++) {
+      var styleText = collectComputedStyleText(liveElements[e], CURATED_PROPS);
+      if (styleText) styles.set(liveElements[e], styleText);
+    }
+    return styles;
+  }
+
   /**
    * Serialize the attributes of a shell element (html/body), dropping style
    * and on* handler attributes. This was the reference's ONLY on*-strip
@@ -2667,6 +2682,7 @@ export function createCapture(config) {
         nodeIds: rootNid ? [rootNid] : []
       };
     }
+    var computedStyles = collectSubtreeComputedStyles(el);
     var rootTag = el.tagName ? String(el.tagName).toLowerCase() : '';
     for (var a = 0; a < URL_ATTRS.length; a++) {
       if (rootTag === 'iframe' && URL_ATTRS[a] === 'src') continue;
@@ -2702,11 +2718,17 @@ export function createCapture(config) {
     var wireClone = el.cloneNode(true);
     var cloneToNid = new Map();
     if (rootNid) cloneToNid.set(wireClone, rootNid);
+    var rootStyleText = computedStyles.get(el);
+    if (rootStyleText) appendStyleDeclaration(wireClone, rootStyleText);
     var liveDescendants = el.querySelectorAll('*');
     var cloneDescendants = wireClone.querySelectorAll('*');
     for (var c = 0; c < liveDescendants.length; c++) {
       var liveNid = getTrackedNodeId(liveDescendants[c]);
       if (liveNid && cloneDescendants[c]) cloneToNid.set(cloneDescendants[c], liveNid);
+      var descStyleText = computedStyles.get(liveDescendants[c]);
+      if (descStyleText && cloneDescendants[c]) {
+        appendStyleDeclaration(cloneDescendants[c], descStyleText);
+      }
     }
     prepareIframeWireShellsForClone(el, wireClone);
     var subtreeResult = sanitizeForWire('subtree', {
