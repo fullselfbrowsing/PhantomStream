@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 07-03-PLAN.md
-last_updated: "2026-06-15T16:38:46.278Z"
+status: verifying
+stopped_at: Completed 07-04-PLAN.md
+last_updated: "2026-06-15T16:52:41.761Z"
 last_activity: 2026-06-15
 progress:
   total_phases: 13
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 35
-  completed_plans: 34
-  percent: 97
+  completed_plans: 35
+  percent: 100
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-06-14)
 
 ## Current Position
 
-Phase: 07 (weakmap-node-identity-semantic-addressing-api) — EXECUTING
+Phase: 07 (weakmap-node-identity-semantic-addressing-api) — VERIFYING
 Plan: 4 of 4
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-15
 
-Progress: [██████████] 97%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -76,6 +76,7 @@ Progress: [██████████] 97%
 | Phase 07 P01 | 20 min | 3 tasks | 11 files |
 | Phase 07 P02 | 14 min | 3 tasks | 8 files |
 | Phase 07 P03 | 7min | 3 tasks | 6 files |
+| Phase 07 P04 | 9min | 4 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -124,6 +125,8 @@ Recent decisions affecting current work:
 - [Phase 07]: Viewer semantic resolution returns geometry and identity only. — Prevents the public semantic API from exposing mirrored HTML, text, attrs, payloads, URLs, titles, or DOM references.
 - [Phase 07]: highlightNode is local renderer overlay behavior. — Node highlighting uses the existing host overlay layer and never sends STREAM.OVERLAY or expands remote-control dispatch.
 - [Phase 07]: Capture getNodeId is live-public while internal removed-node identity remains available. — Public hosts get null for detached or inactive nodes, but capture internals can still emit correct removal diffs during mutation batching.
+- [Phase 07]: Checked-in browser inject artifacts carry the same WeakMap/nodeIds identity behavior as the ESM capture core while remaining classic scripts with bridge globals.
+- [Phase 07]: Documentation now treats data-fsb-nid stamping as the former FSB reference design; standalone identity is WeakMap capture state plus nodeIds sidecars and a renderer Map index.
 
 ### Pending Todos
 
@@ -147,6 +150,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-15T16:38:46.273Z
-Stopped at: Completed 07-03-PLAN.md
+Last session: 2026-06-15T16:52:41.756Z
+Stopped at: Completed 07-04-PLAN.md
 Resume file: None

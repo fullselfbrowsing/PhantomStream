@@ -18,7 +18,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 4: Relay, WS Transport & Two-Tab Demo** - Networked mirror: relay core, ws backend, CompressionStream codec, `npx phantom-stream demo`
 - [x] **Phase 5: Playwright/CDP Adapter, Remote Control & Agent Demo** - Script-driven page mirrored live with consent-gated remote control (completed 2026-06-15)
 - [x] **Phase 6: Extension MV3 + Bookmarklet Adapters** - Remaining injection contexts incl. the FSB swap-in surface and eviction recovery (completed 2026-06-15)
-- [ ] **Phase 7: WeakMap Node Identity + Semantic Addressing API** - Stop mutating the observed page; expose node identity as public API
+- [x] **Phase 7: WeakMap Node Identity + Semantic Addressing API** - Stop mutating the observed page; expose node identity as public API (completed 2026-06-15)
 - [ ] **Phase 8: Shadow DOM, Iframes & Fidelity Completion** - Shadow roots, same-origin iframes, input mirroring, added-node styles, subtree fetch
 - [ ] **Phase 9: CSSOM Capture Mode** - Flag-enabled stylesheet-centric capture (last limitation fix; the paper's ablation arm)
 - [ ] **Phase 10: npm Packaging & 0.x Publish** - `@fullselfbrowsing/phantom-stream` published with clean types and quickstarts
@@ -271,7 +271,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 4. Relay, WS Transport & Two-Tab Demo | 0/TBD | Not started | - |
 | 5. Playwright/CDP Adapter, Remote Control & Agent Demo | 6/6 | Complete    | 2026-06-15 |
 | 6. Extension MV3 + Bookmarklet Adapters | 5/5 | Complete   | 2026-06-15 |
-| 7. WeakMap Node Identity + Semantic Addressing API | 3/4 | In Progress|  |
+| 7. WeakMap Node Identity + Semantic Addressing API | 4/4 | Complete   | 2026-06-15 |
 | 8. Shadow DOM, Iframes & Fidelity Completion | 0/TBD | Not started | - |
 | 9. CSSOM Capture Mode | 0/TBD | Not started | - |
 | 10. npm Packaging & 0.x Publish | 0/TBD | Not started | - |
