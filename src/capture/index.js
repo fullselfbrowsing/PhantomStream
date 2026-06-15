@@ -49,7 +49,7 @@ import {
   WATCHDOG_TICK_MS,
   INLINE_STYLE_MAX_BYTES,
 } from '../protocol/constants.js';
-import { STREAM, DIFF_OP, createStreamSessionId } from '../protocol/messages.js';
+import { STREAM, CONTROL, DIFF_OP, createStreamSessionId } from '../protocol/messages.js';
 
 // RELAY_PER_MESSAGE_LIMIT_BYTES is the relay's hard per-message cap;
 // SNAPSHOT_BUDGET_BYTES is the 80% truncation budget derived from it
@@ -1856,6 +1856,33 @@ export function createCapture(config) {
     return placeholder;
   }
 
+  function createTruncatedPlaceholder(doc) {
+    var placeholder = doc.createElement('div');
+    placeholder.setAttribute('data-phantomstream-truncated', 'true');
+    return placeholder;
+  }
+
+  function deleteCloneSubtreeMappings(cloneEl, cloneToNid) {
+    if (!cloneEl || !cloneToNid) return;
+    cloneToNid.delete(cloneEl);
+    if (!cloneEl.querySelectorAll) return;
+    var descendants = cloneEl.querySelectorAll('*');
+    for (var i = 0; i < descendants.length; i++) {
+      cloneToNid.delete(descendants[i]);
+    }
+  }
+
+  function replaceWithTruncatedPlaceholder(cloneEl, cloneToNid) {
+    if (!cloneEl || !cloneEl.parentNode) return null;
+    var nid = cloneToNid && cloneToNid.get(cloneEl);
+    if (!nid) return null;
+    var placeholder = createTruncatedPlaceholder(cloneEl.ownerDocument);
+    cloneEl.parentNode.replaceChild(placeholder, cloneEl);
+    deleteCloneSubtreeMappings(cloneEl, cloneToNid);
+    cloneToNid.set(placeholder, nid);
+    return placeholder;
+  }
+
   // =========================================================================
   // 0.5 SEC-01 Sanitization chokepoint
   // =========================================================================
@@ -2578,10 +2605,7 @@ export function createCapture(config) {
         var nidVal1 = cloneToNid.get(cloneEls1[t]);
         var top1 = topByNid.get(nidVal1);
         if (typeof top1 === 'number' && top1 > viewportCutoff) {
-          var parent1 = cloneEls1[t].parentNode;
-          if (parent1) {
-            parent1.removeChild(cloneEls1[t]);
-            cloneToNid.delete(cloneEls1[t]);
+          if (replaceWithTruncatedPlaceholder(cloneEls1[t], cloneToNid)) {
             missingDescendants++;
           }
         }
@@ -2594,10 +2618,7 @@ export function createCapture(config) {
       if (html.length > SNAPSHOT_BUDGET_BYTES) {
         var cloneEls2 = cloneElementsWithNodeIds(clone, cloneToNid);
         for (var u = cloneEls2.length - 1; u >= 0 && clone.innerHTML.length > SNAPSHOT_BUDGET_BYTES; u--) {
-          var parent2 = cloneEls2[u].parentNode;
-          if (parent2 && cloneEls2[u].parentNode) {
-            parent2.removeChild(cloneEls2[u]);
-            cloneToNid.delete(cloneEls2[u]);
+          if (replaceWithTruncatedPlaceholder(cloneEls2[u], cloneToNid)) {
             missingDescendants++;
           }
         }
@@ -2746,6 +2767,82 @@ export function createCapture(config) {
       shadowRoots: shadowRoots,
       frames: frames
     };
+  }
+
+  function contentFreeSubtreeStatus(status) {
+    return {
+      status: status,
+      nodeIds: [],
+      shadowRoots: [],
+      frames: []
+    };
+  }
+
+  function serializeRequestedSubtree(nid) {
+    var key = String(nid || '');
+    if (!key) return contentFreeSubtreeStatus('untracked');
+    var el = nidToElement.get(key);
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) {
+      return contentFreeSubtreeStatus('untracked');
+    }
+    if (el.isConnected === false) {
+      return contentFreeSubtreeStatus('gone');
+    }
+    if (getTrackedNodeId(el) !== key) {
+      return contentFreeSubtreeStatus('untracked');
+    }
+    if (skipElementWithAncestors(el)) {
+      return contentFreeSubtreeStatus('skipped');
+    }
+    if (blockedWithAncestors(el)) {
+      return contentFreeSubtreeStatus('blocked');
+    }
+    if (wireDroppedWithAncestors(el)) {
+      return contentFreeSubtreeStatus('blocked');
+    }
+
+    var sanBefore = sanitizeCountersSnapshot();
+    var payload = processAddedNode(el);
+    warnIfSanitizeStrips(sanBefore);
+    if (!payload) {
+      return contentFreeSubtreeStatus('blocked');
+    }
+    return {
+      status: 'ok',
+      html: payload.html || '',
+      nodeIds: payload.nodeIds || [],
+      shadowRoots: payload.shadowRoots || [],
+      frames: payload.frames || []
+    };
+  }
+
+  function isCurrentControlPayload(payload) {
+    if (!payload) return false;
+    if (!streamSessionId || !currentSnapshotId) return false;
+    if (String(payload.streamSessionId || '') !== String(streamSessionId)) return false;
+    if (String(payload.snapshotId || '') !== String(currentSnapshotId)) return false;
+    return true;
+  }
+
+  function sendSubtreeResponse(request, result) {
+    var response = Object.assign({
+      requestId: request && request.requestId != null ? String(request.requestId) : '',
+      nid: request && request.nid != null ? String(request.nid) : '',
+      status: result.status || 'untracked',
+      streamSessionId: streamSessionId || '',
+      snapshotId: currentSnapshotId || 0
+    }, result);
+    safeSend(STREAM.SUBTREE_RESPONSE, response);
+  }
+
+  function handleControl(type, payload) {
+    if (type !== CONTROL.SUBTREE_REQUEST) return;
+    var request = payload || {};
+    if (!isCurrentControlPayload(request)) {
+      sendSubtreeResponse(request, contentFreeSubtreeStatus('stale'));
+      return;
+    }
+    sendSubtreeResponse(request, serializeRequestedSubtree(request.nid));
   }
 
   /**
@@ -3316,6 +3413,7 @@ export function createCapture(config) {
     stop: stop,
     pause: pause,
     resume: resume,
+    handleControl: handleControl,
     getNodeId: getNodeId,
     getObservedFrameDocuments: getObservedFrameDocuments
   };
