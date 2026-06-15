@@ -257,6 +257,7 @@ test('two-tab demo browser modules wire capture viewer and WebSocket transport',
     [
       'createViewer',
       'createWebSocketTransport',
+      'disconnectDelayMs',
       "viewer.on('state'",
       "viewer.on('health'",
       'CONTROL.START',
