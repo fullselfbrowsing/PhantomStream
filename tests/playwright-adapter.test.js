@@ -41,6 +41,7 @@ function createFakePage() {
     mainFrameValue: mainFrame,
     childFrameValue: childFrame,
     evaluateCalls: [],
+    evaluateArgs: [],
     injectedWindow: null,
     injectedDocument: null,
     mouse: {
@@ -92,15 +93,16 @@ function createFakePage() {
         handler(arg);
       }
     },
-    async evaluate(fnOrString) {
+    async evaluate(fnOrString, arg) {
       page.evaluateCalls.push(fnOrString);
+      page.evaluateArgs.push(arg);
       if (typeof fnOrString !== 'function') return undefined;
       const previousWindow = globalThis.window;
       const previousDocument = globalThis.document;
       globalThis.window = page.injectedWindow || {};
       globalThis.document = page.injectedDocument || { body: {} };
       try {
-        return fnOrString();
+        return fnOrString(arg);
       } finally {
         if (previousWindow === undefined) {
           delete globalThis.window;
@@ -149,6 +151,7 @@ test('inject source is a single classic script with the capture bridge hooks', (
   assert.match(source, /window\.__phantomStreamBridge/);
   assert.match(source, /window\.__phantomStreamStart/);
   assert.match(source, /window\.__phantomStreamCapture/);
+  assert.match(source, /window\.__phantomStreamHandleControl/);
   assert.match(source, /window\.__phantomStreamGetNodeId/);
   assert.match(source, /createCapture/);
 });
@@ -266,6 +269,76 @@ test('viewer stream start request restarts injected capture for a missed initial
   assert.equal(startCount, 1);
   assert.equal(page.evaluateCalls.length, 1);
   assert.match(String(page.evaluateCalls[0]), /__phantomStreamStart/);
+});
+
+test('transport subtree requests are evaluated in the injected capture bridge and responses return through binding', async () => {
+  const page = createFakePage();
+  const transport = createRecordingTransport();
+  let forwarded = null;
+  let authCalls = 0;
+  page.injectedWindow = {
+    __phantomStreamHandleControl(type, payload) {
+      forwarded = { type, payload };
+      return { ok: true };
+    },
+  };
+  page.injectedDocument = { body: {} };
+
+  const adapter = createPlaywrightAdapter({
+    page,
+    transport,
+    authorizeControl: async () => {
+      authCalls += 1;
+      return true;
+    },
+  });
+  await adapter.install();
+
+  const payload = {
+    requestId: 'subtree-1',
+    nid: '42',
+    streamSessionId: 'stream-current',
+    snapshotId: 7,
+    reason: 'missing-truncated-node',
+    ignoredExtra: 'not-forwarded',
+  };
+  transport.emit(CONTROL.SUBTREE_REQUEST, payload);
+  await tick();
+
+  assert.equal(authCalls, 0, 'subtree requests do not route through remote-control authorization');
+  assert.deepEqual(forwarded, {
+    type: CONTROL.SUBTREE_REQUEST,
+    payload: {
+      requestId: 'subtree-1',
+      nid: '42',
+      streamSessionId: 'stream-current',
+      snapshotId: 7,
+      reason: 'missing-truncated-node',
+    },
+  });
+  assert.deepEqual(page.evaluateArgs[0], forwarded);
+
+  const bridge = page.bindings.get('__phantomStreamBridge');
+  const response = {
+    requestId: 'subtree-1',
+    nid: '42',
+    status: 'ok',
+    html: '<section>Recovered</section>',
+    nodeIds: ['42'],
+    shadowRoots: [],
+    frames: [],
+    streamSessionId: 'stream-current',
+    snapshotId: 7,
+  };
+  const result = await bridge(
+    { page, frame: page.mainFrameValue },
+    { type: STREAM.SUBTREE_RESPONSE, payload: response }
+  );
+
+  assert.deepEqual(result, { ok: true });
+  assert.ok(transport.sent.some((entry) => entry.type === STREAM.SUBTREE_RESPONSE
+    && entry.payload.requestId === 'subtree-1'
+    && entry.payload.status === 'ok'));
 });
 
 test('transport remote-control handler contains async driver replay failures', async () => {

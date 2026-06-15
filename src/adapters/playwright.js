@@ -212,6 +212,34 @@ export function createPlaywrightAdapter(options) {
     }
   }
 
+  function cloneSubtreeRequestPayload(payload) {
+    var request = {};
+    if (!payload || Object(payload) !== payload) return request;
+    ['requestId', 'nid', 'streamSessionId', 'snapshotId', 'reason'].forEach(function (key) {
+      if (Object.prototype.hasOwnProperty.call(payload, key)) request[key] = payload[key];
+    });
+    return request;
+  }
+
+  async function forwardSubtreeRequest(payload) {
+    if (disposed) return { ok: false, error: 'adapter-disposed' };
+    try {
+      await page.evaluate(function (controlFrame) {
+        if (typeof window === 'undefined') return false;
+        var handle = window.__phantomStreamHandleControl;
+        if (typeof handle !== 'function') return false;
+        return handle(controlFrame.type, controlFrame.payload || {});
+      }, {
+        type: CONTROL.SUBTREE_REQUEST,
+        payload: cloneSubtreeRequestPayload(payload)
+      });
+      return { ok: true };
+    } catch (err) {
+      safeLog('warn', '[PlaywrightAdapter] subtree request forward failed', { reason: 'subtree-request-forward-failed' });
+      return { ok: false, error: 'subtree-request-forward-failed' };
+    }
+  }
+
   function handleNavigation(frame) {
     if (frame && !isMainFrame(frame)) return;
     startInjectedCapture();
@@ -240,6 +268,12 @@ export function createPlaywrightAdapter(options) {
         unsubscribeTransport = transport.onMessage(function (type, payload) {
           if (type === CONTROL.START) {
             startInjectedCapture();
+            return;
+          }
+          if (type === CONTROL.SUBTREE_REQUEST) {
+            forwardSubtreeRequest(payload).catch(function () {
+              safeLog('warn', '[PlaywrightAdapter] subtree request forward failed', { reason: 'subtree-request-forward-failed' });
+            });
             return;
           }
           if (isRemoteControlType(type)) {

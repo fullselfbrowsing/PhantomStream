@@ -13,6 +13,14 @@
   var WATCHDOG_TICK_MS = 500;
   var INLINE_STYLE_MAX_BYTES = 500000;
 
+  var CONTROL = {
+    START: "dash:dom-stream-start",
+    STOP: "dash:dom-stream-stop",
+    PAUSE: "dash:dom-stream-pause",
+    RESUME: "dash:dom-stream-resume",
+    SUBTREE_REQUEST: "dash:ps-subtree-request"
+  };
+
   var STREAM = {
     SNAPSHOT: "ext:dom-snapshot",
     MUTATIONS: "ext:dom-mutations",
@@ -21,7 +29,17 @@
     DIALOG: "ext:dom-dialog",
     READY: "ext:dom-ready",
     REQUEST_SNAPSHOT: "ext:request-snapshot",
-    STATE: "ext:stream-state"
+    STATE: "ext:stream-state",
+    SUBTREE_RESPONSE: "ext:ps-subtree-response"
+  };
+
+  var DIFF_OP = {
+    ADD: "add",
+    REMOVE: "rm",
+    ATTR: "attr",
+    TEXT: "text",
+    VALUE: "value",
+    SHADOW_ROOT: "shadow-root"
   };
 
   function createStreamSessionId(nowMs, rand) {
@@ -67,6 +85,7 @@
 // javascript: URLs straight through. All strips are counted + logged (never
 // silent), and ONLY detached clones / wire values are touched: the live
 // observed page keeps its attributes and handlers.
+
 
 // RELAY_PER_MESSAGE_LIMIT_BYTES is the relay's hard per-message cap;
 // SNAPSHOT_BUDGET_BYTES is the 80% truncation budget derived from it
@@ -611,6 +630,15 @@ function createCapture(config) {
   var lastDrainTs = 0;
   var staleFlushCount = 0;
   var watchdogTimer = null;
+  var observedShadowRoots = new WeakSet();
+  var observedFrameDocuments = new Map();
+  var frameDocumentToNid = new WeakMap();
+  var frameLoadListeners = new Map();
+  var valueCaptureActive = false;
+  var valueListenerRoots = new WeakSet();
+  var valueListenerRecords = [];
+  var nativeAttachShadow = null;
+  var attachShadowProto = null;
 
   // SEC-01 sanitization strip counters (closure state, staleFlushCount
   // pattern). Lifecycle is PER-SESSION (03-RESEARCH.md Pitfall 3): reset in
@@ -738,6 +766,699 @@ function createCapture(config) {
       if (cloneToNid.has(el)) nodeIds.push(cloneToNid.get(el));
     }
     return nodeIds;
+  }
+
+  function mutationObserverOptions() {
+    return {
+      childList: true,
+      attributes: true,
+      characterData: true,
+      subtree: true,
+      attributeOldValue: true
+    };
+  }
+
+  function isOpenShadowRoot(root) {
+    return !!(root
+      && root.nodeType === Node.DOCUMENT_FRAGMENT_NODE
+      && root.host
+      && root.mode === 'open');
+  }
+
+  function elementsUnderRoot(root) {
+    var elements = [];
+    if (!root) return elements;
+    if (root.nodeType === Node.ELEMENT_NODE) elements.push(root);
+    if (root.querySelectorAll) {
+      var descendants = root.querySelectorAll('*');
+      for (var i = 0; i < descendants.length; i++) elements.push(descendants[i]);
+    }
+    return elements;
+  }
+
+  function getMutationShadowHost(target) {
+    if (!target || typeof target.getRootNode !== 'function') return null;
+    var root = target.getRootNode();
+    if (!isOpenShadowRoot(root)) return null;
+    return root.host || null;
+  }
+
+  function shadowSlotAssignment(root) {
+    if (!root || !root.querySelectorAll) return 'none';
+    var slots = root.querySelectorAll('slot');
+    var hasDefault = false;
+    var hasNamed = false;
+    for (var i = 0; i < slots.length; i++) {
+      if (slots[i].getAttribute('name')) hasNamed = true;
+      else hasDefault = true;
+    }
+    if (hasNamed) return 'named';
+    if (hasDefault) return 'default';
+    return 'none';
+  }
+
+  function prepareShadowClone(root, container, cloneToNid) {
+    var liveDescendants = root && root.querySelectorAll ? root.querySelectorAll('*') : [];
+    var cloneDescendants = container.querySelectorAll('*');
+    for (var i = 0; i < liveDescendants.length; i++) {
+      var live = liveDescendants[i];
+      var clone = cloneDescendants[i];
+      if (!clone) continue;
+      if (wireDroppedWithAncestors(live) || skipElementWithAncestors(live)) {
+        if (clone.parentNode) clone.parentNode.removeChild(clone);
+        continue;
+      }
+      if (blockedWithAncestors(live.parentElement)) continue;
+      var nid = ensureNodeId(live);
+      if (nid) cloneToNid.set(clone, nid);
+      for (var a = 0; a < URL_ATTRS.length; a++) {
+        var val = clone.getAttribute(URL_ATTRS[a]);
+        if (val) clone.setAttribute(URL_ATTRS[a], absolutifyUrl(val));
+      }
+      var srcset = clone.getAttribute('srcset');
+      if (srcset) clone.setAttribute('srcset', absolutifySrcset(srcset));
+      captureComputedStyles(live, clone);
+    }
+  }
+
+  function serializeOpenShadowRoot(host, hostNid) {
+    if (!host || !host.shadowRoot || !hostNid) return null;
+    var root = host.shadowRoot;
+    if (!isOpenShadowRoot(root)) return null;
+
+    var container = document.createElement('div');
+    for (var child = root.firstChild; child; child = child.nextSibling) {
+      container.appendChild(child.cloneNode(true));
+    }
+
+    var cloneToNid = new Map();
+    prepareShadowClone(root, container, cloneToNid);
+    var subtreeResult = sanitizeForWire('subtree', {
+      root: container,
+      liveRoot: root,
+      cloneToNid: cloneToNid
+    });
+    if (subtreeResult && subtreeResult.drop) return null;
+
+    return {
+      hostNid: String(hostNid),
+      mode: 'open',
+      html: container.innerHTML || '',
+      nodeIds: buildNodeIdSidecar(container, cloneToNid, false),
+      slotAssignment: shadowSlotAssignment(root)
+    };
+  }
+
+  function collectShadowRootPayloads(root, hostNodeIds) {
+    var payloads = [];
+    var allowed = null;
+    if (Array.isArray(hostNodeIds)) {
+      allowed = new Set();
+      for (var h = 0; h < hostNodeIds.length; h++) allowed.add(String(hostNodeIds[h]));
+    }
+
+    function visit(treeRoot) {
+      var elements = elementsUnderRoot(treeRoot);
+      for (var i = 0; i < elements.length; i++) {
+        var el = elements[i];
+        if (!el || !el.shadowRoot || !isOpenShadowRoot(el.shadowRoot)) continue;
+        var hostNid = getTrackedNodeId(el) || ensureNodeId(el);
+        if (!hostNid) continue;
+        if (allowed && !allowed.has(String(hostNid))) continue;
+        var payload = serializeOpenShadowRoot(el, hostNid);
+        if (payload) payloads.push(payload);
+        if (allowed && payload && Array.isArray(payload.nodeIds)) {
+          for (var n = 0; n < payload.nodeIds.length; n++) {
+            allowed.add(String(payload.nodeIds[n]));
+          }
+        }
+        visit(el.shadowRoot);
+      }
+    }
+
+    visit(root);
+    return payloads;
+  }
+
+  function observeOpenShadowRoot(root) {
+    if (!mutationObserver || !isOpenShadowRoot(root)) return;
+    if (observedShadowRoots.has(root)) return;
+    try {
+      mutationObserver.observe(root, mutationObserverOptions());
+      observedShadowRoots.add(root);
+      addValueListenerRoot(root);
+    } catch (err) {
+      logger.error('[DOM Stream] shadow root observe failed', err);
+      return;
+    }
+    observeOpenShadowRoots(root);
+  }
+
+  function observeOpenShadowRoots(root) {
+    var elements = elementsUnderRoot(root);
+    for (var i = 0; i < elements.length; i++) {
+      if (elements[i].shadowRoot && isOpenShadowRoot(elements[i].shadowRoot)) {
+        observeOpenShadowRoot(elements[i].shadowRoot);
+      }
+    }
+  }
+
+  function safeFrameSrc(src) {
+    if (!src) return '';
+    try {
+      return new URL(src, location.href).href;
+    } catch (err) {
+      return '';
+    }
+  }
+
+  function safeFrameOrigin(src) {
+    if (!src) return '';
+    try {
+      return new URL(src, location.href).origin;
+    } catch (err) {
+      return '';
+    }
+  }
+
+  function classifyFrame(iframe) {
+    var doc = null;
+    try {
+      doc = iframe && iframe.contentDocument;
+    } catch (err) {
+      logger.warn('[DOM Stream] iframe contentDocument unavailable', {
+        reason: 'cross-origin-or-inaccessible'
+      });
+    }
+    if (doc && doc.documentElement && doc.body) {
+      return { kind: 'same-origin', document: doc };
+    }
+    var src = iframe && iframe.getAttribute ? iframe.getAttribute('src') || '' : '';
+    return {
+      kind: 'cross-origin',
+      label: 'Cross-origin iframe',
+      src: safeFrameSrc(src),
+      origin: safeFrameOrigin(src)
+    };
+  }
+
+  function appendStyleDeclaration(clone, declaration) {
+    if (!clone || !declaration) return;
+    var existing = clone.getAttribute('style') || '';
+    var suffix = declaration.charAt(declaration.length - 1) === ';'
+      ? declaration
+      : declaration + ';';
+    clone.setAttribute('style', existing ? existing + ';' + suffix : suffix);
+  }
+
+  function prepareIframeWireShell(live, clone) {
+    if (!clone || clone.nodeType !== Node.ELEMENT_NODE) return;
+    clone.removeAttribute('src');
+    clone.removeAttribute('srcdoc');
+    captureComputedStyles(live, clone);
+    appendStyleDeclaration(clone, 'pointer-events:none');
+    sanitizeForWire('element', { orig: live, clone: clone });
+  }
+
+  function prepareIframeWireShellsForClone(liveRoot, wireRoot) {
+    var liveElements = elementsUnderRoot(liveRoot);
+    var cloneElements = elementsUnderRoot(wireRoot);
+    for (var i = 0; i < liveElements.length && i < cloneElements.length; i++) {
+      var live = liveElements[i];
+      var clone = cloneElements[i];
+      var tag = clone && clone.tagName ? String(clone.tagName).toLowerCase() : '';
+      if (tag === 'iframe') prepareIframeWireShell(live, clone);
+    }
+  }
+
+  function collectStylesheetsFrom(doc) {
+    var stylesheets = [];
+    if (!doc || !doc.querySelectorAll) return stylesheets;
+    var links = doc.querySelectorAll('head link[rel="stylesheet"]');
+    for (var s = 0; s < links.length; s++) {
+      var href = links[s].getAttribute('href');
+      if (!href) continue;
+      var sheetHref = absolutifyUrl(href, doc);
+      if (hasDangerousScheme(sheetHref)) {
+        sanitizeCounters.blockedUrlSchemes++;
+      } else {
+        stylesheets.push(sheetHref);
+      }
+    }
+    return stylesheets;
+  }
+
+  function collectInlineStylesFrom(doc) {
+    var inlineStyles = [];
+    if (!doc || !doc.querySelectorAll) return inlineStyles;
+    var styleTags = doc.querySelectorAll('head style');
+    for (var st = 0; st < styleTags.length; st++) {
+      var cssText = styleTags[st].textContent;
+      if (cssText && cssText.length < INLINE_STYLE_MAX_BYTES) {
+        inlineStyles.push(sanitizeForWire('css', { css: cssText }).css);
+      }
+    }
+    return inlineStyles;
+  }
+
+  function prepareFrameDocumentClone(frameDoc, bodyClone, cloneToNid) {
+    var liveDescendants = frameDoc.body && frameDoc.body.querySelectorAll
+      ? frameDoc.body.querySelectorAll('*')
+      : [];
+    var cloneDescendants = bodyClone.querySelectorAll('*');
+    var toRemove = [];
+    var blockedPairs = [];
+
+    for (var i = 0; i < liveDescendants.length; i++) {
+      var live = liveDescendants[i];
+      var clone = cloneDescendants[i];
+      if (!clone) continue;
+      var tag = clone.tagName ? String(clone.tagName).toLowerCase() : '';
+
+      if (wireDroppedWithAncestors(live.parentElement)) {
+        reserveNodeId();
+        toRemove.push(clone);
+        continue;
+      }
+
+      var elemDecision = sanitizeForWire('element', { orig: live, clone: clone });
+      if (elemDecision && elemDecision.drop) {
+        toRemove.push(clone);
+        continue;
+      }
+      if (safeSkipElement(clone) || skipElementWithAncestors(clone)) {
+        toRemove.push(clone);
+        continue;
+      }
+      if (blockedWithAncestors(live.parentElement)) continue;
+      if (blockMatches(live)) {
+        assignNodeId(live, clone, cloneToNid);
+        blockedPairs.push({ orig: live, clone: clone });
+        continue;
+      }
+
+      assignNodeId(live, clone, cloneToNid);
+
+      if (tag === 'iframe') {
+        prepareIframeWireShell(live, clone);
+        continue;
+      }
+
+      for (var a = 0; a < URL_ATTRS.length; a++) {
+        var attrVal = clone.getAttribute(URL_ATTRS[a]);
+        if (attrVal) clone.setAttribute(URL_ATTRS[a], absolutifyUrl(attrVal, frameDoc));
+      }
+      var srcsetVal = clone.getAttribute('srcset');
+      if (srcsetVal) clone.setAttribute('srcset', absolutifySrcset(srcsetVal, frameDoc));
+      captureComputedStyles(live, clone);
+      sanitizeForWire('element', { orig: live, clone: clone });
+    }
+
+    for (var r = 0; r < toRemove.length; r++) {
+      if (toRemove[r].parentNode) toRemove[r].parentNode.removeChild(toRemove[r]);
+    }
+    for (var b = 0; b < blockedPairs.length; b++) {
+      replaceWithBlockPlaceholder(
+        blockedPairs[b].orig,
+        blockedPairs[b].clone,
+        readBlockRect(blockedPairs[b].orig),
+        cloneToNid
+      );
+    }
+  }
+
+  function serializeFrameDocument(iframe, frameNid, frameDoc) {
+    if (!iframe || !frameNid || !frameDoc || !frameDoc.documentElement || !frameDoc.body) {
+      return null;
+    }
+    var bodyClone = frameDoc.body.cloneNode(true);
+    var cloneToNid = new Map();
+    var htmlNid = ensureNodeId(frameDoc.documentElement);
+    var bodyNid = ensureNodeId(frameDoc.body);
+
+    prepareFrameDocumentClone(frameDoc, bodyClone, cloneToNid);
+    var subtreeResult = sanitizeForWire('subtree', {
+      root: bodyClone,
+      liveRoot: frameDoc.body,
+      cloneToNid: cloneToNid
+    });
+    if (subtreeResult && subtreeResult.drop) return null;
+
+    var nodeIds = buildNodeIdSidecar(bodyClone, cloneToNid, false);
+    var nestedFrames = collectFramePayloads(frameDoc.body, cloneToNid);
+    return {
+      frameNid: String(frameNid),
+      kind: 'same-origin',
+      html: bodyClone.innerHTML || '',
+      nodeIds: nodeIds,
+      htmlNid: htmlNid ? String(htmlNid) : '',
+      bodyNid: bodyNid ? String(bodyNid) : '',
+      frames: nestedFrames,
+      stylesheets: collectStylesheetsFrom(frameDoc),
+      inlineStyles: collectInlineStylesFrom(frameDoc),
+      htmlAttrs: serializeShellAttributes(frameDoc.documentElement),
+      bodyAttrs: serializeShellAttributes(frameDoc.body),
+      htmlStyle: collectComputedStyleText(frameDoc.documentElement, SHELL_PROPS),
+      bodyStyle: collectComputedStyleText(frameDoc.body, SHELL_PROPS),
+      scrollX: frameDoc.defaultView ? frameDoc.defaultView.scrollX : 0,
+      scrollY: frameDoc.defaultView ? frameDoc.defaultView.scrollY : 0,
+      viewportWidth: frameDoc.defaultView ? frameDoc.defaultView.innerWidth : 0,
+      viewportHeight: frameDoc.defaultView ? frameDoc.defaultView.innerHeight : 0,
+      pageWidth: frameDoc.documentElement.scrollWidth,
+      pageHeight: frameDoc.documentElement.scrollHeight,
+      url: frameDoc.location ? String(frameDoc.location.href || '') : '',
+      title: frameDoc.title || ''
+    };
+  }
+
+  function collectFramePayloads(root, cloneToNid) {
+    var payloads = [];
+    if (!root) return payloads;
+    var allowed = null;
+    if (cloneToNid && typeof cloneToNid.forEach === 'function') {
+      allowed = new Set();
+      cloneToNid.forEach(function(nid) {
+        if (nid !== undefined && nid !== null) allowed.add(String(nid));
+      });
+    }
+
+    var elements = elementsUnderRoot(root);
+    for (var i = 0; i < elements.length; i++) {
+      var iframe = elements[i];
+      var tag = iframe && iframe.tagName ? String(iframe.tagName).toLowerCase() : '';
+      if (tag !== 'iframe') continue;
+      if (skipElementWithAncestors(iframe) || blockedWithAncestors(iframe) || wireDroppedWithAncestors(iframe)) {
+        continue;
+      }
+      var frameNid = getTrackedNodeId(iframe) || ensureNodeId(iframe);
+      if (!frameNid) continue;
+      if (allowed && !allowed.has(String(frameNid))) continue;
+      var classification = classifyFrame(iframe);
+      if (classification.kind === 'same-origin') {
+        var sameOriginPayload = serializeFrameDocument(
+          iframe,
+          frameNid,
+          classification.document
+        );
+        if (sameOriginPayload) payloads.push(sameOriginPayload);
+        continue;
+      }
+      payloads.push(Object.assign({ frameNid: String(frameNid) }, classification));
+    }
+    return payloads;
+  }
+
+  function registerFrameLoadListener(iframe, frameNid) {
+    if (!iframe || !frameNid || typeof iframe.addEventListener !== 'function') return;
+    var key = String(frameNid);
+    var existing = frameLoadListeners.get(key);
+    if (existing && existing.iframe === iframe) return;
+    if (existing && existing.iframe && typeof existing.iframe.removeEventListener === 'function') {
+      existing.iframe.removeEventListener('load', existing.handler);
+    }
+    var handler = function() {
+      var classification = classifyFrame(iframe);
+      if (classification.kind === 'same-origin') {
+        registerFrameDocument(iframe, key, classification.document);
+      } else {
+        observedFrameDocuments.delete(key);
+      }
+    };
+    iframe.addEventListener('load', handler);
+    frameLoadListeners.set(key, { iframe: iframe, handler: handler });
+  }
+
+  function registerFrameDocument(iframe, frameNid, frameDoc) {
+    if (!mutationObserver || !iframe || !frameNid || !frameDoc || !frameDoc.body) return null;
+    var key = String(frameNid);
+    var record = {
+      iframe: iframe,
+      document: frameDoc,
+      root: frameDoc,
+      frameNid: key
+    };
+    observedFrameDocuments.set(key, record);
+    frameDocumentToNid.set(frameDoc, key);
+    addValueListenerRoot(frameDoc);
+    registerFrameLoadListener(iframe, key);
+    serializeFrameDocument(iframe, key, frameDoc);
+    try {
+      mutationObserver.observe(frameDoc, mutationObserverOptions());
+    } catch (err) {
+      logger.warn('[DOM Stream] frame document observe failed', {
+        reason: 'observe-failed'
+      });
+      return record;
+    }
+    observeOpenShadowRoots(frameDoc.body);
+    observeSameOriginFrameDocuments(frameDoc.body);
+    return record;
+  }
+
+  function observeSameOriginFrameDocuments(root) {
+    var elements = elementsUnderRoot(root);
+    for (var i = 0; i < elements.length; i++) {
+      var iframe = elements[i];
+      var tag = iframe && iframe.tagName ? String(iframe.tagName).toLowerCase() : '';
+      if (tag !== 'iframe') continue;
+      if (skipElementWithAncestors(iframe) || blockedWithAncestors(iframe) || wireDroppedWithAncestors(iframe)) {
+        continue;
+      }
+      var frameNid = getTrackedNodeId(iframe) || ensureNodeId(iframe);
+      if (!frameNid) continue;
+      var classification = classifyFrame(iframe);
+      if (classification.kind === 'same-origin') {
+        registerFrameDocument(iframe, frameNid, classification.document);
+      } else {
+        registerFrameLoadListener(iframe, frameNid);
+      }
+    }
+  }
+
+  function getMutationFrameRecord(target) {
+    if (!target) return null;
+    var ownerDoc = target.nodeType === Node.DOCUMENT_NODE ? target : target.ownerDocument;
+    if (!ownerDoc) return null;
+    var frameNid = frameDocumentToNid.get(ownerDoc);
+    if (!frameNid) return null;
+    var record = observedFrameDocuments.get(String(frameNid));
+    if (!record || record.document !== ownerDoc) return null;
+    return record;
+  }
+
+  function isInactiveFrameDocumentMutation(target) {
+    if (!target) return false;
+    var ownerDoc = target.nodeType === Node.DOCUMENT_NODE ? target : target.ownerDocument;
+    if (!ownerDoc) return false;
+    var frameNid = frameDocumentToNid.get(ownerDoc);
+    if (!frameNid) return false;
+    var record = observedFrameDocuments.get(String(frameNid));
+    return !record || record.document !== ownerDoc;
+  }
+
+  function scopeFrameDiff(diff, frameRecord) {
+    if (diff && frameRecord && frameRecord.frameNid) {
+      diff.frameNid = String(frameRecord.frameNid);
+    }
+    return diff;
+  }
+
+  function isValueControl(el) {
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    var tag = el.tagName ? String(el.tagName).toLowerCase() : '';
+    return tag === 'input' || tag === 'textarea' || tag === 'select';
+  }
+
+  function selectedOptionValues(select) {
+    var values = [];
+    var options = select && select.options ? select.options : [];
+    for (var i = 0; i < options.length; i++) {
+      if (options[i].selected) values.push(String(options[i].value));
+    }
+    return values;
+  }
+
+  function sanitizeInputValue(value, owner) {
+    return sanitizeForWire('input', {
+      value: value == null ? '' : String(value),
+      owner: owner
+    }).value;
+  }
+
+  function buildValueDiff(control) {
+    if (!isValueControl(control)) return null;
+    if (skipElementWithAncestors(control) || blockedWithAncestors(control) || wireDroppedWithAncestors(control)) {
+      return null;
+    }
+    var shadowHost = getMutationShadowHost(control);
+    if (shadowHost && (
+      skipElementWithAncestors(shadowHost)
+      || blockedWithAncestors(shadowHost)
+      || wireDroppedWithAncestors(shadowHost)
+    )) {
+      return null;
+    }
+    var nid = getTrackedNodeId(control);
+    if (!nid) return null;
+
+    var tag = control.tagName ? String(control.tagName).toLowerCase() : '';
+    var diff = {
+      op: DIFF_OP.VALUE,
+      nid: nid
+    };
+
+    if (tag === 'select') {
+      diff.value = sanitizeInputValue(control.value, control);
+      var selected = selectedOptionValues(control);
+      diff.selectedValues = [];
+      for (var s = 0; s < selected.length; s++) {
+        diff.selectedValues.push(sanitizeInputValue(selected[s], control));
+      }
+      return diff;
+    }
+
+    if (tag === 'textarea') {
+      diff.value = sanitizeInputValue(control.value, control);
+      return diff;
+    }
+
+    var inputType = '';
+    try {
+      inputType = String(control.type || control.getAttribute('type') || '').toLowerCase();
+    } catch (err) {
+      inputType = String(control.getAttribute && control.getAttribute('type') || '').toLowerCase();
+    }
+
+    if (inputType === 'checkbox' || inputType === 'radio') {
+      diff.checked = !!control.checked;
+      diff.value = sanitizeInputValue(control.value, control);
+      return diff;
+    }
+
+    diff.value = sanitizeInputValue(control.value, control);
+    return diff;
+  }
+
+  function handleValueEvent(event) {
+    if (!streaming || !event || !event.target) return;
+    var diff = buildValueDiff(event.target);
+    if (!diff) return;
+    safeSend(STREAM.MUTATIONS, {
+      mutations: [scopeFrameDiff(diff, getMutationFrameRecord(event.target))],
+      streamSessionId: streamSessionId || '',
+      snapshotId: currentSnapshotId || 0
+    });
+  }
+
+  function addValueListenerRoot(root) {
+    if (!valueCaptureActive || !root || typeof root.addEventListener !== 'function') return;
+    if (valueListenerRoots.has(root)) return;
+    root.addEventListener('input', handleValueEvent, true);
+    root.addEventListener('change', handleValueEvent, true);
+    valueListenerRoots.add(root);
+    valueListenerRecords.push(root);
+  }
+
+  function addValueListenerRootsUnder(root) {
+    if (root && (root.nodeType === Node.DOCUMENT_NODE || isOpenShadowRoot(root))) {
+      addValueListenerRoot(root);
+    }
+    var elements = elementsUnderRoot(root);
+    for (var i = 0; i < elements.length; i++) {
+      if (elements[i].shadowRoot && isOpenShadowRoot(elements[i].shadowRoot)) {
+        addValueListenerRootsUnder(elements[i].shadowRoot);
+      }
+    }
+  }
+
+  function startValueCapture() {
+    stopValueCapture();
+    valueCaptureActive = true;
+    addValueListenerRoot(document);
+    addValueListenerRootsUnder(document.body);
+    observedFrameDocuments.forEach(function(record) {
+      if (!record || !record.document) return;
+      addValueListenerRoot(record.document);
+      addValueListenerRootsUnder(record.document.body);
+    });
+  }
+
+  function stopValueCapture() {
+    for (var i = 0; i < valueListenerRecords.length; i++) {
+      var root = valueListenerRecords[i];
+      try {
+        if (root && typeof root.removeEventListener === 'function') {
+          root.removeEventListener('input', handleValueEvent, true);
+          root.removeEventListener('change', handleValueEvent, true);
+        }
+      } catch (err) {
+        logger.warn('[DOM Stream] value listener cleanup failed', {
+          reason: 'cleanup-failed'
+        });
+      }
+    }
+    valueListenerRecords = [];
+    valueListenerRoots = new WeakSet();
+    valueCaptureActive = false;
+  }
+
+  function clearObservedFrameDocuments() {
+    frameLoadListeners.forEach(function(record) {
+      try {
+        if (record && record.iframe && typeof record.iframe.removeEventListener === 'function') {
+          record.iframe.removeEventListener('load', record.handler);
+        }
+      } catch (err) {
+        logger.warn('[DOM Stream] frame load listener cleanup failed', {
+          reason: 'cleanup-failed'
+        });
+      }
+    });
+    frameLoadListeners.clear();
+    observedFrameDocuments.clear();
+    frameDocumentToNid = new WeakMap();
+  }
+
+  function wrapAttachShadow() {
+    if (nativeAttachShadow) return;
+    var proto = window && window.Element && window.Element.prototype;
+    if (!proto || typeof proto.attachShadow !== 'function') return;
+    attachShadowProto = proto;
+    nativeAttachShadow = proto.attachShadow;
+    proto.attachShadow = function() {
+      var root = nativeAttachShadow.apply(this, arguments);
+      try {
+        if (isOpenShadowRoot(root)) {
+          observeOpenShadowRoot(root);
+          if (streaming) {
+            var hostNid = ensureNodeId(this);
+            var payload = serializeOpenShadowRoot(this, hostNid);
+            if (payload) {
+              safeSend(STREAM.MUTATIONS, {
+                mutations: [Object.assign({ op: DIFF_OP.SHADOW_ROOT }, payload)],
+                streamSessionId: streamSessionId || '',
+                snapshotId: currentSnapshotId || 0,
+                staleFlushCount: staleFlushCount
+              });
+            }
+          }
+        }
+      } catch (err) {
+        logger.error('[DOM Stream] attachShadow wrapper failed', err);
+      }
+      return root;
+    };
+  }
+
+  function restoreAttachShadow() {
+    if (!nativeAttachShadow || !attachShadowProto) return;
+    try {
+      attachShadowProto.attachShadow = nativeAttachShadow;
+    } catch (err) {
+      logger.error('[DOM Stream] attachShadow restore failed', err);
+    }
+    nativeAttachShadow = null;
+    attachShadowProto = null;
   }
 
   // =========================================================================
@@ -1171,6 +1892,33 @@ function createCapture(config) {
     return placeholder;
   }
 
+  function createTruncatedPlaceholder(doc) {
+    var placeholder = doc.createElement('div');
+    placeholder.setAttribute('data-phantomstream-truncated', 'true');
+    return placeholder;
+  }
+
+  function deleteCloneSubtreeMappings(cloneEl, cloneToNid) {
+    if (!cloneEl || !cloneToNid) return;
+    cloneToNid.delete(cloneEl);
+    if (!cloneEl.querySelectorAll) return;
+    var descendants = cloneEl.querySelectorAll('*');
+    for (var i = 0; i < descendants.length; i++) {
+      cloneToNid.delete(descendants[i]);
+    }
+  }
+
+  function replaceWithTruncatedPlaceholder(cloneEl, cloneToNid) {
+    if (!cloneEl || !cloneEl.parentNode) return null;
+    var nid = cloneToNid && cloneToNid.get(cloneEl);
+    if (!nid) return null;
+    var placeholder = createTruncatedPlaceholder(cloneEl.ownerDocument);
+    cloneEl.parentNode.replaceChild(placeholder, cloneEl);
+    deleteCloneSubtreeMappings(cloneEl, cloneToNid);
+    cloneToNid.set(placeholder, nid);
+    return placeholder;
+  }
+
   // =========================================================================
   // 0.5 SEC-01 Sanitization chokepoint
   // =========================================================================
@@ -1228,6 +1976,8 @@ function createCapture(config) {
   //   4. characterData text branch       -- 'text' dispatch (SEC-03
   //      masking seam, plan 03-03)
   //   5. E2 text-childlist branch        -- 'text' dispatch (same seam)
+  //   6. input/change value branch       -- 'input' dispatch (CAPT-05
+  //      masking seam for event-driven form state)
   // Head inline <style> text additionally routes through the 'css' dispatch
   // at the serializeDOM collection site (a value scrub, not a markup walk).
   // Side channels that BYPASS the markup scrub AND the masking helpers BY
@@ -1262,6 +2012,9 @@ function createCapture(config) {
    *     applied against the LIVE owner element's ancestry (incrementing
    *     maskedTextNodes); Phase 8 CAPT-05 typed-text capture plugs into the
    *     same seam.
+   *   'input',   { value, owner }        -> { value }
+   *     CAPT-05 masking seam for event-driven form values. Password inputs
+   *     and maskInputs/maskInputFn are applied before transport.
    *   'css',     { css }                 -> { css }
    *     Targeted CSS value scrub (scrubCssText) for head inline styles.
    *
@@ -1500,6 +2253,18 @@ function createCapture(config) {
       return { text: payload.text };
     }
 
+    if (kind === 'input') {
+      var inputValue = payload.value == null ? '' : String(payload.value);
+      if (shouldMaskInput(payload.owner)) {
+        var maskedValue = safeMaskInput(inputValue, payload.owner);
+        if (maskedValue !== inputValue) {
+          sanitizeCounters.maskedInputs++;
+        }
+        return { value: maskedValue };
+      }
+      return { value: inputValue };
+    }
+
     if (kind === 'css') {
       var scrubbedCss = scrubCssText(payload.css);
       if (scrubbedCss !== payload.css) {
@@ -1524,12 +2289,13 @@ function createCapture(config) {
    * @param {string} val - The attribute value
    * @returns {string} Absolute URL or original value if invalid
    */
-  function absolutifyUrl(val) {
+  function absolutifyUrl(val, baseDoc) {
     if (!val || val.startsWith('data:') || val.startsWith('blob:') || val.startsWith('javascript:')) {
       return val;
     }
     try {
-      return new URL(val, document.baseURI).href;
+      var base = baseDoc && baseDoc.baseURI ? baseDoc.baseURI : document.baseURI;
+      return new URL(val, base).href;
     } catch (e) {
       return val;
     }
@@ -1540,13 +2306,13 @@ function createCapture(config) {
    * @param {string} srcset
    * @returns {string}
    */
-  function absolutifySrcset(srcset) {
+  function absolutifySrcset(srcset, baseDoc) {
     if (!srcset) return srcset;
     var candidates = parseSrcsetCandidates(srcset);
     if (!candidates.length) return srcset;
     return candidates.map(function(candidate) {
       return formatSrcsetCandidate({
-        url: absolutifyUrl(candidate.url),
+        url: absolutifyUrl(candidate.url, baseDoc),
         descriptor: candidate.descriptor
       });
     }).join(', ');
@@ -1563,7 +2329,10 @@ function createCapture(config) {
    */
   function collectComputedStyleText(original, props) {
     try {
-      var computed = window.getComputedStyle(original);
+      var view = original && original.ownerDocument && original.ownerDocument.defaultView
+        ? original.ownerDocument.defaultView
+        : window;
+      var computed = view.getComputedStyle(original);
       var styles = [];
       var styleProps = props || CURATED_PROPS;
 
@@ -1598,6 +2367,21 @@ function createCapture(config) {
     if (styleText) {
       clone.setAttribute('style', styleText);
     }
+  }
+
+  function collectSubtreeComputedStyles(root) {
+    var styles = new WeakMap();
+    if (!root || root.nodeType !== Node.ELEMENT_NODE) return styles;
+    var liveElements = [root];
+    if (root.querySelectorAll) {
+      var descendants = root.querySelectorAll('*');
+      for (var i = 0; i < descendants.length; i++) liveElements.push(descendants[i]);
+    }
+    for (var e = 0; e < liveElements.length; e++) {
+      var styleText = collectComputedStyleText(liveElements[e], CURATED_PROPS);
+      if (styleText) styles.set(liveElements[e], styleText);
+    }
+    return styles;
   }
 
   /**
@@ -1718,22 +2502,11 @@ function createCapture(config) {
         continue;
       }
 
-      // Keep iframes live with absolutified src (D-04)
+      // Frame documents travel only through frames[] sidecars; the shell
+      // iframe remains inert and content-free in the main html.
       if (tag === 'iframe') {
         assignNodeId(orig, cl, cloneToNid);
-        var iframeSrc = cl.getAttribute('src');
-        if (iframeSrc) {
-          cl.setAttribute('src', absolutifyUrl(iframeSrc));
-        }
-        // Security: prevent interaction with embedded content (D-05)
-        var existingStyle = cl.getAttribute('style') || '';
-        cl.setAttribute('style', existingStyle + ';pointer-events:none');
-        // Capture computed styles for sizing/positioning
-        captureComputedStyles(orig, cl);
-        // SEC-01: iframe exits the loop early, so it gets its own
-        // final-wire-value scrub (srcdoc drop + post-absolutification
-        // scheme check on src).
-        sanitizeForWire('element', { orig: orig, clone: cl });
+        prepareIframeWireShell(orig, cl);
         continue;
       }
 
@@ -1811,32 +2584,13 @@ function createCapture(config) {
     }
 
     // Collect stylesheet URLs from document.head
-    var stylesheets = [];
-    var links = document.querySelectorAll('head link[rel="stylesheet"]');
-    for (var s = 0; s < links.length; s++) {
-      var href = links[s].getAttribute('href');
-      if (href) {
-        var sheetHref = absolutifyUrl(href);
-        if (hasDangerousScheme(sheetHref)) {
-          sanitizeCounters.blockedUrlSchemes++;
-        } else {
-          stylesheets.push(sheetHref);
-        }
-      }
-    }
+    var stylesheets = collectStylesheetsFrom(document);
 
     // Collect inline <style> tags from document.head, value-scrubbed
     // through the chokepoint's 'css' dispatch (SEC-01: dangerous url()
     // schemes, expression(), -moz-binding, non-http(s) @import, </style
     // breakout). Benign CSS passes byte-identical.
-    var inlineStyles = [];
-    var styleTags = document.querySelectorAll('head style');
-    for (var st = 0; st < styleTags.length; st++) {
-      var cssText = styleTags[st].textContent;
-      if (cssText && cssText.length < INLINE_STYLE_MAX_BYTES) {
-        inlineStyles.push(sanitizeForWire('css', { css: cssText }).css);
-      }
-    }
+    var inlineStyles = collectInlineStylesFrom(document);
 
     var html = clone.innerHTML;
     var truncated = false;
@@ -1887,10 +2641,7 @@ function createCapture(config) {
         var nidVal1 = cloneToNid.get(cloneEls1[t]);
         var top1 = topByNid.get(nidVal1);
         if (typeof top1 === 'number' && top1 > viewportCutoff) {
-          var parent1 = cloneEls1[t].parentNode;
-          if (parent1) {
-            parent1.removeChild(cloneEls1[t]);
-            cloneToNid.delete(cloneEls1[t]);
+          if (replaceWithTruncatedPlaceholder(cloneEls1[t], cloneToNid)) {
             missingDescendants++;
           }
         }
@@ -1903,10 +2654,7 @@ function createCapture(config) {
       if (html.length > SNAPSHOT_BUDGET_BYTES) {
         var cloneEls2 = cloneElementsWithNodeIds(clone, cloneToNid);
         for (var u = cloneEls2.length - 1; u >= 0 && clone.innerHTML.length > SNAPSHOT_BUDGET_BYTES; u--) {
-          var parent2 = cloneEls2[u].parentNode;
-          if (parent2 && cloneEls2[u].parentNode) {
-            parent2.removeChild(cloneEls2[u]);
-            cloneToNid.delete(cloneEls2[u]);
+          if (replaceWithTruncatedPlaceholder(cloneEls2[u], cloneToNid)) {
             missingDescendants++;
           }
         }
@@ -1919,9 +2667,15 @@ function createCapture(config) {
     // SEC-01: one aggregate strip warn per serialization pass (never silent).
     warnIfSanitizeStrips(sanBefore);
 
+    var nodeIds = buildNodeIdSidecar(clone, cloneToNid, false);
+    var shadowRoots = collectShadowRootPayloads(document.body, nodeIds);
+    var frames = collectFramePayloads(document.body, cloneToNid);
+
     return {
       html: html,
-      nodeIds: buildNodeIdSidecar(clone, cloneToNid, false),
+      nodeIds: nodeIds,
+      shadowRoots: shadowRoots,
+      frames: frames,
       truncated: truncated,
       missingDescendants: missingDescendants,
       stylesheets: stylesheets,
@@ -1985,7 +2739,10 @@ function createCapture(config) {
         nodeIds: rootNid ? [rootNid] : []
       };
     }
+    var computedStyles = collectSubtreeComputedStyles(el);
+    var rootTag = el.tagName ? String(el.tagName).toLowerCase() : '';
     for (var a = 0; a < URL_ATTRS.length; a++) {
+      if (rootTag === 'iframe' && URL_ATTRS[a] === 'src') continue;
       var val = el.getAttribute(URL_ATTRS[a]);
       if (val) el.setAttribute(URL_ATTRS[a], absolutifyUrl(val));
     }
@@ -2003,7 +2760,9 @@ function createCapture(config) {
       if (blockedWithAncestors(desc.parentElement)) continue;
       ensureNodeId(desc);
       if (blockMatches(desc)) continue;
+      var descTag = desc.tagName ? String(desc.tagName).toLowerCase() : '';
       for (var b = 0; b < URL_ATTRS.length; b++) {
+        if (descTag === 'iframe' && URL_ATTRS[b] === 'src') continue;
         var dv = desc.getAttribute(URL_ATTRS[b]);
         if (dv) desc.setAttribute(URL_ATTRS[b], absolutifyUrl(dv));
       }
@@ -2016,22 +2775,110 @@ function createCapture(config) {
     var wireClone = el.cloneNode(true);
     var cloneToNid = new Map();
     if (rootNid) cloneToNid.set(wireClone, rootNid);
+    var rootStyleText = computedStyles.get(el);
+    if (rootStyleText) appendStyleDeclaration(wireClone, rootStyleText);
     var liveDescendants = el.querySelectorAll('*');
     var cloneDescendants = wireClone.querySelectorAll('*');
     for (var c = 0; c < liveDescendants.length; c++) {
       var liveNid = getTrackedNodeId(liveDescendants[c]);
       if (liveNid && cloneDescendants[c]) cloneToNid.set(cloneDescendants[c], liveNid);
+      var descStyleText = computedStyles.get(liveDescendants[c]);
+      if (descStyleText && cloneDescendants[c]) {
+        appendStyleDeclaration(cloneDescendants[c], descStyleText);
+      }
     }
+    prepareIframeWireShellsForClone(el, wireClone);
     var subtreeResult = sanitizeForWire('subtree', {
       root: wireClone,
       liveRoot: el,
       cloneToNid: cloneToNid
     });
     if (subtreeResult && subtreeResult.drop) return null;
+    var nodeIds = buildNodeIdSidecar(wireClone, cloneToNid, true);
+    var shadowRoots = collectShadowRootPayloads(el, nodeIds);
+    var frames = collectFramePayloads(el, cloneToNid);
     return {
       html: wireClone.outerHTML || '',
-      nodeIds: buildNodeIdSidecar(wireClone, cloneToNid, true)
+      nodeIds: nodeIds,
+      shadowRoots: shadowRoots,
+      frames: frames
     };
+  }
+
+  function contentFreeSubtreeStatus(status) {
+    return {
+      status: status,
+      nodeIds: [],
+      shadowRoots: [],
+      frames: []
+    };
+  }
+
+  function serializeRequestedSubtree(nid) {
+    var key = String(nid || '');
+    if (!key) return contentFreeSubtreeStatus('untracked');
+    var el = nidToElement.get(key);
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) {
+      return contentFreeSubtreeStatus('untracked');
+    }
+    if (el.isConnected === false) {
+      return contentFreeSubtreeStatus('gone');
+    }
+    if (getTrackedNodeId(el) !== key) {
+      return contentFreeSubtreeStatus('untracked');
+    }
+    if (skipElementWithAncestors(el)) {
+      return contentFreeSubtreeStatus('skipped');
+    }
+    if (blockedWithAncestors(el)) {
+      return contentFreeSubtreeStatus('blocked');
+    }
+    if (wireDroppedWithAncestors(el)) {
+      return contentFreeSubtreeStatus('blocked');
+    }
+
+    var sanBefore = sanitizeCountersSnapshot();
+    var payload = processAddedNode(el);
+    warnIfSanitizeStrips(sanBefore);
+    if (!payload) {
+      return contentFreeSubtreeStatus('blocked');
+    }
+    return {
+      status: 'ok',
+      html: payload.html || '',
+      nodeIds: payload.nodeIds || [],
+      shadowRoots: payload.shadowRoots || [],
+      frames: payload.frames || []
+    };
+  }
+
+  function isCurrentControlPayload(payload) {
+    if (!payload) return false;
+    if (!streamSessionId || !currentSnapshotId) return false;
+    if (String(payload.streamSessionId || '') !== String(streamSessionId)) return false;
+    if (String(payload.snapshotId || '') !== String(currentSnapshotId)) return false;
+    return true;
+  }
+
+  function sendSubtreeResponse(request, result) {
+    var response = Object.assign({
+      requestId: request && request.requestId != null ? String(request.requestId) : '',
+      nid: request && request.nid != null ? String(request.nid) : '',
+      status: result.status || 'untracked',
+      streamSessionId: streamSessionId || '',
+      snapshotId: currentSnapshotId || 0
+    }, result);
+    safeSend(STREAM.SUBTREE_RESPONSE, response);
+  }
+
+  function handleControl(type, payload) {
+    if (type !== CONTROL.SUBTREE_REQUEST) return;
+    var request = payload || {};
+    if (!isCurrentControlPayload(request)) {
+      sendSubtreeResponse(request, contentFreeSubtreeStatus('stale'));
+      return;
+    }
+    sendSubtreeResponse(request, serializeRequestedSubtree(request.nid));
   }
 
   /**
@@ -2042,6 +2889,7 @@ function createCapture(config) {
   function processMutationBatch(mutations) {
     var diffs = [];
     var removedRoots = [];
+    var shadowHosts = new Map();
     // Dedup registry for childList-derived text ops (fidelity fix, ledger
     // D6): multiple childList records in one batch targeting the same
     // element (e.g. two textContent= writes between flushes) collapse to a
@@ -2052,6 +2900,8 @@ function createCapture(config) {
 
     for (var i = 0; i < mutations.length; i++) {
       var m = mutations[i];
+      var frameRecord = getMutationFrameRecord(m.target);
+      if (!frameRecord && isInactiveFrameDocumentMutation(m.target)) continue;
 
       // Skip mutations on host-flagged elements (skipElement seam).
       // Ancestor-inclusive, matching the reference's isFsbOverlay closest()
@@ -2065,6 +2915,21 @@ function createCapture(config) {
           (skipElementWithAncestors(m.target.parentElement)
             || blockedWithAncestors(m.target.parentElement)
             || wireDroppedWithAncestors(m.target.parentElement))) {
+        continue;
+      }
+
+      var shadowHost = getMutationShadowHost(m.target);
+      if (shadowHost) {
+        if (skipElementWithAncestors(shadowHost) || blockedWithAncestors(shadowHost) || wireDroppedWithAncestors(shadowHost)) {
+          continue;
+        }
+        var shadowHostNid = getTrackedNodeId(shadowHost) || ensureNodeId(shadowHost);
+        if (shadowHostNid) {
+          shadowHosts.set(String(shadowHostNid), {
+            host: shadowHost,
+            frameRecord: frameRecord
+          });
+        }
         continue;
       }
 
@@ -2097,16 +2962,20 @@ function createCapture(config) {
             // SEC-01: a forbidden root (script/noscript/object/embed)
             // scrubs to nothing -- emit no add op rather than an empty op.
             if (!addedPayload || !addedPayload.html) continue;
+            observeOpenShadowRoots(added);
+            observeSameOriginFrameDocuments(added);
             var nextSib = added.nextElementSibling;
             var beforeNid = getTrackedNodeId(nextSib);
 
-            diffs.push({
+            diffs.push(scopeFrameDiff({
               op: 'add',
               parentNid: parentNid,
               html: addedPayload.html,
               beforeNid: beforeNid,
-              nodeIds: addedPayload.nodeIds
-            });
+              nodeIds: addedPayload.nodeIds,
+              shadowRoots: addedPayload.shadowRoots || [],
+              frames: addedPayload.frames || []
+            }, frameRecord));
           } else if (added.nodeType === Node.TEXT_NODE || added.nodeType === Node.CDATA_SECTION_NODE) {
             sawBareTextNode = true;
           }
@@ -2119,7 +2988,7 @@ function createCapture(config) {
             if (wireDroppedWithAncestors(removed)) continue;
             var nid = getTrackedNodeId(removed);
             if (!nid) continue; // Not tracked
-            diffs.push({ op: 'rm', nid: nid });
+            diffs.push(scopeFrameDiff({ op: 'rm', nid: nid }, frameRecord));
             removedRoots.push(removed);
           } else if (removed.nodeType === Node.TEXT_NODE || removed.nodeType === Node.CDATA_SECTION_NODE) {
             sawBareTextNode = true;
@@ -2156,11 +3025,11 @@ function createCapture(config) {
             });
             // Same wire shape as the characterData branch: the renderer's
             // DIFF_OP.TEXT applier sets textContent on the nid target.
-            diffs.push({
+            diffs.push(scopeFrameDiff({
               op: 'text',
               nid: textTargetNid,
               text: e2TextResult.text
-            });
+            }, frameRecord));
           }
         }
       } else if (m.type === 'attributes') {
@@ -2170,10 +3039,10 @@ function createCapture(config) {
         var attrVal = m.target.getAttribute(m.attributeName);
         // Absolutify URL attributes in mutations
         if (URL_ATTRS.indexOf(m.attributeName) !== -1 && attrVal) {
-          attrVal = absolutifyUrl(attrVal);
+          attrVal = absolutifyUrl(attrVal, m.target.ownerDocument);
         }
         if (m.attributeName === 'srcset' && attrVal) {
-          attrVal = absolutifySrcset(attrVal);
+          attrVal = absolutifySrcset(attrVal, m.target.ownerDocument);
         }
 
         // SEC-01: route through the chokepoint AFTER absolutification so
@@ -2186,12 +3055,12 @@ function createCapture(config) {
         });
         if (attrResult.drop) continue;
 
-        diffs.push({
+        diffs.push(scopeFrameDiff({
           op: 'attr',
           nid: targetNid,
           attr: m.attributeName,
           val: attrResult.value
-        });
+        }, frameRecord));
       } else if (m.type === 'characterData') {
         var parentEl = m.target.parentElement;
         var textNid = getTrackedNodeId(parentEl);
@@ -2204,13 +3073,23 @@ function createCapture(config) {
           owner: parentEl
         });
 
-        diffs.push({
+        diffs.push(scopeFrameDiff({
           op: 'text',
           nid: textNid,
           text: textResult.text
-        });
+        }, frameRecord));
       }
     }
+
+    shadowHosts.forEach(function(entry, hostNid) {
+      var host = entry && entry.host ? entry.host : entry;
+      var payload = serializeOpenShadowRoot(host, hostNid);
+      if (!payload) return;
+      diffs.push(scopeFrameDiff(
+        Object.assign({ op: DIFF_OP.SHADOW_ROOT }, payload),
+        entry && entry.frameRecord ? entry.frameRecord : null
+      ));
+    });
 
     for (var rr = 0; rr < removedRoots.length; rr++) {
       if (!removedRoots[rr].isConnected) {
@@ -2264,6 +3143,8 @@ function createCapture(config) {
     }
 
     pendingMutations = [];
+    observedShadowRoots = new WeakSet();
+    clearObservedFrameDocuments();
 
     mutationObserver = new MutationObserver(function(mutations) {
       // Accumulate mutations
@@ -2276,13 +3157,10 @@ function createCapture(config) {
       batchTimer = requestAnimationFrame(flushMutations);
     });
 
-    mutationObserver.observe(document.body, {
-      childList: true,
-      attributes: true,
-      characterData: true,
-      subtree: true,
-      attributeOldValue: true
-    });
+    mutationObserver.observe(document.body, mutationObserverOptions());
+    observeOpenShadowRoots(document.body);
+    observeSameOriginFrameDocuments(document.body);
+    wrapAttachShadow();
 
     // Phase 211-02 STREAM-01: 5s capture-side self-watchdog (trip wire).
     // Detects stuck mutation queues without involving the host. Uses a
@@ -2318,6 +3196,8 @@ function createCapture(config) {
    * Stop the MutationObserver stream and flush any pending mutations.
    */
   function stopMutationStream() {
+    stopValueCapture();
+
     if (batchTimer) {
       cancelAnimationFrame(batchTimer);
       batchTimer = null;
@@ -2332,6 +3212,8 @@ function createCapture(config) {
       mutationObserver.disconnect();
       mutationObserver = null;
     }
+    observedShadowRoots = new WeakSet();
+    restoreAttachShadow();
 
     // Flush any remaining mutations.
     // PARITY: the stop-path payload intentionally omits staleFlushCount,
@@ -2353,6 +3235,7 @@ function createCapture(config) {
       }
     }
 
+    clearObservedFrameDocuments();
     logger.info('[DOM Stream] MutationObserver stopped');
   }
 
@@ -2483,6 +3366,7 @@ function createCapture(config) {
     var snapshot = serializeDOM();
     safeSend(STREAM.SNAPSHOT, snapshot);
     startMutationStream();
+    startValueCapture();
     startScrollTracker();
     streaming = true;
     broadcastOverlayState(true);
@@ -2524,6 +3408,7 @@ function createCapture(config) {
   function resume() {
     logger.info('[DOM Stream] Resume requested');
     startMutationStream();
+    startValueCapture();
     startScrollTracker();
     streaming = true;
   }
@@ -2531,8 +3416,23 @@ function createCapture(config) {
   function getNodeId(element) {
     if (!streaming) return null;
     if (!element || element.nodeType !== Node.ELEMENT_NODE) return null;
-    if (element.isConnected === false) return null;
+    if (element.isConnected === false && !getMutationFrameRecord(element)) return null;
     return getTrackedNodeId(element);
+  }
+
+  function getObservedFrameDocuments() {
+    if (!streaming) return [];
+    var roots = [];
+    observedFrameDocuments.forEach(function(record) {
+      if (!record || !record.document) return;
+      roots.push({
+        iframe: record.iframe,
+        document: record.document,
+        root: record.root || record.document,
+        frameNid: record.frameNid
+      });
+    });
+    return roots;
   }
 
   // Readiness signal. The reference pinged its host once at script-load
@@ -2549,7 +3449,9 @@ function createCapture(config) {
     stop: stop,
     pause: pause,
     resume: resume,
-    getNodeId: getNodeId
+    handleControl: handleControl,
+    getNodeId: getNodeId,
+    getObservedFrameDocuments: getObservedFrameDocuments
   };
 }
 
@@ -2585,6 +3487,12 @@ function createCapture(config) {
     }
     return phantomStreamCapture;
   }
+
+  window.__phantomStreamHandleControl = function (type, payload) {
+    var capture = phantomStreamEnsureCapture();
+    if (!capture || typeof capture.handleControl !== "function") return undefined;
+    return capture.handleControl(type, payload || {});
+  };
 
   window.__phantomStreamGetNodeId = function (element) {
     var capture = phantomStreamEnsureCapture();

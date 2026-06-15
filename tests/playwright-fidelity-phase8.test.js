@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
-import { STREAM } from '../src/protocol/messages.js';
+import { createPlaywrightAdapter } from '../src/adapters/playwright.js';
+import { CONTROL, STREAM } from '../src/protocol/messages.js';
 
 const INJECT_PATH = fileURLToPath(new URL('../src/adapters/playwright-inject.js', import.meta.url));
 
@@ -17,6 +18,37 @@ async function withCapturePage(run) {
   try {
     await run({ page, messages });
   } finally {
+    await browser.close();
+  }
+}
+
+function createAdapterTransport(messages) {
+  const handlers = new Set();
+  return {
+    send(type, payload) {
+      messages.push({ type, payload: payload || {} });
+    },
+    onMessage(handler) {
+      handlers.add(handler);
+      return () => handlers.delete(handler);
+    },
+    emit(type, payload) {
+      for (const handler of handlers) handler(type, payload || {});
+    },
+  };
+}
+
+async function withAdapterCapturePage(run) {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const messages = [];
+  const transport = createAdapterTransport(messages);
+  const adapter = createPlaywrightAdapter({ page, transport });
+  try {
+    await adapter.install();
+    await run({ page, messages, transport, adapter });
+  } finally {
+    adapter.dispose();
     await browser.close();
   }
 }
@@ -136,12 +168,12 @@ test('Chromium iframe capture mirrors same-origin content and labels inaccessibl
     const sameFrame = frameFor(snapshot.payload.frames, ids.same);
     const opaqueFrame = frameFor(snapshot.payload.frames, ids.opaque);
     assert.ok(sameFrame, 'same-origin frame payload is keyed by iframe nid');
-    assert.equal(sameFrame.status, 'ok');
+    assert.equal(sameFrame.kind, 'same-origin');
     assert.match(sameFrame.html, /Same origin frame/);
     assert.ok(Array.isArray(sameFrame.nodeIds) && sameFrame.nodeIds.length > 0,
       'same-origin frame payload carries scoped nodeIds');
     assert.ok(opaqueFrame, 'inaccessible frame payload is keyed by iframe nid');
-    assert.match(opaqueFrame.status, /blocked|cross-origin|inaccessible/);
+    assert.match(opaqueFrame.kind, /blocked|cross-origin|inaccessible/);
     assert.doesNotMatch(JSON.stringify(opaqueFrame), /Opaque frame secret/,
       'inaccessible frame payload is content-free');
     assert.match(JSON.stringify(opaqueFrame), /iframe|frame|inaccessible|cross-origin|blocked/,
@@ -196,5 +228,65 @@ test('Chromium input and change events stream text, textarea, select, checkbox, 
     assert.match(valueWire, /pro/, 'select value or selected option state is streamed');
     assert.match(valueWire, /updates-check|checkbox|checked/, 'checkbox checked state is streamed');
     assert.match(valueWire, /radio-b|radio|checked/, 'radio checked state is streamed');
+  });
+});
+
+test('Chromium adapter path forwards subtree requests to injected capture and returns sanitized responses', async () => {
+  await withAdapterCapturePage(async ({ page, messages, transport }) => {
+    const html = `
+      <!doctype html>
+      <html>
+        <body>
+          <section id="recover-root">
+            <h2>Recover me</h2>
+            <button id="recover-button" onclick="window.__leak = true">Recover child</button>
+          </section>
+        </body>
+      </html>
+    `;
+    const navigationBaseline = messages.length;
+    await page.goto('data:text/html;charset=utf-8,' + encodeURIComponent(html), { waitUntil: 'load' });
+    await waitForNewMessage(
+      messages,
+      navigationBaseline,
+      (m) => m.type === STREAM.SNAPSHOT && m.payload.html.includes('recover-root'),
+      'adapter snapshot'
+    );
+    await page.waitForTimeout(50);
+    const snapshot = messages
+      .filter((m) => m.type === STREAM.SNAPSHOT && m.payload.html.includes('recover-root'))
+      .at(-1);
+    const nid = await page.evaluate(() => window.__phantomStreamGetNodeId(
+      document.getElementById('recover-root')
+    ));
+
+    assert.ok(snapshot, 'adapter snapshot carries the recovery fixture');
+    assert.ok(nid, 'subtree root has a public capture nid');
+    const baseline = messages.length;
+    transport.emit(CONTROL.SUBTREE_REQUEST, {
+      requestId: 'browser-subtree-1',
+      nid,
+      streamSessionId: snapshot.payload.streamSessionId,
+      snapshotId: snapshot.payload.snapshotId,
+      reason: 'truncated-marker-click',
+    });
+
+    const response = await waitForNewMessage(
+      messages,
+      baseline,
+      (m) => m.type === STREAM.SUBTREE_RESPONSE,
+      'adapter subtree response'
+    );
+
+    assert.equal(response.payload.requestId, 'browser-subtree-1');
+    assert.equal(response.payload.nid, nid);
+    assert.equal(response.payload.status, 'ok');
+    assert.match(response.payload.html, /Recover me/);
+    assert.doesNotMatch(response.payload.html, /onclick|__leak/,
+      'subtree response uses capture sanitization');
+    assert.ok(Array.isArray(response.payload.nodeIds)
+      && response.payload.nodeIds.includes(nid));
+    assert.ok(Array.isArray(response.payload.shadowRoots));
+    assert.ok(Array.isArray(response.payload.frames));
   });
 });
