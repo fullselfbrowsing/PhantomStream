@@ -1,0 +1,102 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #101318;
+  color: #e7e9ee;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
+}
+
+button {
+  min-height: 36px;
+  border: 1px solid #3b4252;
+  border-radius: 6px;
+  background: #f59e0b;
+  color: #16181d;
+  font-weight: 700;
+  padding: 0 14px;
+}
+
+.demo-shell {
+  width: min(1120px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 28px 0;
+}
+
+.panel {
+  display: grid;
+  gap: 18px;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #8bd3ff;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(28px, 4vw, 44px);
+  line-height: 1.05;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.rows {
+  display: grid;
+  gap: 12px;
+}
+
+.row-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid #2d3442;
+  border-radius: 8px;
+  background: #1b202a;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.metrics div {
+  padding: 12px;
+  border: 1px solid #2d3442;
+  border-radius: 8px;
+  background: #171c24;
+}
+
+dt {
+  color: #aab3c5;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+dd {
+  margin: 4px 0 0;
+  font-weight: 700;
+}
+
+.mirror {
+  min-height: 360px;
+  height: min(70vh, 720px);
+  border: 1px solid #2d3442;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #ffffff;
+}

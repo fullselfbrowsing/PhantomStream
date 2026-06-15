@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhantomStream Extension MV3 Source</title>
+<link rel="stylesheet" href="/extension/demo.css">
+</head>
+<body>
+<main class="demo-shell">
+  <section class="panel source-panel">
+    <p class="eyebrow">EXTENSION SOURCE</p>
+    <h1>PhantomStream Extension MV3 Source</h1>
+    <div class="toolbar" data-phantomstream-ui>
+      <button type="button" id="add-row">Add row</button>
+      <button type="button" id="edit-text">Edit text</button>
+    </div>
+    <p id="status">Waiting for the unpacked extension content script.</p>
+    <div id="rows" class="rows">
+      <article class="row-card">
+        <strong>Initial row</strong>
+        <span id="mutable-text">Ready for MV3 mirroring.</span>
+      </article>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  var rows = document.getElementById('rows');
+  var text = document.getElementById('mutable-text');
+  var count = 1;
+  document.getElementById('add-row').addEventListener('click', function () {
+    count += 1;
+    var row = document.createElement('article');
+    row.className = 'row-card';
+    row.innerHTML = '<strong>Row ' + count + '</strong><span>Created by source page mutation.</span>';
+    rows.appendChild(row);
+  });
+  document.getElementById('edit-text').addEventListener('click', function () {
+    text.textContent = 'Edited at ' + new Date().toISOString();
+  });
+  window.addEventListener('load', function () {
+    document.getElementById('status').textContent = 'Loaded. Use the extension fixture to mirror this page.';
+  });
+})();
+</script>
+</body>
+</html>
