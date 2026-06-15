@@ -21,6 +21,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { createCapture } from '../src/capture/index.js';
+import { RELAY_PER_MESSAGE_LIMIT_BYTES } from '../src/protocol/constants.js';
 import { STREAM } from '../src/protocol/messages.js';
 
 // Complete global set the capture core dereferences (audited from the
@@ -116,6 +117,10 @@ function silentLogger() {
   return { info() {}, warn() {}, error() {} };
 }
 
+function wireByteLength(value) {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
 test('factory emits ready and start emits a snapshot stamped with fresh identity', async () => {
   const env = setupEnv(BODY_HTML);
   try {
@@ -146,6 +151,37 @@ test('factory emits ready and start emits a snapshot stamped with fresh identity
   }
 });
 
+test('snapshot head payloads are bounded under the relay cap', async () => {
+  const styleText = '.a{color:red}' + 'x'.repeat(410000);
+  const env = setupEnv(BODY_HTML);
+  try {
+    for (let i = 0; i < 4; i++) {
+      const style = env.document.createElement('style');
+      style.textContent = styleText;
+      env.document.head.appendChild(style);
+    }
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+
+    const snapshots = transport.sent.filter((m) => m.type === STREAM.SNAPSHOT);
+    assert.equal(snapshots.length, 1, 'start emits one snapshot');
+    assert.equal(
+      wireByteLength(snapshots[0].payload) <= RELAY_PER_MESSAGE_LIMIT_BYTES,
+      true,
+      'snapshot payload stays under the UTF-8 relay cap'
+    );
+    assert.equal(snapshots[0].payload.truncated, true, 'dropping head payload marks snapshot truncated');
+    assert.equal(
+      snapshots[0].payload.inlineStyles.length < 4,
+      true,
+      'aggregate inline styles were pruned to fit the relay cap'
+    );
+  } finally {
+    env.teardown();
+  }
+});
+
 test('stop then start mints a new stream session and snapshot identity', async () => {
   const env = setupEnv(BODY_HTML);
   try {
@@ -169,6 +205,53 @@ test('stop then start mints a new stream session and snapshot identity', async (
     // identity fields change across stop() -> start().
     assert.notEqual(second.streamSessionId, first.streamSessionId);
     assert.notEqual(second.snapshotId, first.snapshotId);
+  } finally {
+    env.teardown();
+  }
+});
+
+test('stop flush chunks pending mutations under the relay cap', async () => {
+  const env = setupEnv('<div id="root"></div>');
+  const heldRafs = [];
+  const holdRaf = (cb) => {
+    heldRafs.push(cb);
+    return heldRafs.length;
+  };
+  try {
+    env.window.requestAnimationFrame = holdRaf;
+    env.window.cancelAnimationFrame = () => {};
+    globalThis.requestAnimationFrame = holdRaf;
+    globalThis.cancelAnimationFrame = () => {};
+
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+
+    const root = env.document.getElementById('root');
+    for (let i = 0; i < 700; i++) {
+      const section = env.document.createElement('section');
+      section.id = 'pending-' + i;
+      section.textContent = 'z'.repeat(2500);
+      root.appendChild(section);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    env.capture.stop();
+
+    const mutationPayloads = transport.sent
+      .filter((m) => m.type === STREAM.MUTATIONS)
+      .map((m) => m.payload);
+    assert.equal(mutationPayloads.length > 1, true, 'stop flush emits chunked mutation payloads');
+    assert.equal(
+      mutationPayloads.every((payload) => wireByteLength(payload) <= RELAY_PER_MESSAGE_LIMIT_BYTES),
+      true,
+      'every stop-flush mutation payload stays under the UTF-8 relay cap'
+    );
+    assert.equal(
+      mutationPayloads.reduce((sum, payload) => sum + (payload.mutations || []).length, 0),
+      700,
+      'stop flush preserves all pending add ops across chunks'
+    );
   } finally {
     env.teardown();
   }

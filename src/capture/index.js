@@ -2038,6 +2038,86 @@ export function createCapture(config) {
     };
   }
 
+  function markSnapshotPayloadTruncated(payload) {
+    payload.truncated = true;
+    return payload;
+  }
+
+  function fitSnapshotPayloadForBudget(payload, clone, cloneToNid, truncatedNodeIds) {
+    var next = Object.assign({}, payload || {}, {
+      nodeIds: Array.isArray(payload && payload.nodeIds) ? payload.nodeIds.slice() : [],
+      shadowRoots: Array.isArray(payload && payload.shadowRoots) ? payload.shadowRoots.slice() : [],
+      frames: Array.isArray(payload && payload.frames) ? payload.frames.slice() : [],
+      stylesheets: Array.isArray(payload && payload.stylesheets) ? payload.stylesheets.slice() : [],
+      inlineStyles: Array.isArray(payload && payload.inlineStyles) ? payload.inlineStyles.slice() : [],
+      htmlAttrs: Object.assign({}, payload && payload.htmlAttrs ? payload.htmlAttrs : {}),
+      bodyAttrs: Object.assign({}, payload && payload.bodyAttrs ? payload.bodyAttrs : {})
+    });
+
+    while (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.inlineStyles.length) {
+      next.inlineStyles.pop();
+      markSnapshotPayloadTruncated(next);
+    }
+    while (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.stylesheets.length) {
+      next.stylesheets.pop();
+      markSnapshotPayloadTruncated(next);
+    }
+
+    if (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.htmlStyle) {
+      next.htmlStyle = '';
+      markSnapshotPayloadTruncated(next);
+    }
+    if (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.bodyStyle) {
+      next.bodyStyle = '';
+      markSnapshotPayloadTruncated(next);
+    }
+    if (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && Object.keys(next.htmlAttrs).length) {
+      next.htmlAttrs = {};
+      markSnapshotPayloadTruncated(next);
+    }
+    if (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && Object.keys(next.bodyAttrs).length) {
+      next.bodyAttrs = {};
+      markSnapshotPayloadTruncated(next);
+    }
+    if (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.title) {
+      next.title = '';
+      markSnapshotPayloadTruncated(next);
+    }
+
+    if (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && clone && cloneToNid) {
+      var cloneEls = cloneElementsWithNodeIds(clone, cloneToNid);
+      for (var i = cloneEls.length - 1; i >= 0 && wireByteLength(next) > SNAPSHOT_BUDGET_BYTES; i--) {
+        var nid = cloneToNid.get(cloneEls[i]);
+        if (markCloneNidTruncated(clone, cloneToNid, nid, truncatedNodeIds)) {
+          next.html = clone.innerHTML || '';
+          next.nodeIds = buildNodeIdSidecar(clone, cloneToNid, false);
+          next.shadowRoots = collectShadowRootPayloads(document.body, next.nodeIds, truncatedNodeIds);
+          next.frames = collectFramePayloads(document.body, cloneToNid, truncatedNodeIds);
+          next.missingDescendants = (next.missingDescendants || 0) + 1;
+          markSnapshotPayloadTruncated(next);
+        }
+      }
+    }
+
+    if (wireByteLength(next) > RELAY_PER_MESSAGE_LIMIT_BYTES) {
+      next.html = '';
+      next.nodeIds = [];
+      next.shadowRoots = [];
+      next.frames = [];
+      next.inlineStyles = [];
+      next.stylesheets = [];
+      next.htmlAttrs = {};
+      next.bodyAttrs = {};
+      next.htmlStyle = '';
+      next.bodyStyle = '';
+      next.title = '';
+      next.missingDescendants = (next.missingDescendants || 0) + 1;
+      markSnapshotPayloadTruncated(next);
+    }
+
+    return next;
+  }
+
   // =========================================================================
   // 0.5 SEC-01 Sanitization chokepoint
   // =========================================================================
@@ -2825,7 +2905,7 @@ export function createCapture(config) {
     truncated = budgetedSidecars.truncated;
     missingDescendants = budgetedSidecars.missingDescendants;
 
-    return {
+    var snapshotPayload = {
       html: html,
       nodeIds: nodeIds,
       shadowRoots: shadowRoots,
@@ -2849,6 +2929,7 @@ export function createCapture(config) {
       streamSessionId: streamSessionId || '',
       snapshotId: currentSnapshotId || 0
     };
+    return fitSnapshotPayloadForBudget(snapshotPayload, clone, cloneToNid, truncatedNodeIds);
   }
 
   // =========================================================================
@@ -3273,13 +3354,17 @@ export function createCapture(config) {
     return diffs;
   }
 
-  function mutationPayloadForBudget(diffs) {
-    return {
+  function mutationPayloadForBudget(diffs, options) {
+    var opts = options || {};
+    var payload = {
       mutations: diffs || [],
       streamSessionId: streamSessionId || '',
-      snapshotId: currentSnapshotId || 0,
-      staleFlushCount: staleFlushCount
+      snapshotId: currentSnapshotId || 0
     };
+    if (opts.includeStaleFlushCount !== false) {
+      payload.staleFlushCount = staleFlushCount;
+    }
+    return payload;
   }
 
   function boundMutationDiffForBudget(diff) {
@@ -3296,11 +3381,11 @@ export function createCapture(config) {
     return bounded;
   }
 
-  function sendMutationDiffs(diffs) {
+  function sendMutationDiffs(diffs, options) {
     var chunk = [];
     for (var i = 0; i < diffs.length; i++) {
       var diff = diffs[i];
-      var singlePayload = mutationPayloadForBudget([diff]);
+      var singlePayload = mutationPayloadForBudget([diff], options);
       if (wireByteLength(singlePayload) > RELAY_PER_MESSAGE_LIMIT_BYTES) {
         logger.warn('[DOM Stream] mutation diff dropped over budget', {
           op: diff && diff.op ? diff.op : ''
@@ -3308,15 +3393,15 @@ export function createCapture(config) {
         continue;
       }
       var nextChunk = chunk.concat([diff]);
-      if (chunk.length && wireByteLength(mutationPayloadForBudget(nextChunk)) > RELAY_PER_MESSAGE_LIMIT_BYTES) {
-        safeSend(STREAM.MUTATIONS, mutationPayloadForBudget(chunk));
+      if (chunk.length && wireByteLength(mutationPayloadForBudget(nextChunk, options)) > RELAY_PER_MESSAGE_LIMIT_BYTES) {
+        safeSend(STREAM.MUTATIONS, mutationPayloadForBudget(chunk, options));
         chunk = [diff];
       } else {
         chunk = nextChunk;
       }
     }
     if (chunk.length) {
-      safeSend(STREAM.MUTATIONS, mutationPayloadForBudget(chunk));
+      safeSend(STREAM.MUTATIONS, mutationPayloadForBudget(chunk, options));
     }
   }
 
@@ -3442,11 +3527,7 @@ export function createCapture(config) {
       var diffs = processMutationBatch(batch);
       warnIfSanitizeStrips(sanBefore);
       if (diffs.length > 0) {
-        safeSend(STREAM.MUTATIONS, {
-          mutations: diffs,
-          streamSessionId: streamSessionId || '',
-          snapshotId: currentSnapshotId || 0
-        });
+        sendMutationDiffs(diffs, { includeStaleFlushCount: false });
       }
     }
 
