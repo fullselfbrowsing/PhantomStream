@@ -119,8 +119,19 @@ Plans:
   2. Relay core is transport-agnostic with pluggable backends; the self-hostable ws reference backend enforces the 1 MiB per-message cap and emits oversize diagnostics
   3. Wire compression defaults to native `CompressionStream('deflate-raw')` with lz-string-compatible decode retained for FSB backward compatibility, and async encoding provably preserves message ordering
   4. Viewer host receives `connecting`/`live`/`stale`/`disconnected` lifecycle events and stream-health telemetry via `on()` — observable by killing the relay mid-stream and watching states transition
-**Plans**: TBD
+**Plans**: 4 plans (3 waves)
 **UI hint**: yes
+
+Plans:
+**Wave 1**
+- [ ] 04-01-PLAN.md — Relay core, ws backend, package dependency, and relay safety tests
+- [ ] 04-02-PLAN.md — Endpoint WebSocket transport, native deflate/legacy decode, FIFO ordering tests
+
+**Wave 2** *(blocked on 04-02)*
+- [ ] 04-03-PLAN.md — Viewer `on('state'|'health')` events, health telemetry, and renderer tests
+
+**Wave 3** *(blocked on 04-01, 04-02, 04-03)*
+- [ ] 04-04-PLAN.md — `phantom-stream demo`, two-tab UI, automated demo tests, and browser kill-relay checkpoint
 
 ### Phase 5: Playwright/CDP Adapter, Remote Control & Agent Demo
 **Goal**: A script-driven browser is mirrored live with working, consent-gated remote control — the agent-observability story the paper leads with
