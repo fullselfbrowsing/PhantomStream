@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { createViewer } from '../src/renderer/index.js';
-import { STREAM, CONTROL, DIFF_OP, NID_ATTR } from '../src/protocol/messages.js';
+import { STREAM, CONTROL, DIFF_OP } from '../src/protocol/messages.js';
 
 function setupEnv() {
   const dom = new JSDOM(
@@ -75,7 +75,8 @@ function silentLogger() {
 function snapshotPayload(overrides) {
   return Object.assign(
     {
-      html: '<div ' + NID_ATTR + '="1">hello</div>',
+      html: '<div>hello</div>',
+      nodeIds: ['1'],
       stylesheets: [],
       inlineStyles: [],
       htmlAttrs: {},
@@ -121,6 +122,7 @@ function glueMirror(iframe) {
   cd.open();
   cd.write(iframe.getAttribute('srcdoc'));
   cd.close();
+  iframe.dispatchEvent(new iframe.ownerDocument.defaultView.Event('load'));
   return cd;
 }
 
@@ -337,7 +339,8 @@ test('health updates after frames, sends, sanitizer movement, failures, and tran
     const health = [];
     env.viewer.on('health', (event) => health.push(event));
     const snapshot = snapshotPayload({
-      html: '<div ' + NID_ATTR + '="1"><span ' + NID_ATTR + '="2">secret text</span></div>',
+      html: '<div><span>secret text</span></div>',
+      nodeIds: ['1', '2'],
       url: 'https://private.example/account',
       title: 'Private title',
     });

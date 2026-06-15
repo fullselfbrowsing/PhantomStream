@@ -404,21 +404,78 @@ function makeDoc(env, bodyHtml) {
 }
 
 /** Recording diff hooks carrying an injected sanitizeCounters object. */
-function diffHooks(sanitizeCounters) {
+function elementsInSubtree(root) {
+  const elements = [];
+  if (!root) return elements;
+  if (root.nodeType === 1) elements.push(root);
+  if (root.getElementsByTagName) {
+    for (const el of root.getElementsByTagName('*')) elements.push(el);
+  }
+  return elements;
+}
+
+function identityFromNidAttrs(doc) {
+  const nidToNode = new Map();
+  const nodeToNid = new WeakMap();
+
+  function indexAttrs(root) {
+    for (const el of elementsInSubtree(root)) {
+      if (!el.getAttribute) continue;
+      const nid = el.getAttribute(NID_ATTR);
+      if (!nid) continue;
+      nidToNode.set(String(nid), el);
+      nodeToNid.set(el, String(nid));
+    }
+  }
+
+  function pair(root, nodeIds) {
+    const elements = elementsInSubtree(root);
+    const ids = Array.isArray(nodeIds) ? nodeIds : [];
+    for (let i = 0; i < elements.length && i < ids.length; i++) {
+      const nid = String(ids[i]);
+      nidToNode.set(nid, elements[i]);
+      nodeToNid.set(elements[i], nid);
+    }
+  }
+
+  indexAttrs(doc.body);
+
+  return {
+    resolve(nid) { return nidToNode.get(String(nid)) || null; },
+    indexSubtree(root, nodeIds) {
+      if (Array.isArray(nodeIds) && nodeIds.length > 0) {
+        pair(root, nodeIds);
+      } else {
+        indexAttrs(root);
+      }
+    },
+    removeSubtree(root) {
+      for (const el of elementsInSubtree(root)) {
+        const nid = nodeToNid.get(el);
+        if (nid) nidToNode.delete(nid);
+        nodeToNid.delete(el);
+      }
+    },
+  };
+}
+
+function diffHooks(sanitizeCounters, doc) {
   const warns = [];
   const resyncs = [];
+  const hooks = {
+    logger: {
+      info() {},
+      warn(...args) { warns.push(args); },
+      error() {},
+    },
+    requestResync(reason, details) { resyncs.push({ reason, details }); },
+    sanitizeCounters,
+  };
+  if (doc) hooks.identity = identityFromNidAttrs(doc);
   return {
     warns,
     resyncs,
-    hooks: {
-      logger: {
-        info() {},
-        warn(...args) { warns.push(args); },
-        error() {},
-      },
-      requestResync(reason, details) { resyncs.push({ reason, details }); },
-      sanitizeCounters,
-    },
+    hooks,
   };
 }
 
@@ -431,7 +488,7 @@ test("chokepoint integration: a hostile 'add' op inserts a node with neither onc
   try {
     const doc = makeDoc(env, '<div ' + NID_ATTR + '="1"></div>');
     const sc = freshCounters();
-    const rec = diffHooks(sc);
+    const rec = diffHooks(sc, doc);
     applyMutations(doc, [
       {
         op: DIFF_OP.ADD,
@@ -461,7 +518,7 @@ test("chokepoint integration: a hostile 'add' op scrubs <style> element text", (
   try {
     const doc = makeDoc(env, '<div ' + NID_ATTR + '="1"></div>');
     const sc = freshCounters();
-    const rec = diffHooks(sc);
+    const rec = diffHooks(sc, doc);
     applyMutations(doc, [
       {
         op: DIFF_OP.ADD,
@@ -485,7 +542,7 @@ test("chokepoint integration: an 'attr' op with an on* name is DROPPED -- no set
   try {
     const doc = makeDoc(env, '<div ' + NID_ATTR + '="1"></div>');
     const sc = freshCounters();
-    const rec = diffHooks(sc);
+    const rec = diffHooks(sc, doc);
     const counters = freshDiffCounters();
     applyMutations(doc, [
       { op: DIFF_OP.ATTR, nid: '1', attr: 'onclick', val: 'alert(1)' },
@@ -505,7 +562,7 @@ test("chokepoint integration: an 'attr' op href=javascript: removes href; benign
   try {
     const doc = makeDoc(env, '<a ' + NID_ATTR + '="1">x</a>');
     const sc = freshCounters();
-    const rec = diffHooks(sc);
+    const rec = diffHooks(sc, doc);
     applyMutations(doc, [
       { op: DIFF_OP.ATTR, nid: '1', attr: 'href', val: 'javascript:alert(1)' },
       { op: DIFF_OP.ATTR, nid: '1', attr: 'title', val: 'tip' },
@@ -524,7 +581,7 @@ test("chokepoint integration: an 'attr' op for srcdoc is dropped", () => {
   try {
     const doc = makeDoc(env, '<iframe ' + NID_ATTR + '="1"></iframe>');
     const sc = freshCounters();
-    const rec = diffHooks(sc);
+    const rec = diffHooks(sc, doc);
     applyMutations(doc, [
       { op: DIFF_OP.ATTR, nid: '1', attr: 'srcdoc', val: '<p>nested</p>' },
     ], freshDiffCounters(), rec.hooks);
@@ -540,7 +597,7 @@ test("chokepoint integration: 'text' ops still apply via textContent unchanged (
   const env = setupEnv();
   try {
     const doc = makeDoc(env, '<div ' + NID_ATTR + '="1">old</div>');
-    const rec = diffHooks(freshCounters());
+    const rec = diffHooks(freshCounters(), doc);
     const markupText = '<img src=x onerror=alert(1)> stays literal text';
     applyMutations(doc, [
       { op: DIFF_OP.TEXT, nid: '1', text: markupText },
