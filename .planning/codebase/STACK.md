@@ -70,7 +70,8 @@
 **Package:**
 - `package.json` — name `@fullselfbrowsing/phantom-stream`, version `0.1.0`, `"type": "module"`
 - Entry point: `src/protocol/index.js` (via `"main"`). Package exports currently include
-  `./protocol`, `./capture`, `./renderer`, `./relay`, and `./transport/websocket`.
+  `./protocol`, `./capture`, `./adapters/playwright`, `./renderer`, `./relay`, and
+  `./transport/websocket`.
 
 **Environment:**
 - No `.env` files present
@@ -105,6 +106,9 @@
 - `src/transport/websocket.js` — browser-compatible endpoint transport exported as
   `./transport/websocket`; owns native deflate envelopes, legacy `_lz` decode,
   FIFO send/receive ordering, and content-free health/status telemetry
+- `src/adapters/playwright.js` — Node-side Playwright/CDP adapter exported as
+  `./adapters/playwright`; uses Node built-ins only and reads the checked-in classic
+  script inject artifact at runtime
 - Planned extraction targets: Chrome extension content script, Playwright/CDP `Page.addScriptToEvaluateOnNewDocument`, bookmarklet, embedded SDK (see `src/capture/README.md`)
 
 ---

@@ -153,7 +153,7 @@ Plans:
 - [x] 05-01-PLAN.md — Remote-control protocol constants, validators, privacy redaction, and relay non-execution tests
 
 **Wave 1** *(blocked on 05-01)*
-- [ ] 05-02-PLAN.md — Playwright/CDP adapter, single-file inject artifact, authorization gate, and driver-native replay
+- [x] 05-02-PLAN.md — Playwright/CDP adapter, single-file inject artifact, authorization gate, and driver-native replay
 - [ ] 05-03-PLAN.md — Renderer inverse coordinate mapping and viewer mapping getter for host-owned control overlays
 
 **Wave 2** *(blocked on 05-02)*

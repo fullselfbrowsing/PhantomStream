@@ -62,7 +62,8 @@ All new code in `src/` follows the **new-style** conventions described below. Th
 - Barrel `index.js` re-exports everything: `export * from './constants.js'; export * from './messages.js'; export * from './envelope.js'`
 - Package `exports` field maps subpath to module: `"./protocol": "./src/protocol/index.js"`
 - Endpoint modules can be exported directly by subpath when no barrel exists yet, e.g.
-  `"./transport/websocket": "./src/transport/websocket.js"`
+  `"./transport/websocket": "./src/transport/websocket.js"` or
+  `"./adapters/playwright": "./src/adapters/playwright.js"`
 
 **Reference `reference/` code:**
 - Extension content scripts: IIFEs with `window.FSB` namespace attachment

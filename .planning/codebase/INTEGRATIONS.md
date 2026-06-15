@@ -112,6 +112,22 @@ These APIs are used in the reference implementation under `reference/extension/`
 
 ---
 
+## Playwright / Chrome DevTools Protocol
+
+**Package surface:**
+- `src/adapters/playwright.js` exported at `./adapters/playwright`
+- Uses Playwright-like `page.exposeBinding`, `page.addInitScript`, `page.mainFrame`,
+  `page.on`, `page.evaluate`, `page.mouse`, and `page.keyboard`
+- Optional CDP integration uses `CDPSession.send` for `Page.addScriptToEvaluateOnNewDocument`
+  and `Input.dispatchMouseEvent` / `Input.insertText` / `Input.dispatchKeyEvent`
+
+**Security boundary:**
+- The adapter is the remote-control authorization boundary, not the relay or viewer UI
+- Control starts default-deny and approved replay uses driver-native Playwright/CDP APIs only
+- Binding messages are accepted only from the driven page's main frame
+
+---
+
 ## Web Platform APIs (Capture, reference only)
 
 Used in `reference/extension/dom-stream.js` (content script context). Not external services, but platform integration points the `src/capture/` extraction must either preserve or abstract.

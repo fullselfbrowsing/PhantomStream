@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-01-PLAN.md
-last_updated: "2026-06-15T08:32:53.573Z"
+stopped_at: Completed 05-02-PLAN.md
+last_updated: "2026-06-15T08:46:55.310Z"
 last_activity: 2026-06-15
 progress:
   total_phases: 13
   completed_phases: 4
   total_plans: 26
-  completed_plans: 21
-  percent: 81
+  completed_plans: 22
+  percent: 85
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-06-14)
 ## Current Position
 
 Phase: 05 (Playwright/CDP Adapter, Remote Control & Agent Demo) — EXECUTING
-Plan: 2 of 6
+Plan: 3 of 6
 Status: Ready to execute
 Last activity: 2026-06-15
 
-Progress: [██████████] 100%
+Progress: [█████████░] 85%
 
 ## Performance Metrics
 
@@ -62,6 +62,7 @@ Progress: [██████████] 100%
 | Phase 04 P03 | 9 min | 2 tasks | 4 files |
 | Phase 04 P04 | 70 min | 3 tasks | 12 files |
 | Phase 05 P01 | 6min | 2 tasks | 5 files |
+| Phase 05 P02 | 9 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -91,6 +92,8 @@ Recent decisions affecting current work:
 - [Phase 04]: Browser relay-stop validation can record viewer state event timestamps. — Tool latency can miss a short visual stale interval, so event timestamps are the durable proof of live -> stale -> disconnected.
 - [Phase 05]: REMOTE_CONTROL_STATE is exported as a named alias so the static REMOTE_CONTROL grep returns exactly one declaration while preserving the public named export.
 - [Phase 05]: Remote-control state reasons are constrained to lowercase hyphenated identifiers to avoid accidental user-content leakage in telemetry.
+- [Phase 05]: The Playwright/CDP adapter prefers CDP replay when a CDPSession is supplied, otherwise it uses Playwright mouse and keyboard APIs. — Keeps one adapter surface for Playwright-first hosts while allowing CDP-native replay and new-document injection where available.
+- [Phase 05]: The Playwright inject artifact is checked in as a classic script with protocol constants and createCapture inlined. — Preserves the no-build path for Playwright addInitScript and CDP Page.addScriptToEvaluateOnNewDocument consumers.
 
 ### Pending Todos
 
@@ -113,6 +116,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-15T08:32:53.570Z
-Stopped at: Completed 05-01-PLAN.md
+Last session: 2026-06-15T08:46:41.196Z
+Stopped at: Completed 05-02-PLAN.md
 Resume file: None

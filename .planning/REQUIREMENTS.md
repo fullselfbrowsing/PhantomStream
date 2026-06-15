@@ -45,7 +45,7 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Host Adapters (ADPT)
 
 - [ ] **ADPT-01**: Extension MV3 adapter — content-script injection + service-worker relay client including the `chrome.alarms` watchdog
-- [ ] **ADPT-02**: Playwright/CDP adapter — `addInitScript`/`Page.addScriptToEvaluateOnNewDocument` injection + binding bridge, shipped as a single-file inject artifact
+- [x] **ADPT-02**: Playwright/CDP adapter — `addInitScript`/`Page.addScriptToEvaluateOnNewDocument` injection + binding bridge, shipped as a single-file inject artifact
 - [ ] **ADPT-03**: Bookmarklet adapter — loader stub that injects the capture bundle into the current page
 - [x] **ADPT-04**: Embedded-SDK adapter — first-party pages can import and run capture directly (script tag / module import)
 
@@ -135,7 +135,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | RELY-01 | Phase 4 | Complete |
 | RELY-02 | Phase 4 | Complete |
 | ADPT-01 | Phase 6 | Pending |
-| ADPT-02 | Phase 5 | Pending |
+| ADPT-02 | Phase 5 | Complete |
 | ADPT-03 | Phase 6 | Pending |
 | ADPT-04 | Phase 2 | Complete |
 | PKG-01 | Phase 4 | Complete |

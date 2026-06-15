@@ -15,6 +15,9 @@ managua/                          # Repo root
 │   │   └── index.js              # Re-exports all protocol symbols
 │   ├── capture/                  # STUB — page-side capture (README only)
 │   │   └── README.md
+│   ├── adapters/                 # ACTIVE — host adapters for browser automation contexts
+│   │   ├── playwright.js         # Playwright/CDP adapter and remote-control gate
+│   │   └── playwright-inject.js  # Single-file classic script capture artifact
 │   ├── relay/                    # ACTIVE — relay core, limits, ws backend
 │   │   ├── README.md
 │   │   ├── index.js              # Re-exports relay surfaces
@@ -91,6 +94,13 @@ managua/                          # Repo root
 - Contains: `README.md` describing the planned module split and FSB-specific dependencies
   that must be abstracted (`chrome.runtime.sendMessage`, `window.FSB` namespace)
 - Status: Stub only — no implementation yet
+
+**`src/adapters/`:**
+- Purpose: Host adapter surfaces that install capture into browser automation or other
+  injection contexts and bridge messages into PhantomStream transports
+- Contains: `playwright.js` first-class Playwright/CDP adapter and `playwright-inject.js`
+  checked-in classic script capture artifact
+- Status: Active implementation for ADPT-02 — package-exported at `./adapters/playwright`
 
 **`src/relay/`:**
 - Purpose: Transport-agnostic relay core and pluggable backend seam extracted from
@@ -178,6 +188,12 @@ managua/                          # Repo root
   `decodeWireMessage`, `createWebSocketTransport`, FIFO send/receive ordering, `flush()`,
   `onMessage`, `onStatus`, `close`, and `getHealth`
 
+**Adapter implementation:**
+- `src/adapters/playwright.js` — package-exported at `./adapters/playwright`; exposes
+  `createPlaywrightAdapter` and `getPlaywrightInjectSource`
+- `src/adapters/playwright-inject.js` — single-file classic script artifact used by
+  Playwright `addInitScript` and CDP `Page.addScriptToEvaluateOnNewDocument`
+
 **Capture reference (authoritative for `src/capture/` extraction):**
 - `reference/extension/dom-stream.js` — full 1117-line content script
 
@@ -206,8 +222,8 @@ managua/                          # Repo root
 
 **Package manifest:**
 - `package.json` — `"type": "module"`, `"main": "src/protocol/index.js"`,
-  exports for `./protocol`, `./capture`, `./renderer`, `./relay`, and `./transport/websocket`,
-  test command: `node --test tests/*.test.js tests/differential/*.test.js`
+  exports for `./protocol`, `./capture`, `./adapters/playwright`, `./renderer`, `./relay`,
+  and `./transport/websocket`, test command: `node --test tests/*.test.js tests/differential/*.test.js`
 
 ## Naming Conventions
 
