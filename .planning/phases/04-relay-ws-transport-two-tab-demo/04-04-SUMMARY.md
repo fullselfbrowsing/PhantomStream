@@ -89,6 +89,7 @@ completed: 2026-06-15
 6. **Browser fix: MessageEvent data getter decode** - `92b9c55` (fix)
 7. **Browser fix: Observable demo stale state** - `d45b939` (fix)
 8. **Browser fix: Demo asset refresh hardening** - `efe3b64` (fix)
+9. **Code review fix: Expanded compression envelope fallback** - `5ac1edb` (fix)
 
 ## Files Created/Modified
 
@@ -135,6 +136,15 @@ completed: 2026-06-15
 
 **Total deviations:** 3 auto-fixed.
 
+### Code Review Fixes
+
+**4. Expanded native compression envelopes could exceed raw frame size**
+- **Found during:** Required Phase 04 code review.
+- **Issue:** `encodeWireMessage()` returned a native deflate envelope even when base64/envelope overhead made the encoded frame larger than the raw JSON, creating a relay cap edge where a raw frame could fit but the encoded frame could be dropped.
+- **Fix:** Compare encoded envelope byte length against raw JSON byte length and fall back to raw JSON when compression is not smaller.
+- **Verification:** `node --test tests/websocket-transport.test.js tests/protocol.test.js -x`; `npm test` full suite.
+- **Committed in:** `5ac1edb`
+
 ## Issues Encountered
 
 None unresolved. The final FSB lifecycle evidence showed `live -> stale -> disconnected` with the last frame retained.
@@ -147,7 +157,7 @@ None.
 
 - `node --test tests/demo-cli.test.js -x` - PASS, 8/8 tests.
 - `node --test tests/renderer-health-events.test.js tests/renderer-viewer.test.js -x` - PASS, 28/28 tests.
-- `npm test` - PASS, 251/251 tests.
+- `npm test` - PASS, 252/252 tests.
 - FSB browser checkpoint, Google Chrome:
   - Room `0881e7e3...`: viewer opened first, source opened second, viewer reached `Live`, relay `open`, snapshots/mutations advanced, and errors stayed `0`.
   - Source `Add row`, `Remove row`, and `Edit text` reflected in the viewer mirror.
@@ -166,8 +176,8 @@ Ready for Phase 05. PKG-01 now has a local end-to-end networked demo surface, an
 ## Self-Check: PASSED
 
 - Found all created key files and final summary.
-- Found task/fix commits in git history: `ffa0ea2`, `58977d3`, `3781618`, `8db2f90`, `38991bb`, `92b9c55`, `d45b939`, `efe3b64`.
-- Verified final full suite: `npm test` PASS, 251/251 tests.
+- Found task/fix commits in git history: `ffa0ea2`, `58977d3`, `3781618`, `8db2f90`, `38991bb`, `92b9c55`, `d45b939`, `efe3b64`, `5ac1edb`.
+- Verified final full suite: `npm test` PASS, 252/252 tests.
 
 ---
 *Phase: 04-relay-ws-transport-two-tab-demo*
