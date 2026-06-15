@@ -93,6 +93,27 @@ function getCtor(options, name) {
   return typeof globalThis !== 'undefined' ? globalThis[name] : undefined;
 }
 
+async function readAllBytes(readable) {
+  var reader = readable.getReader();
+  var chunks = [];
+  var total = 0;
+  for (;;) {
+    var result = await reader.read();
+    if (result.done) break;
+    var chunk = toUint8Array(result.value);
+    if (!chunk) continue;
+    chunks.push(chunk);
+    total += chunk.byteLength;
+  }
+  var out = new Uint8Array(total);
+  var offset = 0;
+  for (var i = 0; i < chunks.length; i++) {
+    out.set(chunks[i], offset);
+    offset += chunks[i].byteLength;
+  }
+  return out;
+}
+
 function emitDiagnostic(options, reason, details) {
   var now = typeof options.now === 'function' ? options.now : defaultNow;
   var status = Object.assign({
@@ -132,11 +153,11 @@ async function nativeCompress(raw, options) {
   if (typeof CompressionStreamCtor !== 'function') return null;
 
   var stream = new CompressionStreamCtor(NATIVE_DEFLATE_MARKER);
+  var readPromise = readAllBytes(stream.readable);
   var writer = stream.writable.getWriter();
   await writer.write(stringToBytes(raw));
   await writer.close();
-  var compressed = await new Response(stream.readable).arrayBuffer();
-  return new Uint8Array(compressed);
+  return await readPromise;
 }
 
 async function nativeDecompress(bytes, options) {
@@ -149,11 +170,11 @@ async function nativeDecompress(bytes, options) {
   if (typeof DecompressionStreamCtor !== 'function') return null;
 
   var stream = new DecompressionStreamCtor(NATIVE_DEFLATE_MARKER);
+  var readPromise = readAllBytes(stream.readable);
   var writer = stream.writable.getWriter();
   await writer.write(bytes);
   await writer.close();
-  var decompressed = await new Response(stream.readable).arrayBuffer();
-  return bytesToString(new Uint8Array(decompressed));
+  return bytesToString(await readPromise);
 }
 
 async function normalizeRaw(raw) {

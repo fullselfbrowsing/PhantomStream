@@ -127,6 +127,28 @@ test('native deflate envelope round-trips through injected codec', async () => {
   assert.deepEqual(decoded.msg, msg);
 });
 
+test('native CompressionStream deflate-raw path drains without deadlocking', async () => {
+  if (typeof CompressionStream !== 'function' || typeof DecompressionStream !== 'function') return;
+
+  const msg = {
+    type: 'ext:dom-snapshot',
+    payload: { html: '<main>' + 'native-stream '.repeat(2000) + '</main>' },
+    ts: 125
+  };
+  const timed = (promise) => Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('native-stream-timeout')), 1000))
+  ]);
+
+  const wire = await timed(encodeWireMessage(msg, { compressionThresholdBytes: 0 }));
+  const envelope = JSON.parse(wire);
+  assert.equal(envelope._ps, 'deflate-raw');
+
+  const decoded = await timed(decodeWireMessage(wire));
+  assert.equal(decoded.ok, true);
+  assert.deepEqual(decoded.msg, msg);
+});
+
 test('small messages below compressionThresholdBytes stay plain JSON', async () => {
   const msg = { type: 'ext:dom-scroll', payload: { scrollX: 0, scrollY: 10 }, ts: 126 };
   const wire = await encodeWireMessage(msg, {
