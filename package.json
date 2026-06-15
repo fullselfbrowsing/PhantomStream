@@ -10,6 +10,8 @@
   "exports": {
     "./protocol": "./src/protocol/index.js",
     "./capture": "./src/capture/index.js",
+    "./adapters/extension": "./src/adapters/extension.js",
+    "./adapters/bookmarklet": "./src/adapters/bookmarklet.js",
     "./adapters/playwright": "./src/adapters/playwright.js",
     "./renderer": "./src/renderer/index.js",
     "./relay": "./src/relay/index.js",
