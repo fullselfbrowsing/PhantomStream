@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 04-02-PLAN.md
-last_updated: "2026-06-15T05:41:42.348Z"
+stopped_at: Completed 04-03-PLAN.md
+last_updated: "2026-06-15T05:57:20.133Z"
 last_activity: 2026-06-15
 progress:
   total_phases: 13
   completed_phases: 3
   total_plans: 20
-  completed_plans: 18
-  percent: 90
+  completed_plans: 19
+  percent: 95
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-06-14)
 ## Current Position
 
 Phase: 04 (relay-ws-transport-two-tab-demo) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-06-15
 
-Progress: [██████████] 100%
+Progress: [██████████] 95%
 
 ## Performance Metrics
 
@@ -58,6 +58,7 @@ Progress: [██████████] 100%
 | Phase 03 P04 | 6 min | 2 tasks | 4 files |
 | Phase 04 P01 | 7 min | 2 tasks | 8 files |
 | Phase 04 P02 | 8 min | 2 tasks | 3 files |
+| Phase 04 P03 | 9 min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -80,6 +81,8 @@ Recent decisions affecting current work:
 - [Phase 04]: Native endpoint compression uses { _ps: 'deflate-raw', d }, while legacy { _lz, d } remains decode-only through an injected LZ codec. — Keeps relay fan-out raw and preserves FSB backward compatibility without adding a browser LZ dependency.
 - [Phase 04]: WebSocket transport send and receive paths both serialize async codec work through per-connection promise queues. — Prevents CompressionStream or injected codec latency from reordering capture/viewer frames.
 - [Phase 04]: Transport health/status telemetry exposes counters, timestamps, drops, and error codes only; mirrored payload content is omitted. — Satisfies T-04-07 while giving 04-03 enough telemetry for viewer lifecycle events.
+- [Phase 04]: Viewer lifecycle and health events stay library events only; visible UI chrome remains host/demo-owned. — The viewer should expose observable state for hosts and demos without imposing product UI.
+- [Phase 04]: Health snapshots whitelist counters, timestamps, sanitizer counters, and transport diagnostics instead of copying payload or status objects wholesale. — VIEW-02 telemetry must be useful for hosts while preserving the privacy boundary around mirrored page content.
 
 ### Pending Todos
 
@@ -103,6 +106,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-15T05:41:42.345Z
-Stopped at: Completed 04-02-PLAN.md
+Last session: 2026-06-15T05:57:20.130Z
+Stopped at: Completed 04-03-PLAN.md
 Resume file: None

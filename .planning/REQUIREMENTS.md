@@ -31,7 +31,7 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Viewer (VIEW)
 
 - [x] **VIEW-01**: Host can embed the viewer as a framework-agnostic component (`createViewer({ container, transport })`) with viewport-adaptive scaling
-- [ ] **VIEW-02**: Host can subscribe to lifecycle/connection-state events (`connecting`/`live`/`stale`/`disconnected`) and stream-health telemetry via `on()`
+- [x] **VIEW-02**: Host can subscribe to lifecycle/connection-state events (`connecting`/`live`/`stale`/`disconnected`) and stream-health telemetry via `on()`
 - [ ] **VIEW-03**: Host can address mirrored elements semantically through a public node-identity API (e.g. highlight/query the node an agent is about to touch)
 - [x] **VIEW-04**: Overlay channel is a documented, extensible message type — action glow and progress ship as built-ins; hosts can define custom DOM-anchored overlays
 - [ ] **VIEW-05**: Remote control works through the mirror: click/type/scroll reverse-mapped from viewer coordinates and replayed in the real tab
@@ -127,7 +127,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SEC-03 | Phase 3 | Complete |
 | SEC-04 | Phase 5 | Pending |
 | VIEW-01 | Phase 2 | Complete |
-| VIEW-02 | Phase 4 | Pending |
+| VIEW-02 | Phase 4 | Complete |
 | VIEW-03 | Phase 7 | Pending |
 | VIEW-04 | Phase 2 | Complete |
 | VIEW-05 | Phase 5 | Pending |

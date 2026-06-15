@@ -130,7 +130,7 @@ Plans:
 - [x] 04-02-PLAN.md — Endpoint WebSocket transport, native deflate/legacy decode, FIFO ordering tests
 
 **Wave 3** *(blocked on 04-02)*
-- [ ] 04-03-PLAN.md — Viewer `on('state'|'health')` events, health telemetry, and renderer tests
+- [x] 04-03-PLAN.md — Viewer `on('state'|'health')` events, health telemetry, and renderer tests
 
 **Wave 4** *(blocked on 04-01, 04-02, 04-03)*
 - [ ] 04-04-PLAN.md — `phantom-stream demo`, two-tab UI, automated demo tests, and browser kill-relay checkpoint
