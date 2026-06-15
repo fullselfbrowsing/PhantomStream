@@ -168,3 +168,110 @@ test('package metadata exposes the phantom-stream binary', async () => {
   const pkg = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
   assert.equal(pkg.bin['phantom-stream'], './bin/phantom-stream.js');
 });
+
+test('two-tab demo pages expose the required UI shell', async () => {
+  await withDemoServer(async function (demo) {
+    const port = demo.server.address().port;
+    const source = await get('/examples/two-tab-demo/source.html', port);
+    const viewer = await get('/examples/two-tab-demo/viewer.html', port);
+
+    assert.equal(source.statusCode, 200);
+    assert.equal(source.headers['content-type'], 'text/html; charset=utf-8');
+    assert.match(source.body, /<title>PhantomStream — Source Tab<\/title>/);
+    assert.match(source.body, /href="\.\/demo\.css"/);
+    assertInOrder(source.body, [
+      'Add row',
+      'Remove row',
+      'Edit text',
+      'Show dialog',
+      'Auto-mutate'
+    ]);
+
+    assert.equal(viewer.statusCode, 200);
+    assert.equal(viewer.headers['content-type'], 'text/html; charset=utf-8');
+    assert.match(viewer.body, /<title>PhantomStream — Viewer Tab<\/title>/);
+    assert.match(viewer.body, /href="\.\/demo\.css"/);
+    [
+      'Lifecycle',
+      'Room',
+      'Last frame',
+      'Relay',
+      'frames',
+      'snapshots',
+      'mutations',
+      'misses',
+      'apply failures',
+      'drops',
+      'errors'
+    ].forEach(function (text) {
+      assert.ok(viewer.body.includes(text), 'missing viewer field: ' + text);
+    });
+  });
+});
+
+test('two-tab demo CSS matches the UI contract dimensions and colors', async () => {
+  await withDemoServer(async function (demo) {
+    const css = await get('/examples/two-tab-demo/demo.css', demo.server.address().port);
+    assert.equal(css.statusCode, 200);
+    assert.equal(css.headers['content-type'], 'text/css; charset=utf-8');
+    [
+      'aspect-ratio: 16 / 10',
+      'min-height: 280px',
+      'height: min(72vh, 720px)',
+      'min-height: 220px',
+      '#0f1117',
+      '#1e1e2e',
+      '#f59e0b',
+      '#22c55e',
+      '#eab308',
+      '#ef4444'
+    ].forEach(function (text) {
+      assert.ok(css.body.includes(text), 'missing CSS contract token: ' + text);
+    });
+  });
+});
+
+test('two-tab demo browser modules wire capture viewer and WebSocket transport', async () => {
+  await withDemoServer(async function (demo) {
+    const port = demo.server.address().port;
+    const sourceJs = await get('/examples/two-tab-demo/source.js', port);
+    const viewerJs = await get('/examples/two-tab-demo/viewer.js', port);
+
+    assert.equal(sourceJs.statusCode, 200);
+    assert.equal(sourceJs.headers['content-type'], 'text/javascript; charset=utf-8');
+    [
+      'createCapture',
+      'createWebSocketTransport',
+      'CONTROL.START',
+      'CONTROL.STOP',
+      'CONTROL.PAUSE',
+      'CONTROL.RESUME',
+      'data-phantomstream-ui',
+      'capture.start()'
+    ].forEach(function (text) {
+      assert.ok(sourceJs.body.includes(text), 'missing source wiring: ' + text);
+    });
+
+    assert.equal(viewerJs.statusCode, 200);
+    assert.equal(viewerJs.headers['content-type'], 'text/javascript; charset=utf-8');
+    [
+      'createViewer',
+      'createWebSocketTransport',
+      "viewer.on('state'",
+      "viewer.on('health'",
+      'CONTROL.START',
+      'transport.send(CONTROL.START'
+    ].forEach(function (text) {
+      assert.ok(viewerJs.body.includes(text), 'missing viewer wiring: ' + text);
+    });
+  });
+});
+
+function assertInOrder(text, expected) {
+  var cursor = -1;
+  expected.forEach(function (needle) {
+    var next = text.indexOf(needle, cursor + 1);
+    assert.ok(next > cursor, 'expected "' + needle + '" after offset ' + cursor);
+    cursor = next;
+  });
+}
