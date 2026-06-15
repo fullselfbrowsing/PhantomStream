@@ -1,10 +1,11 @@
 ---
 phase: 04
 slug: relay-ws-transport-two-tab-demo
-status: draft
+status: approved
 shadcn_initialized: false
 preset: none
 created: 2026-06-14
+reviewed_at: 2026-06-14T23:21:26-05:00
 ---
 
 # Phase 04 — UI Design Contract
@@ -247,4 +248,4 @@ Voice:
 - [ ] Dimension 5 Spacing: PASS
 - [ ] Dimension 6 Registry Safety: PASS
 
-**Approval:** pending
+**Approval:** approved by gsd-ui-checker at 2026-06-14T23:21:26-05:00
