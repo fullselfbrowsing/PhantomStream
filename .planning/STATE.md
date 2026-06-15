@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Phase 6 context gathered
-last_updated: "2026-06-15T10:46:20.826Z"
-last_activity: 2026-06-15
+status: executing
+stopped_at: Phase 7 context gathered
+last_updated: "2026-06-15T15:44:36.398Z"
+last_activity: 2026-06-15 -- Phase 07 execution started
 progress:
   total_phases: 13
   completed_phases: 6
-  total_plans: 31
+  total_plans: 35
   completed_plans: 31
   percent: 46
 ---
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-14)
 
 **Core value:** A live, trustworthy, low-bandwidth, semantically addressable mirror of a real browser tab — capture → relay → render → remote-control must work end-to-end as a standalone framework.
-**Current focus:** Phase 06 — extension-mv3-bookmarklet-adapters
+**Current focus:** Phase 07 — weakmap-node-identity-semantic-addressing-api
 
 ## Current Position
 
-Phase: 06 (extension-mv3-bookmarklet-adapters) — EXECUTING
-Plan: 5 of 5
-Status: Phase complete — ready for verification
-Last activity: 2026-06-15
+Phase: 07 (weakmap-node-identity-semantic-addressing-api) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 07
+Last activity: 2026-06-15 -- Phase 07 execution started
 
-Progress: [██████████] 100%
+Progress: [████░░░░░░] 46%
 
 ## Performance Metrics
 
@@ -130,10 +130,11 @@ Items acknowledged and carried forward from previous milestone close:
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
-| *(none)* | | | |
+| Phase 06 UAT | Real MV3 watchdog service-worker eviction/recovery browser evidence | Deferred by user | 2026-06-15 |
+| Phase 06 UAT | Real bookmarklet policy/CSP blocked-injection browser evidence | Deferred by user | 2026-06-15 |
 
 ## Session Continuity
 
-Last session: 2026-06-15T10:12:17.036Z
-Stopped at: Phase 6 context gathered
-Resume file: .planning/phases/06-extension-mv3-bookmarklet-adapters/06-CONTEXT.md
+Last session: 2026-06-15T14:01:36.142Z
+Stopped at: Phase 7 context gathered
+Resume file: .planning/phases/07-weakmap-node-identity-semantic-addressing-api/07-CONTEXT.md
