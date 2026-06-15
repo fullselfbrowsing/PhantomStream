@@ -598,6 +598,9 @@ export function createCapture(config) {
   var observedFrameDocuments = new Map();
   var frameDocumentToNid = new WeakMap();
   var frameLoadListeners = new Map();
+  var valueCaptureActive = false;
+  var valueListenerRoots = new WeakSet();
+  var valueListenerRecords = [];
   var nativeAttachShadow = null;
   var attachShadowProto = null;
 
@@ -867,6 +870,7 @@ export function createCapture(config) {
     try {
       mutationObserver.observe(root, mutationObserverOptions());
       observedShadowRoots.add(root);
+      addValueListenerRoot(root);
     } catch (err) {
       logger.error('[DOM Stream] shadow root observe failed', err);
       return;
@@ -1159,6 +1163,7 @@ export function createCapture(config) {
     };
     observedFrameDocuments.set(key, record);
     frameDocumentToNid.set(frameDoc, key);
+    addValueListenerRoot(frameDoc);
     registerFrameLoadListener(iframe, key);
     serializeFrameDocument(iframe, key, frameDoc);
     try {
@@ -1220,6 +1225,145 @@ export function createCapture(config) {
       diff.frameNid = String(frameRecord.frameNid);
     }
     return diff;
+  }
+
+  function isValueControl(el) {
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    var tag = el.tagName ? String(el.tagName).toLowerCase() : '';
+    return tag === 'input' || tag === 'textarea' || tag === 'select';
+  }
+
+  function selectedOptionValues(select) {
+    var values = [];
+    var options = select && select.options ? select.options : [];
+    for (var i = 0; i < options.length; i++) {
+      if (options[i].selected) values.push(String(options[i].value));
+    }
+    return values;
+  }
+
+  function sanitizeInputValue(value, owner) {
+    return sanitizeForWire('input', {
+      value: value == null ? '' : String(value),
+      owner: owner
+    }).value;
+  }
+
+  function buildValueDiff(control) {
+    if (!isValueControl(control)) return null;
+    if (skipElementWithAncestors(control) || blockedWithAncestors(control) || wireDroppedWithAncestors(control)) {
+      return null;
+    }
+    var shadowHost = getMutationShadowHost(control);
+    if (shadowHost && (
+      skipElementWithAncestors(shadowHost)
+      || blockedWithAncestors(shadowHost)
+      || wireDroppedWithAncestors(shadowHost)
+    )) {
+      return null;
+    }
+    var nid = getTrackedNodeId(control);
+    if (!nid) return null;
+
+    var tag = control.tagName ? String(control.tagName).toLowerCase() : '';
+    var diff = {
+      op: DIFF_OP.VALUE,
+      nid: nid
+    };
+
+    if (tag === 'select') {
+      diff.value = sanitizeInputValue(control.value, control);
+      var selected = selectedOptionValues(control);
+      diff.selectedValues = [];
+      for (var s = 0; s < selected.length; s++) {
+        diff.selectedValues.push(sanitizeInputValue(selected[s], control));
+      }
+      return diff;
+    }
+
+    if (tag === 'textarea') {
+      diff.value = sanitizeInputValue(control.value, control);
+      return diff;
+    }
+
+    var inputType = '';
+    try {
+      inputType = String(control.type || control.getAttribute('type') || '').toLowerCase();
+    } catch (err) {
+      inputType = String(control.getAttribute && control.getAttribute('type') || '').toLowerCase();
+    }
+
+    if (inputType === 'checkbox' || inputType === 'radio') {
+      diff.checked = !!control.checked;
+      diff.value = sanitizeInputValue(control.value, control);
+      return diff;
+    }
+
+    diff.value = sanitizeInputValue(control.value, control);
+    return diff;
+  }
+
+  function handleValueEvent(event) {
+    if (!streaming || !event || !event.target) return;
+    var diff = buildValueDiff(event.target);
+    if (!diff) return;
+    safeSend(STREAM.MUTATIONS, {
+      mutations: [scopeFrameDiff(diff, getMutationFrameRecord(event.target))],
+      streamSessionId: streamSessionId || '',
+      snapshotId: currentSnapshotId || 0
+    });
+  }
+
+  function addValueListenerRoot(root) {
+    if (!valueCaptureActive || !root || typeof root.addEventListener !== 'function') return;
+    if (valueListenerRoots.has(root)) return;
+    root.addEventListener('input', handleValueEvent, true);
+    root.addEventListener('change', handleValueEvent, true);
+    valueListenerRoots.add(root);
+    valueListenerRecords.push(root);
+  }
+
+  function addValueListenerRootsUnder(root) {
+    if (root && (root.nodeType === Node.DOCUMENT_NODE || isOpenShadowRoot(root))) {
+      addValueListenerRoot(root);
+    }
+    var elements = elementsUnderRoot(root);
+    for (var i = 0; i < elements.length; i++) {
+      if (elements[i].shadowRoot && isOpenShadowRoot(elements[i].shadowRoot)) {
+        addValueListenerRootsUnder(elements[i].shadowRoot);
+      }
+    }
+  }
+
+  function startValueCapture() {
+    stopValueCapture();
+    valueCaptureActive = true;
+    addValueListenerRoot(document);
+    addValueListenerRootsUnder(document.body);
+    observedFrameDocuments.forEach(function(record) {
+      if (!record || !record.document) return;
+      addValueListenerRoot(record.document);
+      addValueListenerRootsUnder(record.document.body);
+    });
+  }
+
+  function stopValueCapture() {
+    for (var i = 0; i < valueListenerRecords.length; i++) {
+      var root = valueListenerRecords[i];
+      try {
+        if (root && typeof root.removeEventListener === 'function') {
+          root.removeEventListener('input', handleValueEvent, true);
+          root.removeEventListener('change', handleValueEvent, true);
+        }
+      } catch (err) {
+        logger.warn('[DOM Stream] value listener cleanup failed', {
+          reason: 'cleanup-failed'
+        });
+      }
+    }
+    valueListenerRecords = [];
+    valueListenerRoots = new WeakSet();
+    valueCaptureActive = false;
   }
 
   function clearObservedFrameDocuments() {
@@ -1769,6 +1913,8 @@ export function createCapture(config) {
   //   4. characterData text branch       -- 'text' dispatch (SEC-03
   //      masking seam, plan 03-03)
   //   5. E2 text-childlist branch        -- 'text' dispatch (same seam)
+  //   6. input/change value branch       -- 'input' dispatch (CAPT-05
+  //      masking seam for event-driven form state)
   // Head inline <style> text additionally routes through the 'css' dispatch
   // at the serializeDOM collection site (a value scrub, not a markup walk).
   // Side channels that BYPASS the markup scrub AND the masking helpers BY
@@ -1803,6 +1949,9 @@ export function createCapture(config) {
    *     applied against the LIVE owner element's ancestry (incrementing
    *     maskedTextNodes); Phase 8 CAPT-05 typed-text capture plugs into the
    *     same seam.
+   *   'input',   { value, owner }        -> { value }
+   *     CAPT-05 masking seam for event-driven form values. Password inputs
+   *     and maskInputs/maskInputFn are applied before transport.
    *   'css',     { css }                 -> { css }
    *     Targeted CSS value scrub (scrubCssText) for head inline styles.
    *
@@ -2039,6 +2188,18 @@ export function createCapture(config) {
         return { text: maskedOpText };
       }
       return { text: payload.text };
+    }
+
+    if (kind === 'input') {
+      var inputValue = payload.value == null ? '' : String(payload.value);
+      if (shouldMaskInput(payload.owner)) {
+        var maskedValue = safeMaskInput(inputValue, payload.owner);
+        if (maskedValue !== inputValue) {
+          sanitizeCounters.maskedInputs++;
+        }
+        return { value: maskedValue };
+      }
+      return { value: inputValue };
     }
 
     if (kind === 'css') {
@@ -2880,6 +3041,8 @@ export function createCapture(config) {
    * Stop the MutationObserver stream and flush any pending mutations.
    */
   function stopMutationStream() {
+    stopValueCapture();
+
     if (batchTimer) {
       cancelAnimationFrame(batchTimer);
       batchTimer = null;
@@ -3048,6 +3211,7 @@ export function createCapture(config) {
     var snapshot = serializeDOM();
     safeSend(STREAM.SNAPSHOT, snapshot);
     startMutationStream();
+    startValueCapture();
     startScrollTracker();
     streaming = true;
     broadcastOverlayState(true);
@@ -3089,6 +3253,7 @@ export function createCapture(config) {
   function resume() {
     logger.info('[DOM Stream] Resume requested');
     startMutationStream();
+    startValueCapture();
     startScrollTracker();
     streaming = true;
   }

@@ -269,6 +269,30 @@ export function applyMutations(doc, mutations, counters, hooks) {
             target.setAttribute(m.attr, scrubbed.value);
             break;
           }
+          case DIFF_OP.VALUE: {
+            var valueTarget = resolve(m.nid);
+            if (!valueTarget) {
+              recordStaleMiss(DIFF_OP.VALUE, m.nid);
+              break;
+            }
+            if (Object.prototype.hasOwnProperty.call(m, 'value')) {
+              valueTarget.value = String(m.value ?? '');
+            }
+            if (Object.prototype.hasOwnProperty.call(m, 'checked')) {
+              valueTarget.checked = !!m.checked;
+            }
+            if (Array.isArray(m.selectedValues) && valueTarget.options) {
+              var selectedValues = new Set();
+              for (var sv = 0; sv < m.selectedValues.length; sv++) {
+                selectedValues.add(String(m.selectedValues[sv]));
+              }
+              for (var opt = 0; opt < valueTarget.options.length; opt++) {
+                var option = valueTarget.options[opt];
+                option.selected = selectedValues.has(String(option.value));
+              }
+            }
+            break;
+          }
           case DIFF_OP.TEXT: {
             var textTarget = resolve(m.nid);
             if (!textTarget) {
