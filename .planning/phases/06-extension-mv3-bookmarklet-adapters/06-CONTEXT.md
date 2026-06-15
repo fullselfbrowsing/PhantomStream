@@ -14,8 +14,8 @@ Phase 6 delivers the remaining injection contexts for PhantomStream: a Chromium 
 ## Implementation Decisions
 
 ### Discussion Mode
-- **D-01:** The interactive question UI was unavailable in this Conductor mode, so the workflow fallback selected all gray areas and captured conservative defaults.
-- **D-02:** These decisions are intended as planning defaults. If research finds a concrete blocker, the planner must call out the deviation explicitly rather than silently changing the scope.
+- **D-01 [informational]:** The interactive question UI was unavailable in this Conductor mode, so the workflow fallback selected all gray areas and captured conservative defaults.
+- **D-02 [informational]:** These decisions are intended as planning defaults. If research finds a concrete blocker, the planner must call out the deviation explicitly rather than silently changing the scope.
 
 ### MV3 Adapter Surface
 - **D-03:** Add first-class adapter surfaces for MV3 and bookmarklet rather than treating either as one-off demo code. Expected package exports are `./adapters/extension` and `./adapters/bookmarklet`, unless research finds a stronger local naming pattern.
