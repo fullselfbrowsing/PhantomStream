@@ -107,6 +107,36 @@ function assertContentFreeMiss(payload, expectedStatus) {
   assert.deepEqual(payload.frames || [], [], 'miss response has no frames');
 }
 
+test('D-19 snapshot truncation leaves requestable mirror-only markers with dropped root ids', () => {
+  const hugeText = 'x'.repeat(900000);
+  const env = setupEnv(
+    '<main id="root">'
+      + '<section id="kept">above fold</section>'
+      + '<section id="huge-region">' + hugeText + '</section>'
+      + '</main>'
+  );
+  try {
+    const transport = createRecordingTransport();
+    env.capture = createCapture({
+      transport,
+      logger: silentLogger(),
+    });
+    env.capture.start();
+    const snapshot = snapshotPayloadOf(transport);
+    const hugeNid = env.capture.getNodeId(env.document.getElementById('huge-region'));
+
+    assert.equal(snapshot.truncated, true, 'snapshot is marked truncated');
+    assert.equal(snapshot.missingDescendants > 0, true, 'missing descendant count is preserved');
+    assert.ok(
+      snapshot.html.includes('data-phantomstream-truncated="true"'),
+      'dropped root is replaced by a mirror-only truncated marker'
+    );
+    assert.ok(snapshot.nodeIds.includes(hugeNid), 'dropped root nid remains requestable');
+  } finally {
+    env.teardown();
+  }
+});
+
 test('D-19/D-21 capture SUBTREE_REQUEST emits an ok sanitized subtree response with current identity', () => {
   const env = setupEnv(
     '<main id="root">'
@@ -236,7 +266,7 @@ test('D-20 subtree misses for stale, gone, skipped, blocked, and untracked nids 
         nid: 'never-tracked',
         streamSessionId: snapshot.streamSessionId,
         snapshotId: snapshot.snapshotId,
-        expectedStatus: 'gone',
+        expectedStatus: 'untracked',
       },
     ];
 
