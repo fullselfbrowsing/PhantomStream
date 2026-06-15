@@ -5,8 +5,11 @@
 // Wire type strings come from src/protocol -- never restated here.
 
 import assert from 'node:assert/strict';
-import { STREAM } from '../../src/protocol/messages.js';
+import { JSDOM } from 'jsdom';
+import { STREAM, DIFF_OP } from '../../src/protocol/messages.js';
 import { ledgerCovers } from './divergence-ledger.js';
+
+const FRAMEWORK_IDENTITY_ATTR = 'data-fsb-nid';
 
 /**
  * Map raw reference-side messages to canonical { type, payload } records
@@ -126,6 +129,153 @@ export function canonicalizeIdentity(normalizedMsgs) {
   return cloned;
 }
 
+function sameStringArray(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function extractReferenceIdentityHtml(html) {
+  const dom = new JSDOM('<!DOCTYPE html><template></template>');
+  const template = dom.window.document.querySelector('template');
+  template.innerHTML = String(html || '');
+  const nodeIds = [];
+  for (const element of template.content.querySelectorAll('*')) {
+    const nid = element.getAttribute(FRAMEWORK_IDENTITY_ATTR);
+    if (nid !== null) {
+      nodeIds.push(nid);
+      element.removeAttribute(FRAMEWORK_IDENTITY_ATTR);
+    }
+  }
+  return { html: template.innerHTML, nodeIds };
+}
+
+function normalizeIdentitySidecarPayloadPair(refPayload, otherPayload) {
+  if (!refPayload || !otherPayload) return [refPayload, otherPayload];
+  if (typeof refPayload.html !== 'string' || typeof otherPayload.html !== 'string') {
+    return [refPayload, otherPayload];
+  }
+  if (!Array.isArray(otherPayload.nodeIds)) return [refPayload, otherPayload];
+
+  const refIdentity = extractReferenceIdentityHtml(refPayload.html);
+  if (refIdentity.nodeIds.length === 0) return [refPayload, otherPayload];
+  if (!sameStringArray(refIdentity.nodeIds, otherPayload.nodeIds)) {
+    return [refPayload, otherPayload];
+  }
+
+  return [
+    Object.assign({}, refPayload, {
+      html: refIdentity.html,
+      nodeIds: refIdentity.nodeIds,
+    }),
+    otherPayload,
+  ];
+}
+
+function normalizeIdentitySidecarMutationPair(refPayload, otherPayload) {
+  const refOps = refPayload && refPayload.mutations;
+  const otherOps = otherPayload && otherPayload.mutations;
+  if (!Array.isArray(refOps) || !Array.isArray(otherOps)) {
+    return [refPayload, otherPayload];
+  }
+
+  let changed = false;
+  const normalizedRefOps = refOps.map((refOp, index) => {
+    const otherOp = otherOps[index];
+    if (!refOp || !otherOp || refOp.op !== DIFF_OP.ADD || otherOp.op !== DIFF_OP.ADD) {
+      return refOp;
+    }
+    const [normalizedRefOp] = normalizeIdentitySidecarPayloadPair(refOp, otherOp);
+    if (normalizedRefOp !== refOp) changed = true;
+    return normalizedRefOp;
+  });
+
+  if (!changed) return [refPayload, otherPayload];
+  return [
+    Object.assign({}, refPayload, { mutations: normalizedRefOps }),
+    otherPayload,
+  ];
+}
+
+function normalizeIdentitySidecarMessagePair(refMsg, otherMsg) {
+  if (!refMsg || !otherMsg || refMsg.type !== otherMsg.type) {
+    return [refMsg, otherMsg];
+  }
+  if (refMsg.type === STREAM.SNAPSHOT) {
+    const [refPayload, otherPayload] = normalizeIdentitySidecarPayloadPair(
+      refMsg.payload,
+      otherMsg.payload
+    );
+    if (refPayload === refMsg.payload && otherPayload === otherMsg.payload) {
+      return [refMsg, otherMsg];
+    }
+    return [
+      Object.assign({}, refMsg, { payload: refPayload }),
+      Object.assign({}, otherMsg, { payload: otherPayload }),
+    ];
+  }
+  if (refMsg.type === STREAM.MUTATIONS) {
+    const [refPayload, otherPayload] = normalizeIdentitySidecarMutationPair(
+      refMsg.payload,
+      otherMsg.payload
+    );
+    if (refPayload === refMsg.payload && otherPayload === otherMsg.payload) {
+      return [refMsg, otherMsg];
+    }
+    return [
+      Object.assign({}, refMsg, { payload: refPayload }),
+      Object.assign({}, otherMsg, { payload: otherPayload }),
+    ];
+  }
+  return [refMsg, otherMsg];
+}
+
+function streamUsesNodeIdSidecars(messages) {
+  return messages.some((msg) => {
+    if (!msg || !msg.payload) return false;
+    if (Array.isArray(msg.payload.nodeIds)) return true;
+    const ops = msg.payload.mutations;
+    return Array.isArray(ops)
+      && ops.some((op) => op && op.op === DIFF_OP.ADD && Array.isArray(op.nodeIds));
+  });
+}
+
+function isReferenceIdentityAttrOp(op) {
+  return op
+    && op.op === DIFF_OP.ATTR
+    && op.attr === FRAMEWORK_IDENTITY_ATTR
+    && op.nid === op.val;
+}
+
+function stripReferenceIdentityAttrOps(messages, enabled) {
+  if (!enabled) return messages;
+  const out = [];
+  for (const msg of messages) {
+    if (!msg || msg.type !== STREAM.MUTATIONS) {
+      out.push(msg);
+      continue;
+    }
+    const ops = msg.payload && msg.payload.mutations;
+    if (!Array.isArray(ops)) {
+      out.push(msg);
+      continue;
+    }
+    const filtered = ops.filter((op) => !isReferenceIdentityAttrOp(op));
+    if (filtered.length === 0) continue;
+    if (filtered.length === ops.length) {
+      out.push(msg);
+      continue;
+    }
+    out.push(Object.assign({}, msg, {
+      payload: Object.assign({}, msg.payload, { mutations: filtered }),
+    }));
+  }
+  return out;
+}
+
 /**
  * Compare two normalized streams message-by-message with first-divergence
  * reporting. Iterates to the longer length so a missing trailing message
@@ -143,13 +293,20 @@ export function canonicalizeIdentity(normalizedMsgs) {
  */
 export function compareStreams(refNormalized, otherNormalized, fixture, scenario, ledger) {
   const matchedEntryIds = new Set();
-  const length = Math.max(refNormalized.length, otherNormalized.length);
+  const sidecarMode = streamUsesNodeIdSidecars(otherNormalized);
+  const refComparableStream = stripReferenceIdentityAttrOps(refNormalized, sidecarMode);
+  const otherComparableStream = otherNormalized;
+  const length = Math.max(refComparableStream.length, otherComparableStream.length);
 
   for (let i = 0; i < length; i++) {
+    const [refComparable, otherComparable] = normalizeIdentitySidecarMessagePair(
+      refComparableStream[i],
+      otherComparableStream[i]
+    );
     try {
-      assert.deepStrictEqual(otherNormalized[i], refNormalized[i]);
+      assert.deepStrictEqual(otherComparable, refComparable);
     } catch (originalError) {
-      const entryId = ledgerCovers(ledger, refNormalized[i], otherNormalized[i], scenario);
+      const entryId = ledgerCovers(ledger, refComparable, otherComparable, scenario);
       if (entryId) {
         matchedEntryIds.add(entryId);
         continue;

@@ -318,6 +318,38 @@ export const DIVERGENCES = [
     },
   },
   {
+    id: 'D8-weakmap-node-identity-sidecar',
+    kind: 'documented-mapping',
+    description:
+      'Phase 7 removes PhantomStream-owned data-fsb-nid attributes from extracted '
+      + 'snapshot/add HTML and carries the same raw nid sequence in structured '
+      + 'nodeIds sidecars. The reference still serializes framework identity as '
+      + 'data-fsb-nid attributes. normalize.js removes only those reference identity '
+      + 'attrs for comparison when the extracted nodeIds sidecar exactly matches the '
+      + 'reference preorder nid sequence.',
+    rationale:
+      'Intentional identity transport migration (07-CONTEXT.md D-03/D-08/D-09): '
+      + 'capture must stop mutating the observed page while preserving opaque nid '
+      + 'diff fields, add-op parent/before ids, and preorder identity order. This '
+      + 'normalization does not cover unrelated attrs, text, styles, sanitization, '
+      + 'or mutation ordering.',
+    affectedMessages: [STREAM.SNAPSHOT, STREAM.MUTATIONS],
+    affectedScenarios: [
+      'basic-mutations',
+      'mutation-burst',
+      'structural-ops',
+      'scroll',
+      'pause-resume',
+      'text-childlist',
+      'sanitize-divergence',
+      'snapshot-only',
+      'dialog',
+    ],
+    appliesTo() {
+      return false;
+    },
+  },
+  {
     id: 'D2-envelope-shape',
     kind: 'documented-mapping',
     description:
