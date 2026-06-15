@@ -243,7 +243,10 @@ export function createPlaywrightAdapter(options) {
             return;
           }
           if (isRemoteControlType(type)) {
-            handleControlMessage(type, payload);
+            handleControlMessage(type, payload).catch(function () {
+              safeLog('error', '[PlaywrightAdapter] control message failed', { reason: 'control-message-failed' });
+              setControlState(controlState, 'control-dispatch-failed');
+            });
           }
         });
       }

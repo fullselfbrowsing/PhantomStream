@@ -6,8 +6,8 @@ Timestamp: 2026-06-15 04:43:21 CDT
 
 - `npx playwright install chromium` — PASS, Chromium already available or installed without error.
 - `npx playwright --version` — PASS, `Version 1.60.0`.
-- `node --test tests/remote-control-protocol.test.js tests/playwright-adapter.test.js tests/playwright-adapter-cdp.test.js tests/renderer-remote-control.test.js tests/playwright-demo-cli.test.js` — PASS, 30 tests.
-- `npm test` — PASS, 288 tests.
+- `node --test tests/remote-control-protocol.test.js tests/playwright-adapter.test.js tests/playwright-adapter-cdp.test.js tests/renderer-remote-control.test.js tests/playwright-demo-cli.test.js` — PASS, 31 tests after the code-review containment fix.
+- `npm test` — PASS, 289 tests after the code-review containment fix.
 - `node bin/phantom-stream.js playwright-demo --drive --headed --port 0` — PASS, started local demo on `127.0.0.1` with `Viewer:`, `Driven page:`, `Room:`, and `Control: default-deny`.
 - Real-browser checkpoint via Playwright Chromium — PASS.
 

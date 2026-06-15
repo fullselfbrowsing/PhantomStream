@@ -6,7 +6,7 @@ import {
   createPlaywrightAdapter,
   getPlaywrightInjectSource,
 } from '../src/adapters/playwright.js';
-import { CONTROL, STREAM } from '../src/protocol/index.js';
+import { CONTROL, REMOTE_CONTROL, REMOTE_CONTROL_STATE, STREAM } from '../src/protocol/index.js';
 
 function tick() {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -223,6 +223,40 @@ test('viewer stream start request restarts injected capture for a missed initial
   assert.equal(startCount, 1);
   assert.equal(page.evaluateCalls.length, 1);
   assert.match(String(page.evaluateCalls[0]), /__phantomStreamStart/);
+});
+
+test('transport remote-control handler contains async driver replay failures', async () => {
+  const page = createFakePage();
+  const transport = createRecordingTransport();
+  const errors = [];
+  page.mouse.click = async function () {
+    throw new Error('driver-replay-failed');
+  };
+
+  const adapter = createPlaywrightAdapter({
+    page,
+    transport,
+    authorizeControl: async () => true,
+    logger: {
+      info() {},
+      warn() {},
+      error(message, detail) {
+        errors.push({ message, detail });
+      },
+    },
+  });
+  await adapter.install();
+  await adapter.requestControl({ requestId: 'ok' });
+
+  transport.emit(REMOTE_CONTROL.CLICK, { x: 1, y: 2, button: 'left' });
+  await tick();
+  await tick();
+
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].detail.reason, 'control-message-failed');
+  assert.equal(adapter.getControlState().state, REMOTE_CONTROL_STATE.ACTIVE);
+  assert.ok(transport.sent.some((entry) => entry.type === REMOTE_CONTROL.STATE
+    && entry.payload.reason === 'control-dispatch-failed'));
 });
 
 test('adapter source avoids DOM synthetic event replay APIs', async () => {
