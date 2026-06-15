@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Renderer Core + Embedded Loopback Mirror** - Embeddable viewer + first end-to-end mirror with zero infrastructure (completed 2026-06-11)
 - [x] **Phase 3: Security Pipeline — Sanitization + Privacy Masking** - Both-ends sanitization, sandbox contract, capture-side masking (publishing gate) (completed 2026-06-14)
 - [ ] **Phase 4: Relay, WS Transport & Two-Tab Demo** - Networked mirror: relay core, ws backend, CompressionStream codec, `npx phantom-stream demo`
-- [ ] **Phase 5: Playwright/CDP Adapter, Remote Control & Agent Demo** - Script-driven page mirrored live with consent-gated remote control
+- [x] **Phase 5: Playwright/CDP Adapter, Remote Control & Agent Demo** - Script-driven page mirrored live with consent-gated remote control (completed 2026-06-15)
 - [ ] **Phase 6: Extension MV3 + Bookmarklet Adapters** - Remaining injection contexts incl. the FSB swap-in surface and eviction recovery
 - [ ] **Phase 7: WeakMap Node Identity + Semantic Addressing API** - Stop mutating the observed page; expose node identity as public API
 - [ ] **Phase 8: Shadow DOM, Iframes & Fidelity Completion** - Shadow roots, same-origin iframes, input mirroring, added-node styles, subtree fetch
@@ -269,7 +269,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 2. Renderer Core + Embedded Loopback Mirror | 6/6 | Complete    | 2026-06-11 |
 | 3. Security Pipeline — Sanitization + Privacy Masking | 5/5 | Complete    | 2026-06-14 |
 | 4. Relay, WS Transport & Two-Tab Demo | 0/TBD | Not started | - |
-| 5. Playwright/CDP Adapter, Remote Control & Agent Demo | 0/TBD | Not started | - |
+| 5. Playwright/CDP Adapter, Remote Control & Agent Demo | 6/6 | Complete    | 2026-06-15 |
 | 6. Extension MV3 + Bookmarklet Adapters | 0/TBD | Not started | - |
 | 7. WeakMap Node Identity + Semantic Addressing API | 0/TBD | Not started | - |
 | 8. Shadow DOM, Iframes & Fidelity Completion | 0/TBD | Not started | - |
