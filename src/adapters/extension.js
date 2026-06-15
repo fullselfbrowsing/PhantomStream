@@ -59,10 +59,6 @@ function cleanTabId(value) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-function promiseOrValue(value) {
-  return value && typeof value.then === 'function' ? value : Promise.resolve(value);
-}
-
 function swallowPromise(value) {
   if (value && typeof value.catch === 'function') {
     value.catch(function ignoreBridgeError() {});

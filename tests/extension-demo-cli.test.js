@@ -70,6 +70,8 @@ test('startExtensionDemoServer binds local host and returns extension demo contr
     assert.match(serviceWorker, /phantomstream-watchdog/);
     assert.match(serviceWorker, /mv3-watchdog-resnapshot/);
     assert.match(contentScript, /window\.__phantomStreamBridge/);
+    assert.match(contentScript, /window\.postMessage/);
+    assert.match(contentScript, /chrome\.runtime\.sendMessage/);
   });
 });
 

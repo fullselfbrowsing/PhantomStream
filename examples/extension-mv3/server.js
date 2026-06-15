@@ -161,7 +161,12 @@ function createContentScriptSource() {
   return [
     '(function(){',
     'var wsUrl=new URL(window.location.href).searchParams.get("ws");',
-    'window.__phantomStreamBridge=function(msg){try{var result=chrome.runtime.sendMessage({type:"phantomstream:bridge",message:msg,wsUrl:wsUrl});if(result&&typeof result.catch==="function")result.catch(function(){});}catch(e){}};',
+    'window.addEventListener("message",function(event){try{if(event.source!==window)return;var data=event.data||{};if(data.source!=="phantomstream-extension-demo"||data.type!=="phantomstream:bridge")return;var result=chrome.runtime.sendMessage({type:"phantomstream:bridge",message:data.message,wsUrl:wsUrl});if(result&&typeof result.catch==="function")result.catch(function(){});}catch(e){}});',
+    'var pageBridge="(function(){window.__phantomStreamBridge=function(msg){try{window.postMessage({source:\\"phantomstream-extension-demo\\",type:\\"phantomstream:bridge\\",message:msg},window.location.origin);}catch(e){}};}());";',
+    'var bridgeScript=document.createElement("script");',
+    'bridgeScript.text=pageBridge;',
+    '(document.documentElement||document.head||document.body).appendChild(bridgeScript);',
+    'if(bridgeScript.parentNode)bridgeScript.parentNode.removeChild(bridgeScript);',
     'var source=', JSON.stringify(getBrowserInjectSource()), ';',
     'var script=document.createElement("script");',
     'script.text=source;',
