@@ -1,6 +1,6 @@
 ---
-phase: 08-shadow-dom-iframes-fidelity-completion
-reviewed: 2026-06-15T20:36:46Z
+phase: "08-shadow-dom-iframes-fidelity-completion"
+reviewed: "2026-06-15T20:54:01Z"
 depth: standard
 files_reviewed: 34
 files_reviewed_list:
@@ -39,104 +39,84 @@ files_reviewed_list:
   - tests/security-chokepoint-purity.test.js
   - tests/semantic-addressing.test.js
 findings:
-  critical: 3
+  critical: 2
   warning: 0
   info: 0
-  total: 3
+  total: 2
 status: issues_found
 ---
 
 # Phase 8: Code Review Report
 
-**Reviewed:** 2026-06-15T20:36:46Z
+**Reviewed:** 2026-06-15T20:54:01Z
 **Depth:** standard
 **Files Reviewed:** 34
 **Status:** issues_found
 
 ## Summary
 
-Re-reviewed the listed source, documentation, and tests after commit `33ae99c`. The prior iframe `src` mutation, frame-local URL resolution, and same-origin frame shadow-root fixes are present. Remaining issues are in the capture/renderer budgeting and recovery paths: the snapshot sidecar pruner can create unrecoverable missing regions, byte limits are still checked with JavaScript string length, and non-snapshot messages can exceed the relay cap.
+Re-reviewed the Phase 8 source, docs, and tests after fixes in commits `33ae99c` and `794e57a`.
+
+The prior issues are resolved on the covered paths: iframe `src` mutations are blocked in both capture and renderer, frame/shadow sidecars are included in snapshot budgeting and converted to requestable placeholders when pruned, frame-local shadow roots and URL bases are handled, UTF-8 byte measurement is used, subtree responses are bounded, and normal rAF mutation flushes chunk bounded add ops.
+
+Two relay-cap blockers remain. Both were reproduced with one-off Node probes outside the existing suite. The project test suite still passes (`npm test`: 374 passed), which means these edge cases are currently untested.
 
 ## Critical Issues
 
-### CR-01: BLOCKER - Pruned frame and shadow sidecars are not recoverable
+### CR-01: BLOCKER - Snapshot base payload can exceed the relay cap without any sidecars
 
-**File:** `src/capture/index.js:1911`, `src/capture/index.js:2722`, `src/renderer/index.js:1007`, `src/adapters/playwright-inject.js:1947`
+**File:** `src/capture/index.js:985`, `src/capture/index.js:1990`, `src/capture/index.js:2750`, `src/capture/index.js:2799`, `src/adapters/playwright-inject.js:1021`, `src/adapters/playwright-inject.js:2026`, `src/adapters/playwright-inject.js:2786`, `src/adapters/playwright-inject.js:2835`
 
-**Issue:** `pruneSnapshotSidecarsForBudget` removes the largest `shadowRoots` or `frames` entries from the snapshot sidecars, but the corresponding host or iframe remains in the serialized HTML as a normal element. The renderer only applies a `STREAM.SUBTREE_RESPONSE` when the target has `data-phantomstream-truncated="true"`, so a sidecar omitted for budget cannot be rehydrated through the existing subtree recovery path. The capture tests assert the sidecar was dropped and the host nid still exists, but they do not verify renderer recovery. This leaves over-budget shadow roots and same-origin frames permanently blank or missing while the payload only reports `truncated`/`missingDescendants`.
-
-**Fix:**
-
-```js
-function pruneSnapshotSidecarsForBudget(base, budgetBytes) {
-  const omitted = { shadowHostNids: new Set(), frameNids: new Set() };
-
-  // When removing a sidecar, record the owning nid instead of silently
-  // splicing it out with no renderable placeholder.
-  const removed = base.shadowRoots.splice(largestIndex, 1)[0];
-  omitted.shadowHostNids.add(removed.hostNid);
-
-  return omitted;
-}
-
-// Before final html/nodeIds are emitted, replace each omitted host/frame in the
-// cloned document with a data-phantomstream-truncated placeholder using the
-// same nid, or add an explicit renderer response path that installs a requested
-// shadow/frame sidecar onto a non-placeholder target.
-```
-
-Add end-to-end tests that force a shadow-root sidecar and a same-origin frame sidecar to be pruned, request each omitted nid, and verify the renderer installs the returned content instead of discarding the response.
-
-### CR-02: BLOCKER - Snapshot budget checks use UTF-16 string length instead of UTF-8 relay bytes
-
-**File:** `src/capture/index.js:1899`, `src/capture/index.js:1917`, `src/adapters/playwright-inject.js:1935`, `tests/capture-shadow-dom.test.js:239`
-
-**Issue:** `jsonWireLength` returns `JSON.stringify(value).length`, and the sidecar budget loop compares that character count to `SNAPSHOT_BUDGET_BYTES`. The relay limit is byte-based, so non-ASCII content can pass the capture budget while serializing to more than the allowed byte count on the wire. The current test repeats ASCII text and also checks `.length`, so it cannot catch a snapshot that is under the character count but over the actual UTF-8 message limit.
+**Issue:** Snapshot truncation still starts from `wireByteLength(html)` only, and `pruneSnapshotSidecarsForBudget()` only reduces payload size while `shadowRoots` or `frames` remain. Head payloads such as `inlineStyles`, `stylesheets`, shell attrs/styles, URL, and title are part of the same wire message but cannot be reduced when the body HTML is small and no sidecars exist. `collectInlineStylesFrom()` accepts every `<style>` under `INLINE_STYLE_MAX_BYTES` individually, so several individually allowed style tags can create an over-cap `STREAM.SNAPSHOT`. I reproduced a snapshot with a tiny body and four inline styles: `snapshotBytes=1642137`, `relayLimit=1048576`, `snapshotBudget=838860`.
 
 **Fix:**
 
+Budget the complete snapshot payload, not only `html` plus sidecars. Keep pruning until the final object sent by `serializeDOM()` is below the relay cap, including aggregate caps for head styles.
+
 ```js
-function wireByteLength(value) {
-  var json = JSON.stringify(value);
-  if (typeof TextEncoder !== 'undefined') {
-    return new TextEncoder().encode(json).byteLength;
+function fitSnapshotPayloadForBudget(payload, clone, cloneToNid, truncatedNodeIds) {
+  var next = Object.assign({}, payload);
+
+  while (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.inlineStyles.length) {
+    next.inlineStyles.pop();
+    next.truncated = true;
   }
-  if (typeof Buffer !== 'undefined') {
-    return Buffer.byteLength(json, 'utf8');
+
+  while (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.stylesheets.length) {
+    next.stylesheets.pop();
+    next.truncated = true;
   }
-  return utf8ByteLength(json);
+
+  if (wireByteLength(next) > RELAY_PER_MESSAGE_LIMIT_BYTES) {
+    next = truncateBodyAgainstFullPayload(next, clone, cloneToNid, truncatedNodeIds);
+  }
+
+  return next;
 }
 ```
 
-Use the byte-length helper for snapshot, sidecar, mutation, and subtree-response budget checks, keep the generated Playwright injection bundle synchronized, and add a non-ASCII fixture that asserts `TextEncoder().encode(JSON.stringify(payload)).byteLength <= SNAPSHOT_BUDGET_BYTES`.
+Apply the same generated/injected change to `src/adapters/playwright-inject.js`, and add a regression test with multiple sub-500KB inline styles that asserts every emitted snapshot is below `RELAY_PER_MESSAGE_LIMIT_BYTES`.
 
-### CR-03: BLOCKER - Mutation add and subtree response payloads are unbounded
+### CR-02: BLOCKER - `stop()` final mutation flush bypasses chunking and can send over-cap add batches
 
-**File:** `src/capture/index.js:2877`, `src/capture/index.js:2926`, `src/capture/index.js:3050`, `src/adapters/playwright-inject.js:2913`, `src/adapters/playwright-inject.js:2962`, `src/adapters/playwright-inject.js:3086`
+**File:** `src/capture/index.js:3299`, `src/capture/index.js:3445`, `src/adapters/playwright-inject.js:3335`, `src/adapters/playwright-inject.js:3481`
 
-**Issue:** The snapshot path has a sidecar budget pass, but later `childList` add mutations and `CONTROL.SUBTREE_REQUEST` responses serialize full HTML, `nodeIds`, `shadowRoots`, and `frames` without any byte-budget enforcement. A large node appended after the snapshot, or a request for a previously truncated large subtree, can produce a `STREAM.MUTATIONS` or `STREAM.SUBTREE_RESPONSE` message larger than the relay hard cap. That loses the exact content path that is supposed to recover truncation.
+**Issue:** Normal mutation flushing uses `sendMutationDiffs()`, which drops over-budget single diffs and chunks batches before sending. The final flush inside `stopMutationStream()` processes pending mutations, then calls `safeSend(STREAM.MUTATIONS, { mutations: diffs, ... })` directly. That bypasses the chunking helper. If many individually valid add ops are queued and `stop()` runs before the rAF flush, the stop path emits one oversized mutation frame. I reproduced this by holding `requestAnimationFrame`, appending 700 small sections, and calling `stop()`: one `STREAM.MUTATIONS` payload was sent with `size=2201369`, `relayLimit=1048576`, `opCount=700`.
 
 **Fix:**
 
-```js
-function boundCapturePayload(payload, rootNid) {
-  if (wireByteLength(payload) <= SNAPSHOT_BUDGET_BYTES) return payload;
+Route the stop flush through the same bounded sender as the normal path. If preserving the stop-path omission of `staleFlushCount` is still required, make that an option on the helper instead of bypassing chunking.
 
-  return {
-    html: '<div data-phantomstream-nid="' + escapeAttr(rootNid) + '" data-phantomstream-truncated="true"></div>',
-    nodeIds: [{ nid: rootNid, path: payload.nodeIds && payload.nodeIds[0] && payload.nodeIds[0].path }],
-    shadowRoots: [],
-    frames: [],
-    truncated: true,
-    missingDescendants: 1
-  };
+```js
+if (diffs.length > 0) {
+  sendMutationDiffs(diffs, { includeStaleFlushCount: false });
 }
 ```
 
-Apply the same byte-budget guard before emitting add mutation payloads and before sending `STREAM.SUBTREE_RESPONSE`. If a requested subtree cannot fit, return a bounded recoverable placeholder, a `too-large` status, or a chunked response protocol; do not send an over-cap `ok` response. Add tests for late-added large shadow/frame content and for requesting a huge truncated subtree.
+Add a regression test that holds rAF, appends enough individually under-cap nodes to exceed the relay cap as a batch, calls `capture.stop()`, and asserts every `STREAM.MUTATIONS` payload is below `RELAY_PER_MESSAGE_LIMIT_BYTES`.
 
 ---
 
-_Reviewed: 2026-06-15T20:36:46Z_
+_Reviewed: 2026-06-15T20:54:01Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: standard_
