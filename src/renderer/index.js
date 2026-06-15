@@ -38,7 +38,7 @@ import { buildSnapshotHtml } from './snapshot.js';
 import { applyMutations } from './diff.js';
 import { sanitizeFragment } from './sanitize.js';
 import { createOverlays, mapRectToHost, OVERLAY_CSS } from './overlays.js';
-import { STREAM, CONTROL, NID_ATTR, isCurrentStream } from '../protocol/messages.js';
+import { STREAM, CONTROL, isCurrentStream } from '../protocol/messages.js';
 
 /**
  * The host-injected viewer transport. Mirrors the capture Transport's
@@ -216,6 +216,9 @@ export function createViewer(options) {
       var scrubDoc = iframe.contentDocument;
       if (scrubDoc && scrubDoc.body) {
         sanitizeFragment(scrubDoc.body, sanitizeCounters, logger);
+        if (lastSnapshotPayload) {
+          resetIdentityIndex(scrubDoc, lastSnapshotPayload.nodeIds || []);
+        }
       }
     } catch (e) {
       logger.warn('[Renderer] post-parse scrub failed', e);
@@ -290,6 +293,8 @@ export function createViewer(options) {
   var scaleState = computeScale(1920, 1080, container.clientWidth, container.clientHeight);
   var detached = false;
   var destroyed = false;
+  var nidToNode = new Map();
+  var nodeToNid = new WeakMap();
 
   function incrementCounter(counter, type) {
     var key = typeof type === 'string' && type ? type : 'unknown';
@@ -562,24 +567,65 @@ export function createViewer(options) {
     };
   }
 
-  function stampNodeIdsOnHtml(html, nodeIds) {
-    if (!Array.isArray(nodeIds) || nodeIds.length === 0) return html || '';
-    var range = doc.createRange();
-    var fragment = range.createContextualFragment(html || '');
-    var elements = fragment.querySelectorAll('*');
-    for (var i = 0; i < elements.length && i < nodeIds.length; i++) {
-      elements[i].setAttribute(NID_ATTR, nodeIds[i]);
-    }
-    var wrapper = doc.createElement('div');
-    wrapper.appendChild(fragment);
-    return wrapper.innerHTML;
+  function clearIdentityIndex() {
+    nidToNode.clear();
+    nodeToNid = new WeakMap();
   }
 
-  function payloadWithMirrorNodeIds(payload) {
-    if (!payload || !Array.isArray(payload.nodeIds)) return payload;
-    return Object.assign({}, payload, {
-      html: stampNodeIdsOnHtml(payload.html, payload.nodeIds)
-    });
+  function elementsInSubtree(root) {
+    var elements = [];
+    if (!root) return elements;
+    if (root.nodeType === 1) elements.push(root);
+    if (root.querySelectorAll) {
+      var descendants = root.querySelectorAll('*');
+      for (var i = 0; i < descendants.length; i++) elements.push(descendants[i]);
+    }
+    return elements;
+  }
+
+  function pairIdentityElements(elements, nodeIds, scope) {
+    var ids = Array.isArray(nodeIds) ? nodeIds : [];
+    if (elements.length !== ids.length) {
+      logger.warn('[Renderer] identity sidecar mismatch', {
+        scope: scope || '',
+        elements: elements.length,
+        nodeIds: ids.length
+      });
+    }
+    for (var i = 0; i < elements.length && i < ids.length; i++) {
+      if (ids[i] === undefined || ids[i] === null) continue;
+      var nid = String(ids[i]);
+      nidToNode.set(nid, elements[i]);
+      nodeToNid.set(elements[i], nid);
+    }
+  }
+
+  function resetIdentityIndex(targetDoc, nodeIds) {
+    clearIdentityIndex();
+    if (!targetDoc || !targetDoc.body) return;
+    pairIdentityElements(
+      Array.prototype.slice.call(targetDoc.body.querySelectorAll('*')),
+      nodeIds,
+      'snapshot'
+    );
+  }
+
+  function resolveIndexedNode(nid) {
+    if (nid === undefined || nid === null) return null;
+    return nidToNode.get(String(nid)) || null;
+  }
+
+  function indexSubtree(root, nodeIds) {
+    pairIdentityElements(elementsInSubtree(root), nodeIds, 'add');
+  }
+
+  function removeIndexedSubtree(root) {
+    var elements = elementsInSubtree(root);
+    for (var i = 0; i < elements.length; i++) {
+      var nid = nodeToNid.get(elements[i]);
+      if (nid) nidToNode.delete(nid);
+      nodeToNid.delete(elements[i]);
+    }
   }
 
   /**
@@ -593,9 +639,7 @@ export function createViewer(options) {
    */
   function resolveNidRect(nid) {
     try {
-      var cd = iframe.contentDocument;
-      if (!cd) return null;
-      var el = cd.querySelector('[' + NID_ATTR + '="' + nid + '"]');
+      var el = resolveIndexedNode(nid);
       if (!el) return null;
       var rect = el.getBoundingClientRect();
       return mapRectToHost(
@@ -637,7 +681,8 @@ export function createViewer(options) {
     lastScroll.x = p.scrollX || 0;
     lastScroll.y = p.scrollY || 0;
     lastSnapshotPayload = p;
-    iframe.srcdoc = buildSnapshotHtml(payloadWithMirrorNodeIds(p));
+    clearIdentityIndex();
+    iframe.srcdoc = buildSnapshotHtml(p);
     markLive('snapshot');
   }
 
@@ -657,7 +702,12 @@ export function createViewer(options) {
     applyMutations(cd, payload.mutations, counters, {
       logger: logger,
       requestResync: requestResync,
-      sanitizeCounters: sanitizeCounters
+      sanitizeCounters: sanitizeCounters,
+      identity: {
+        resolve: resolveIndexedNode,
+        indexSubtree: indexSubtree,
+        removeSubtree: removeIndexedSubtree
+      }
     });
     if (!resyncPending) markLive('mutations');
     try {
@@ -821,6 +871,7 @@ export function createViewer(options) {
     if (destroyed) return;
     destroyed = true;
     overlays.resetOverlays();
+    clearIdentityIndex();
     lastSnapshotPayload = null;
     active.streamSessionId = '';
     active.snapshotId = 0;

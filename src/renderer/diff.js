@@ -33,8 +33,9 @@
 // prefixed '[Renderer]'. The reference's two stale-miss event labels (a
 // parent variant for add, a target variant for rm/attr/text) feed ONE
 // counter there and one here; the resync reason collapses to the parent
-// variant per the plan contract. Node addressing goes through the NID_ATTR
-// protocol constant, never a string literal.
+// variant per the plan contract. Phase 7 routes node addressing through
+// injected identity hooks owned by createViewer; the selector path below is
+// only the transitional fallback removed by the static identity gate.
 
 import { DIFF_OP, NID_ATTR } from '../protocol/messages.js';
 import { sanitizeFragment, sanitizeAttrValue } from './sanitize.js';
@@ -104,6 +105,17 @@ export function applyMutations(doc, mutations, counters, hooks) {
     }
   }
 
+  var identity = opts.identity || {};
+  var resolve = typeof identity.resolve === 'function'
+    ? function (nid) { return identity.resolve(nid); }
+    : selectByNid;
+  var indexSubtree = typeof identity.indexSubtree === 'function'
+    ? function (root, nodeIds) { identity.indexSubtree(root, nodeIds || []); }
+    : stampNodeIds;
+  var removeSubtree = typeof identity.removeSubtree === 'function'
+    ? function (root) { identity.removeSubtree(root); }
+    : function () {};
+
   // Shared miss path: count, warn, and escalate at the parity threshold.
   function recordStaleMiss(op, nid) {
     tallies.staleMisses += 1;
@@ -122,7 +134,7 @@ export function applyMutations(doc, mutations, counters, hooks) {
       try {
         switch (m.op) {
           case DIFF_OP.ADD: {
-            var parent = selectByNid(m.parentNid);
+            var parent = resolve(m.parentNid);
             if (!parent) {
               recordStaleMiss(DIFF_OP.ADD, m.parentNid);
               break;
@@ -151,31 +163,32 @@ export function applyMutations(doc, mutations, counters, hooks) {
               recordStaleMiss(DIFF_OP.ADD, m.parentNid);
               break;
             }
-            stampNodeIds(newNode, m.nodeIds);
             // importNode is REQUIRED: the parsed node lives in the
             // template's parser document; importNode adopts a deep clone
             // into the mirror doc (cross-doc insertBefore historically
             // varies across real browsers for some element types).
             var imported = doc.importNode(newNode, true);
             if (m.beforeNid) {
-              var before = selectByNid(m.beforeNid);
+              var before = resolve(m.beforeNid);
               parent.insertBefore(imported, before); // null before == appendChild
             } else {
               parent.appendChild(imported);
             }
+            indexSubtree(imported, m.nodeIds || []);
             break;
           }
           case DIFF_OP.REMOVE: {
-            var el = selectByNid(m.nid);
+            var el = resolve(m.nid);
             if (!el) {
               recordStaleMiss(DIFF_OP.REMOVE, m.nid);
               break;
             }
+            removeSubtree(el);
             if (el.parentNode) el.parentNode.removeChild(el);
             break;
           }
           case DIFF_OP.ATTR: {
-            var target = selectByNid(m.nid);
+            var target = resolve(m.nid);
             if (!target) {
               recordStaleMiss(DIFF_OP.ATTR, m.nid);
               break;
@@ -216,7 +229,7 @@ export function applyMutations(doc, mutations, counters, hooks) {
             break;
           }
           case DIFF_OP.TEXT: {
-            var textTarget = selectByNid(m.nid);
+            var textTarget = resolve(m.nid);
             if (!textTarget) {
               recordStaleMiss(DIFF_OP.TEXT, m.nid);
               break;
