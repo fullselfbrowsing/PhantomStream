@@ -25,7 +25,7 @@ index.js      createViewer factory + barrel re-exports of all of the above
 import { createViewer } from '@fullselfbrowsing/phantom-stream/renderer';
 
 const viewer = createViewer({ container, transport, logger });
-// -> { detach, destroy, registerOverlay }
+// -> { detach, destroy, registerOverlay, on }
 ```
 
 Calling the factory auto-attaches a live mirror: the viewer root (stamped
@@ -104,9 +104,52 @@ streaming.
   resync latch, overlay registry dispatch of the null reset). Idempotent;
   safe after `detach()`.
 - `registerOverlay(kind, renderFn)` — register a custom overlay kind (the
-  host-facing extension seam, below). The handle surface is locked to
-  exactly these three members this phase; events (VIEW-02) arrive in
-  Phase 4, addressing in Phase 7.
+  host-facing extension seam, below).
+- `on(eventName, handler)` — subscribe to host-facing events. Supports
+  `state` and `health`, immediately calls the handler with the current
+  snapshot of that event, and returns an unsubscribe function. Unknown event
+  names throw `Error('viewer-event-unsupported')` at subscription time.
+  The viewer emits events only; visible badges, banners, logs, and status
+  UI belong to the host application.
+
+## Event contract (VIEW-02)
+
+```js
+const offState = viewer.on('state', (event) => {
+  // event.state is exactly one of:
+  // 'connecting' | 'live' | 'stale' | 'disconnected'
+  // event.reason is a lowercase diagnostic string; event.ts is Date.now().
+});
+
+const offHealth = viewer.on('health', (health) => {
+  // counters, timestamps, and transport diagnostics only
+});
+
+offState();
+offHealth();
+```
+
+Lifecycle starts at `connecting`, moves to `live` on the first accepted
+snapshot/frame, moves to `stale` when resync is requested or transport
+status reports `closed`/`reconnecting`/`error`, and moves to
+`disconnected` after a closed transport remains stale past the short
+disconnect window. `STREAM.STATE` payloads with those same state names map
+into the same public event surface.
+
+Health snapshots are privacy-bounded telemetry. They include:
+
+- `state`, `ts`
+- `lastFrameAt`, `lastSnapshotAt`, `lastMutationAt`
+- `receivedByType`, `sentByType`
+- `staleMisses`, `applyFailures`, `resyncPending`
+- `sanitizer` counters: `strippedHandlers`, `blockedUrls`,
+  `droppedSubtrees`, `cssScrubs`
+- `transport` diagnostics when available: `state`, `reason`, `readyState`,
+  `bufferedAmount`, `drops`, `errors`, `lastCloseAt`, `lastSendAt`,
+  `lastReceiveAt`, `closeCode`, `closeReason`, and transport type counters
+
+Health snapshots never include mirrored `html`, text node contents, raw
+payload objects, page `url`, page `title`, or DOM nodes.
 
 ## Overlay channel contract (VIEW-04)
 
@@ -203,8 +246,9 @@ vendored.
 - **R6 — FSB 9-state preview machine → minimal `waiting`/`streaming` gate.**
   The reference's `previewState` sub-views (loading, disconnected, error,
   ...) are dashboard UI. The viewer gates mutation/scroll/overlay/dialog
-  application on `streaming` exactly like the reference did; the formal
-  state/event surface (VIEW-02) arrives in Phase 4.
+  application on `streaming` exactly like the reference did; Phase 4 adds
+  the host-facing `connecting`/`live`/`stale`/`disconnected` and health
+  event surface without adding viewer-owned chrome.
 - **R7 — Font Awesome → inline SVG icons.** A zero-dependency framework
   cannot ship an icon font; the dialog icons (warning-triangle,
   question-circle, keyboard) are equivalent inline SVGs.

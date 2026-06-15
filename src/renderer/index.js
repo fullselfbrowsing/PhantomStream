@@ -14,8 +14,8 @@
 //   - scroll handler (store first, gated smooth follow): 3358-3372
 //
 // Intentional divergences (renderer divergence ledger, plan 02-04):
-//   - FSB 9-state preview machine -> minimal 'waiting' | 'streaming' gate;
-//     the formal state/event surface (VIEW-02) arrives in Phase 4.
+//   - FSB 9-state preview machine -> minimal 'waiting' | 'streaming' gate
+//     plus Phase 4's host-facing state/health event surface (VIEW-02).
 //   - tabId identity checks dropped (FSB extension concern); staleness goes
 //     through the protocol's isCurrentStream instead.
 //   - dash:request-status send dropped from the resync path -- the resync
@@ -90,8 +90,8 @@ import { STREAM, CONTROL, NID_ATTR, isCurrentStream } from '../protocol/messages
  * @property {(kind: string, renderFn: (payload: *, anchorRect: ?Object, layer: Element) => void) => void} registerOverlay
  *   Register a custom overlay kind (delegates to the overlays registry --
  *   the host-facing extension seam from D-10).
- * @property {(eventName: 'state', handler: (event: Object) => void) => (() => void)} on
- *   Subscribe to host-facing lifecycle events. Returns unsubscribe.
+ * @property {(eventName: 'state'|'health', handler: (event: Object) => void) => (() => void)} on
+ *   Subscribe to host-facing lifecycle and health events. Returns unsubscribe.
  */
 
 /**
@@ -261,6 +261,7 @@ export function createViewer(options) {
     ts: Date.now()
   };
   var stateListeners = new Set();
+  var healthListeners = new Set();
   var disconnectTimer = null;
   var active = { streamSessionId: '', snapshotId: 0 };
   var lastScroll = { x: 0, y: 0 };
@@ -276,16 +277,95 @@ export function createViewer(options) {
     strippedHandlers: 0, blockedUrls: 0, droppedSubtrees: 0, cssScrubs: 0
   };
   var resyncPending = false; // latch: at most one resync in flight per generation
+  var receivedByType = {};
+  var sentByType = {};
+  var lastFrameAt = 0;
+  var lastSnapshotAt = 0;
+  var lastMutationAt = 0;
+  var lastTransportStatus = {};
   var lastSnapshotPayload = null;
   var scaleState = computeScale(1920, 1080, container.clientWidth, container.clientHeight);
   var detached = false;
   var destroyed = false;
+
+  function incrementCounter(counter, type) {
+    var key = typeof type === 'string' && type ? type : 'unknown';
+    counter[key] = (counter[key] || 0) + 1;
+  }
+
+  function copyCounters(counter) {
+    var out = {};
+    for (var key in counter) {
+      if (Object.prototype.hasOwnProperty.call(counter, key)) out[key] = counter[key];
+    }
+    return out;
+  }
+
+  function copyErrors(errors) {
+    if (!Array.isArray(errors)) return [];
+    return errors.map(function (entry) {
+      var e = entry || {};
+      return {
+        code: typeof e.code === 'string' ? e.code : '',
+        reason: typeof e.reason === 'string' ? e.reason : '',
+        ts: typeof e.ts === 'number' ? e.ts : 0
+      };
+    });
+  }
+
+  function sanitizeTransportStatus(status) {
+    var s = status || {};
+    return {
+      state: typeof s.state === 'string' ? s.state : (typeof s.status === 'string' ? s.status : ''),
+      reason: typeof s.reason === 'string' ? s.reason : '',
+      readyState: typeof s.readyState === 'number' ? s.readyState : null,
+      bufferedAmount: typeof s.bufferedAmount === 'number' ? s.bufferedAmount : 0,
+      drops: typeof s.drops === 'number' ? s.drops : 0,
+      errors: copyErrors(s.errors),
+      lastCloseAt: typeof s.lastCloseAt === 'number' ? s.lastCloseAt : 0,
+      lastSendAt: typeof s.lastSendAt === 'number' ? s.lastSendAt : 0,
+      lastReceiveAt: typeof s.lastReceiveAt === 'number' ? s.lastReceiveAt : 0,
+      closeCode: typeof s.closeCode === 'number' ? s.closeCode : null,
+      closeReason: typeof s.closeReason === 'string' ? s.closeReason : '',
+      sentByType: copyCounters(s.sentByType || {}),
+      receivedByType: copyCounters(s.receivedByType || {})
+    };
+  }
+
+  function currentTransportHealth() {
+    var live = {};
+    if (transport && typeof transport.getHealth === 'function') {
+      try {
+        live = sanitizeTransportStatus(transport.getHealth());
+      } catch (err) {
+        logger.error('[Renderer] transport health failed', err);
+      }
+    }
+    return Object.assign(sanitizeTransportStatus(lastTransportStatus), live);
+  }
 
   function cloneStateEvent(event) {
     return {
       state: event.state,
       reason: event.reason,
       ts: event.ts
+    };
+  }
+
+  function healthSnapshot() {
+    return {
+      state: publicState,
+      ts: Date.now(),
+      lastFrameAt: lastFrameAt,
+      lastSnapshotAt: lastSnapshotAt,
+      lastMutationAt: lastMutationAt,
+      receivedByType: copyCounters(receivedByType),
+      sentByType: copyCounters(sentByType),
+      staleMisses: counters.staleMisses,
+      applyFailures: counters.applyFailures,
+      resyncPending: resyncPending,
+      sanitizer: copyCounters(sanitizeCounters),
+      transport: currentTransportHealth()
     };
   }
 
@@ -298,6 +378,18 @@ export function createViewer(options) {
         logger.error('[Renderer] event handler failed', 'state', err);
       }
     });
+  }
+
+  function notifyHealth() {
+    var event = healthSnapshot();
+    healthListeners.forEach(function (handler) {
+      try {
+        handler(healthSnapshot());
+      } catch (err) {
+        logger.error('[Renderer] event handler failed', 'health', err);
+      }
+    });
+    return event;
   }
 
   function clearDisconnectTimer() {
@@ -320,6 +412,7 @@ export function createViewer(options) {
       ts: Date.now()
     };
     notifyState();
+    notifyHealth();
   }
 
   function scheduleDisconnected(reason) {
@@ -332,17 +425,18 @@ export function createViewer(options) {
   }
 
   function on(eventName, handler) {
-    if (eventName !== 'state' || typeof handler !== 'function') {
+    if ((eventName !== 'state' && eventName !== 'health') || typeof handler !== 'function') {
       throw new Error('viewer-event-unsupported');
     }
-    stateListeners.add(handler);
+    var listeners = eventName === 'state' ? stateListeners : healthListeners;
+    listeners.add(handler);
     try {
-      handler(cloneStateEvent(publicStateEvent));
+      handler(eventName === 'state' ? cloneStateEvent(publicStateEvent) : healthSnapshot());
     } catch (err) {
       logger.error('[Renderer] event handler failed', eventName, err);
     }
     return function unsubscribeViewerEvent() {
-      stateListeners.delete(handler);
+      listeners.delete(handler);
     };
   }
 
@@ -354,6 +448,8 @@ export function createViewer(options) {
    * @param {Object} payload
    */
   function safeSend(type, payload) {
+    incrementCounter(sentByType, type);
+    notifyHealth();
     try {
       var result = transport.send(type, payload);
       if (result && typeof result.catch === 'function') {
@@ -392,6 +488,8 @@ export function createViewer(options) {
 
   function handleTransportStatus(status) {
     if (detached) return;
+    lastTransportStatus = sanitizeTransportStatus(status);
+    var before = publicState;
     var s = status && (status.state || status.status);
     if (s === 'closed') {
       setPublicState('stale', 'transport-closed');
@@ -407,6 +505,7 @@ export function createViewer(options) {
     } else if (s === 'connecting') {
       if (publicState !== 'live') setPublicState('connecting', 'transport-connecting');
     }
+    if (before === publicState) notifyHealth();
   }
 
   function handleStreamState(payload) {
@@ -490,6 +589,7 @@ export function createViewer(options) {
     counters.staleMisses = 0;
     counters.applyFailures = 0;
     resyncPending = false; // the latch's ONLY release site
+    lastSnapshotAt = Date.now();
     overlays.resetOverlays();
     lastScroll.x = p.scrollX || 0;
     lastScroll.y = p.scrollY || 0;
@@ -509,6 +609,7 @@ export function createViewer(options) {
   function handleMutations(payload) {
     if (viewerState !== 'streaming') return;
     if (!isCurrentStream(payload, active)) return;
+    lastMutationAt = Date.now();
     var cd = iframe.contentDocument;
     applyMutations(cd, payload.mutations, counters, {
       logger: logger,
@@ -583,6 +684,8 @@ export function createViewer(options) {
    */
   function dispatch(type, payload) {
     if (detached) return;
+    incrementCounter(receivedByType, type);
+    lastFrameAt = Date.now();
     try {
       switch (type) {
         case STREAM.SNAPSHOT:
@@ -609,6 +712,7 @@ export function createViewer(options) {
     } catch (err) {
       logger.error('[Renderer] message handler failed', type, err);
     }
+    notifyHealth();
   }
 
   var unsubscribe = transport.onMessage(dispatch);
@@ -686,7 +790,14 @@ export function createViewer(options) {
     sanitizeCounters.droppedSubtrees = 0;
     sanitizeCounters.cssScrubs = 0;
     resyncPending = false;
+    receivedByType = {};
+    sentByType = {};
+    lastFrameAt = 0;
+    lastSnapshotAt = 0;
+    lastMutationAt = 0;
+    lastTransportStatus = {};
     stateListeners.clear();
+    healthListeners.clear();
     viewerState = 'waiting';
   }
 
