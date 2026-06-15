@@ -92,6 +92,18 @@ export function applyMutations(doc, mutations, counters, hooks) {
     return doc.querySelector('[' + NID_ATTR + '="' + nid + '"]');
   }
 
+  function stampNodeIds(root, nodeIds) {
+    if (!root || !Array.isArray(nodeIds) || nodeIds.length === 0) return;
+    var elements = [root];
+    if (root.querySelectorAll) {
+      var descendants = root.querySelectorAll('*');
+      for (var i = 0; i < descendants.length; i++) elements.push(descendants[i]);
+    }
+    for (var n = 0; n < elements.length && n < nodeIds.length; n++) {
+      elements[n].setAttribute(NID_ATTR, nodeIds[n]);
+    }
+  }
+
   // Shared miss path: count, warn, and escalate at the parity threshold.
   function recordStaleMiss(op, nid) {
     tallies.staleMisses += 1;
@@ -139,6 +151,7 @@ export function applyMutations(doc, mutations, counters, hooks) {
               recordStaleMiss(DIFF_OP.ADD, m.parentNid);
               break;
             }
+            stampNodeIds(newNode, m.nodeIds);
             // importNode is REQUIRED: the parsed node lives in the
             // template's parser document; importNode adopts a deep clone
             // into the mirror doc (cross-doc insertBefore historically

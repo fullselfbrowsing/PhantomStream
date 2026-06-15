@@ -562,6 +562,26 @@ export function createViewer(options) {
     };
   }
 
+  function stampNodeIdsOnHtml(html, nodeIds) {
+    if (!Array.isArray(nodeIds) || nodeIds.length === 0) return html || '';
+    var range = doc.createRange();
+    var fragment = range.createContextualFragment(html || '');
+    var elements = fragment.querySelectorAll('*');
+    for (var i = 0; i < elements.length && i < nodeIds.length; i++) {
+      elements[i].setAttribute(NID_ATTR, nodeIds[i]);
+    }
+    var wrapper = doc.createElement('div');
+    wrapper.appendChild(fragment);
+    return wrapper.innerHTML;
+  }
+
+  function payloadWithMirrorNodeIds(payload) {
+    if (!payload || !Array.isArray(payload.nodeIds)) return payload;
+    return Object.assign({}, payload, {
+      html: stampNodeIdsOnHtml(payload.html, payload.nodeIds)
+    });
+  }
+
   /**
    * Resolve a captured node id to a host-document overlay rect. Reads the
    * mirror contentDocument FRESH per call (never cached -- re-snapshots
@@ -617,7 +637,7 @@ export function createViewer(options) {
     lastScroll.x = p.scrollX || 0;
     lastScroll.y = p.scrollY || 0;
     lastSnapshotPayload = p;
-    iframe.srcdoc = buildSnapshotHtml(p);
+    iframe.srcdoc = buildSnapshotHtml(payloadWithMirrorNodeIds(p));
     markLive('snapshot');
   }
 

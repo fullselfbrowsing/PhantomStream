@@ -696,8 +696,8 @@ test('characterData and textContent edits emit UNCHANGED text (identity pin -- 0
 
     const t6 = env.document.getElementById('t6');
     const t7 = env.document.getElementById('t7');
-    const t6Nid = t6.getAttribute(NID_ATTR);
-    const t7Nid = t7.getAttribute(NID_ATTR);
+    const t6Nid = env.capture.getNodeId(t6);
+    const t7Nid = env.capture.getNodeId(t7);
 
     // characterData branch: in-place text-node edit.
     t6.firstChild.nodeValue = 'edited text value';
