@@ -23,6 +23,19 @@ function utf8Codec() {
   };
 }
 
+function compactCodec() {
+  let saved = '';
+  return {
+    async compress(raw) {
+      saved = raw;
+      return new Uint8Array([1]);
+    },
+    async decompress() {
+      return saved;
+    }
+  };
+}
+
 function tick() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -113,8 +126,9 @@ test('legacy _lz frames decode with injected codec and fail loud without it', as
 
 test('native deflate envelope round-trips through injected codec', async () => {
   const msg = { type: 'ext:dom-snapshot', payload: { html: '<main>hello</main>' }, ts: 125 };
+  const codec = compactCodec();
   const wire = await encodeWireMessage(msg, {
-    codec: utf8Codec(),
+    codec,
     compressionThresholdBytes: 0
   });
 
@@ -122,9 +136,19 @@ test('native deflate envelope round-trips through injected codec', async () => {
   assert.equal(envelope._ps, 'deflate-raw');
   assert.equal(typeof envelope.d, 'string');
 
-  const decoded = await decodeWireMessage(wire, { codec: utf8Codec() });
+  const decoded = await decodeWireMessage(wire, { codec });
   assert.equal(decoded.ok, true);
   assert.deepEqual(decoded.msg, msg);
+});
+
+test('expanded native envelopes fall back to plain JSON', async () => {
+  const msg = { type: 'ext:dom-snapshot', payload: { html: '<main>' + 'x'.repeat(64) + '</main>' }, ts: 125 };
+  const wire = await encodeWireMessage(msg, {
+    codec: utf8Codec(),
+    compressionThresholdBytes: 0
+  });
+
+  assert.deepEqual(JSON.parse(wire), msg);
 });
 
 test('native CompressionStream deflate-raw path drains without deadlocking', async () => {

@@ -219,7 +219,8 @@ export async function encodeWireMessage(msg, options) {
     emitDiagnostic(opts, 'base64-encode-failed');
     return json;
   }
-  return JSON.stringify({ _ps: NATIVE_DEFLATE_MARKER, d: base64 });
+  var envelope = JSON.stringify({ _ps: NATIVE_DEFLATE_MARKER, d: base64 });
+  return byteLength(envelope) < byteLength(json) ? envelope : json;
 }
 
 /**
