@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { startPlaywrightDemoServer } from '../examples/playwright-demo/server.js';
+import { startBookmarkletDemoServer } from '../examples/bookmarklet-demo/server.js';
 import { startExtensionDemoServer } from '../examples/extension-mv3/server.js';
 import { startDemoServer } from '../examples/two-tab-demo/server.js';
 
@@ -8,6 +9,7 @@ const USAGE = [
   'Usage: phantom-stream demo [--port <number>] [--no-open]',
   '       phantom-stream playwright-demo [--port <number>] [--drive] [--headed] [--no-open]',
   '       phantom-stream extension-demo [--port <number>] [--no-open]',
+  '       phantom-stream bookmarklet-demo [--port <number>] [--no-open]',
 ].join('\n');
 
 async function main(argv) {
@@ -19,7 +21,8 @@ async function main(argv) {
     return 0;
   }
 
-  if (command !== 'demo' && command !== 'playwright-demo' && command !== 'extension-demo') {
+  if (command !== 'demo' && command !== 'playwright-demo' && command !== 'extension-demo'
+      && command !== 'bookmarklet-demo') {
     printUsage(command ? console.error : console.log);
     return command ? 1 : 0;
   }
@@ -44,9 +47,12 @@ async function main(argv) {
     })
     : command === 'extension-demo'
       ? await startExtensionDemoServer({ port: parsed.port })
+      : command === 'bookmarklet-demo'
+        ? await startBookmarkletDemoServer({ port: parsed.port })
       : await startDemoServer({ port: parsed.port });
   if (command === 'playwright-demo') printPlaywrightDemoOutput(demo);
   else if (command === 'extension-demo') printExtensionDemoOutput(demo);
+  else if (command === 'bookmarklet-demo') printBookmarkletDemoOutput(demo);
   else printDemoOutput(demo);
 
   var stopping = false;
@@ -168,6 +174,14 @@ function printExtensionDemoOutput(demo) {
   console.log('Extension directory: ' + demo.extensionDir);
   console.log('Source page: ' + demo.sourceUrl);
   console.log('Viewer: ' + demo.viewerUrl);
+  console.log('Room: ' + demo.roomKeyPrefix + '...');
+}
+
+function printBookmarkletDemoOutput(demo) {
+  console.log('PhantomStream bookmarklet demo running on 127.0.0.1');
+  console.log('Source page: ' + demo.sourceUrl);
+  console.log('Viewer: ' + demo.viewerUrl);
+  console.log('Bookmarklet: ' + demo.bookmarklet);
   console.log('Room: ' + demo.roomKeyPrefix + '...');
 }
 

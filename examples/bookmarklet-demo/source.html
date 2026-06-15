@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhantomStream Bookmarklet Source</title>
+<link rel="stylesheet" href="/bookmarklet/demo.css">
+</head>
+<body>
+<main class="demo-shell">
+  <section class="panel source-panel">
+    <p class="eyebrow">BOOKMARKLET SOURCE</p>
+    <h1>PhantomStream Bookmarklet Source</h1>
+    <div class="toolbar" data-phantomstream-ui>
+      <button type="button" id="add-row">Add row</button>
+      <button type="button" id="edit-text">Edit text</button>
+    </div>
+    <p><strong>Bookmarklet status</strong>: <span id="bookmarklet-status">waiting for execution</span></p>
+    <div id="rows" class="rows">
+      <article class="row-card">
+        <strong>Initial row</strong>
+        <span id="mutable-text">Ready for bookmarklet mirroring.</span>
+      </article>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  var rows = document.getElementById('rows');
+  var text = document.getElementById('mutable-text');
+  var status = document.getElementById('bookmarklet-status');
+  var count = 1;
+  document.getElementById('add-row').addEventListener('click', function () {
+    count += 1;
+    var row = document.createElement('article');
+    row.className = 'row-card';
+    row.innerHTML = '<strong>Row ' + count + '</strong><span>Created by bookmarklet demo mutation.</span>';
+    rows.appendChild(row);
+  });
+  document.getElementById('edit-text').addEventListener('click', function () {
+    text.textContent = 'Bookmarklet edit at ' + new Date().toISOString();
+  });
+  window.addEventListener('phantomstream:bookmarklet-error', function (event) {
+    status.textContent = 'error: ' + (event.detail && event.detail.reason ? event.detail.reason : 'unknown');
+  });
+  window.addEventListener('load', function () {
+    status.textContent = 'ready to run generated bookmarklet';
+  });
+})();
+</script>
+</body>
+</html>
