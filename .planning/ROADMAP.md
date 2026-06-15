@@ -163,7 +163,7 @@ Plans:
 - [x] 05-05-PLAN.md — Approved Playwright demo viewer UI, transparent control overlay, and deterministic fixture
 
 **Wave 4** *(blocked on 05-05)*
-- [ ] 05-06-PLAN.md — Full automated gate, browser verification checkpoint, and verification evidence artifact
+- [x] 05-06-PLAN.md — Full automated gate, browser verification checkpoint, and verification evidence artifact
 
 ### Phase 6: Extension MV3 + Bookmarklet Adapters
 **Goal**: The remaining injection contexts work — the extension content-script path FSB will swap onto, plus the bookmarklet loader
