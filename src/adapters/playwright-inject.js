@@ -2581,9 +2581,17 @@ function createCapture(config) {
         transport: phantomStreamTransport,
         logger: phantomStreamLogger
       });
+      window.__phantomStreamCapture = phantomStreamCapture;
     }
     return phantomStreamCapture;
   }
+
+  window.__phantomStreamGetNodeId = function (element) {
+    var capture = phantomStreamEnsureCapture();
+    return capture && typeof capture.getNodeId === "function"
+      ? capture.getNodeId(element)
+      : null;
+  };
 
   window.__phantomStreamStart = function () {
     if (!document.body) {

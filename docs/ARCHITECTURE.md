@@ -199,8 +199,9 @@ part of this repository's roadmap (and the paper's discussion section):
    a current framework limitation.
 4. **Truncation recovery is passive.** Diff targets inside dropped subtrees miss until the
    next snapshot; an on-demand subtree fetch would close the gap.
-5. **Sanitization gap.** `on*` event-handler attributes are only stripped for `<html>`/
-   `<body>` shells, not in the main element pass or `processAddedNode` — the viewer iframe
-   must be sandboxed without `allow-scripts`, and the framework should sanitize on both
-   ends.
+5. **Blocklist sanitizer coverage is intentionally conservative.** Capture and renderer
+   chokepoints now strip event handlers, dangerous URL schemes, `srcdoc`,
+   object/embed/script-like subtrees, and hostile CSS before mirrored content is
+   transported or inserted. This is still a framework-maintained blocklist, so the
+   viewer iframe remains sandboxed without `allow-scripts` as defense in depth.
 6. **Shadow DOM, `<video>`/`<audio>`, and cross-origin iframe content are not mirrored.**

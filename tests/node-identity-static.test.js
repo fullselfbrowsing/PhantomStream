@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs';
 
 const FILES = [
   'src/capture/index.js',
+  'src/adapters/playwright-inject.js',
   'src/renderer/diff.js',
   'src/renderer/index.js',
   'src/renderer/overlays.js',

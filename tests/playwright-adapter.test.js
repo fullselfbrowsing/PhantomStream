@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { JSDOM, VirtualConsole } from 'jsdom';
 
 import {
   createPlaywrightAdapter,
@@ -117,6 +118,12 @@ function createFakePage() {
   return page;
 }
 
+async function settleWindow(win) {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => win.requestAnimationFrame(resolve));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+}
+
 test('install exposes the binding before adding the init script artifact', async () => {
   const page = createFakePage();
   const transport = createRecordingTransport();
@@ -141,7 +148,43 @@ test('inject source is a single classic script with the capture bridge hooks', (
   assert.match(source, /window\.top !== window/);
   assert.match(source, /window\.__phantomStreamBridge/);
   assert.match(source, /window\.__phantomStreamStart/);
+  assert.match(source, /window\.__phantomStreamCapture/);
+  assert.match(source, /window\.__phantomStreamGetNodeId/);
   assert.match(source, /createCapture/);
+});
+
+test('inject source exposes capture handle and getNodeId for tracked page elements', async () => {
+  const dom = new JSDOM(
+    '<!doctype html><html><body><main><button id="target">Run</button></main></body></html>',
+    {
+      pretendToBeVisual: true,
+      runScripts: 'outside-only',
+      url: 'https://fixture.test/',
+      virtualConsole: new VirtualConsole(),
+    }
+  );
+  const sent = [];
+  try {
+    dom.window.__phantomStreamBridge = (message) => {
+      sent.push(message);
+      return { ok: true };
+    };
+
+    dom.window.eval(getPlaywrightInjectSource());
+    await settleWindow(dom.window);
+
+    const button = dom.window.document.getElementById('target');
+    const nid = dom.window.__phantomStreamGetNodeId(button);
+
+    assert.equal(typeof dom.window.__phantomStreamCapture, 'object');
+    assert.equal(typeof dom.window.__phantomStreamGetNodeId, 'function');
+    assert.equal(typeof nid, 'string');
+    assert.equal(dom.window.__phantomStreamCapture.getNodeId(button), nid);
+    assert.equal(dom.window.__phantomStreamGetNodeId(dom.window.document.createElement('aside')), null);
+    assert.ok(sent.some((entry) => entry.type === STREAM.SNAPSHOT));
+  } finally {
+    dom.window.close();
+  }
 });
 
 test('binding forwards only main-frame bridge messages to transport', async () => {
