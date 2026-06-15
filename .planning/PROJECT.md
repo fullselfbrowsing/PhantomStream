@@ -39,6 +39,7 @@ standalone framework.
 - ✓ Embedded-SDK adapter + first-light loopback demo (`npm run example:loopback`) — a page mirrors itself live with zero infrastructure, verified in real Chrome — Validated in Phase 2 (ADPT-04)
 - ✓ Security pipeline for embeddable/publishable mirroring — capture-side sanitization in all serialization paths, renderer defense-in-depth with sandbox/CSP contract, and capture-side privacy masking vocabulary (`blockSelector`, `maskTextSelector`, `maskInputs`, custom mask fns) — Validated in Phase 3 (SEC-01, SEC-02, SEC-03)
 - ✓ Networked mirror foundation — transport-agnostic raw relay, self-hostable WebSocket backend, endpoint-owned native deflate transport with legacy `_lz` decode, viewer lifecycle/health events, and local two-tab demo verified in real Chrome/FSB — Validated in Phase 4 (RELY-01, RELY-02, VIEW-02, PKG-01)
+- ✓ Playwright/CDP adapter + agent-observability demo — single-file inject artifact, binding bridge, consent-gated native input replay, reverse-mapped mirror control, local Playwright-driven demo, browser verification, and threat verification — Validated in Phase 5 (ADPT-02, PKG-02, VIEW-05, SEC-04)
 
 ### Active
 
@@ -53,8 +54,7 @@ standalone framework.
   - [ ] Shadow DOM mirroring
 
 **Plug-and-play surface:**
-- [ ] Host adapters for every context that makes sense: extension content script, Playwright/CDP, bookmarklet, embedded SDK
-- [ ] Playwright-driven demo (script drives a real page; viewer mirrors live with remote control)
+- [ ] Host adapters for remaining contexts: extension content script and bookmarklet
 - [ ] npm package published as `@fullselfbrowsing/phantom-stream` with JSDoc-generated `.d.ts`
 
 **FSB integration:**
@@ -82,8 +82,9 @@ standalone framework.
   verification live under `reference/planning/`. The codebase map is at `.planning/codebase/`.
 - **Extraction state:** `src/protocol/` is done (messages, envelope, constants — clean ESM,
   dependency-free, tested with `node --test`). `src/capture/`, `src/renderer/`, `src/relay/`,
-  and `src/transport/websocket.js` now hold the extracted capture/viewer cores, Phase 3
-  sanitization and masking gates, the raw relay/ws backend, and endpoint WebSocket transport.
+  `src/transport/websocket.js`, and `src/adapters/playwright.js` now hold the extracted
+  capture/viewer cores, Phase 3 sanitization and masking gates, the raw relay/ws backend,
+  endpoint WebSocket transport, and the Playwright/CDP adapter.
 - **Docs are strong:** `docs/ARCHITECTURE.md` (full system description + 6 known limitations),
   `docs/DESIGN-HISTORY.md` (what failed and why — e.g. the 45 s YouTube serialize that forced
   curated style capture), `docs/paper/OUTLINE.md` (paper structure + evaluation plan).
@@ -120,6 +121,7 @@ standalone framework.
 | Both demos: two-tab + Playwright-driven | Two-tab proves plug-and-play; Playwright proves the agent-observability story the paper leads with | — Pending |
 | Security pipeline is enforced before relay/publishing work | Anything embeddable or published must be safe to render and must not leak masked content | Validated in Phase 3 |
 | Relay stays raw; compression and decode are endpoint-owned | Keeps routing transport-agnostic, preserves byte-cap diagnostics, and maintains FSB `_lz` compatibility without a relay-side payload dependency | Validated in Phase 4 |
+| Consent-gated remote control belongs in host/adapter boundaries, not renderer/relay | Renderer exposes geometry only and relay stays raw; the adapter owns authorization and driver-native replay | Validated in Phase 5 |
 
 ## Evolution
 
@@ -139,4 +141,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-15 after Phase 4 completion (relay/ws transport, viewer health events, and two-tab demo validated)*
+*Last updated: 2026-06-15 after Phase 5 completion (Playwright/CDP adapter, remote control, and Playwright-driven demo validated)*
