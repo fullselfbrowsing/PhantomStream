@@ -197,6 +197,8 @@ test('Playwright demo static files pin viewer fixture JS and CSS contracts', asy
   assert.match(css, /height: min\(72vh, 720px\)/);
   assert.match(css, /background: #0f1117/);
   assert.match(css, /#f59e0b/);
+  assert.match(css, /\.segment-option \{[^}]*position: relative;/s);
+  assert.match(css, /\.segment-option input \{[^}]*inset: 0;[^}]*width: 100%;/s);
   assert.doesNotMatch(css, /gradient|orb/i);
 });
 

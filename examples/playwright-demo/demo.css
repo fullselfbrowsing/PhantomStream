@@ -218,13 +218,19 @@ button[aria-disabled="true"] {
   min-height: 36px;
   min-width: 88px;
   padding: 8px 12px;
+  position: relative;
 }
 
 .segment-option:hover { background: rgba(255, 255, 255, 0.06); }
 
 .segment-option input {
+  cursor: pointer;
+  height: 100%;
+  inset: 0;
+  margin: 0;
   opacity: 0;
   position: absolute;
+  width: 100%;
 }
 
 .segment-option:has(input:checked) {

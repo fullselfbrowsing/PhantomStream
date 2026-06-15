@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import {
+  CONTROL,
   REMOTE_CONTROL,
   REMOTE_CONTROL_STATE,
   createRemoteControlStateEvent,
@@ -237,6 +238,10 @@ export function createPlaywrightAdapter(options) {
 
       if (transport && typeof transport.onMessage === 'function') {
         unsubscribeTransport = transport.onMessage(function (type, payload) {
+          if (type === CONTROL.START) {
+            startInjectedCapture();
+            return;
+          }
           if (isRemoteControlType(type)) {
             handleControlMessage(type, payload);
           }

@@ -6,17 +6,25 @@ import {
   createPlaywrightAdapter,
   getPlaywrightInjectSource,
 } from '../src/adapters/playwright.js';
-import { STREAM } from '../src/protocol/index.js';
+import { CONTROL, STREAM } from '../src/protocol/index.js';
 
 function tick() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 function createRecordingTransport() {
+  const messageHandlers = new Set();
   return {
     sent: [],
     send(type, payload) {
       this.sent.push({ type, payload });
+    },
+    onMessage(handler) {
+      messageHandlers.add(handler);
+      return () => messageHandlers.delete(handler);
+    },
+    emit(type, payload) {
+      for (const handler of messageHandlers) handler(type, payload || {});
     },
   };
 }
@@ -187,6 +195,29 @@ test('main-frame navigation calls the injected start hook for a fresh snapshot p
   assert.equal(startCount, 0);
 
   page.emit('framenavigated', page.mainFrameValue);
+  await tick();
+
+  assert.equal(startCount, 1);
+  assert.equal(page.evaluateCalls.length, 1);
+  assert.match(String(page.evaluateCalls[0]), /__phantomStreamStart/);
+});
+
+test('viewer stream start request restarts injected capture for a missed initial snapshot', async () => {
+  const page = createFakePage();
+  const transport = createRecordingTransport();
+  let startCount = 0;
+  page.injectedWindow = {
+    __phantomStreamStart() {
+      startCount += 1;
+      return 'viewer-requested-snapshot';
+    },
+  };
+  page.injectedDocument = { body: {} };
+
+  const adapter = createPlaywrightAdapter({ page, transport });
+  await adapter.install();
+
+  transport.emit(CONTROL.START, { reason: 'viewer-attached' });
   await tick();
 
   assert.equal(startCount, 1);
