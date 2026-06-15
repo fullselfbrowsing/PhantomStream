@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { createViewer } from '../src/renderer/index.js';
-import { STREAM } from '../src/protocol/messages.js';
+import { STREAM, DIFF_OP } from '../src/protocol/messages.js';
 
 function setupEnv(bodyHtml) {
   const dom = new JSDOM(
@@ -165,16 +165,66 @@ test('D-09 cross-origin frames render as content-free labeled regions', () => {
     wire.emit(STREAM.SNAPSHOT, baseSnapshot());
     const mirrorDoc = glueIframe(viewerIframe(env));
 
-    assert.ok(mirrorDoc.body.textContent.includes('Cross-origin iframe'), 'placeholder label is visible');
     assert.equal(mirrorDoc.body.textContent.includes('SECRET_REMOTE_BODY'), false, 'remote frame content is absent');
     const remoteFrame = mirrorDoc.getElementById('remote-frame');
-    if (remoteFrame) {
-      assert.equal(remoteFrame.hasAttribute('srcdoc'), false, 'cross-origin placeholder has no nested srcdoc');
-      assert.equal(remoteFrame.textContent.includes('SECRET_REMOTE_BODY'), false, 'placeholder has no remote text');
-    }
+    assert.ok(remoteFrame, 'cross-origin iframe host exists in mirror');
+    assert.equal(remoteFrame.hasAttribute('src'), false, 'cross-origin placeholder does not load the live remote URL');
+    assert.equal(typeof remoteFrame.getAttribute('srcdoc'), 'string', 'cross-origin placeholder is inert srcdoc');
+    assert.ok(remoteFrame.getAttribute('srcdoc').includes('Cross-origin iframe'), 'srcdoc contains the content-free label');
+    assert.ok(remoteFrame.getAttribute('srcdoc').includes('https://remote.example'), 'srcdoc contains safe origin metadata');
+    assert.equal(remoteFrame.getAttribute('srcdoc').includes('SECRET_REMOTE_BODY'), false, 'placeholder srcdoc has no remote text');
+    const remoteDoc = glueIframe(remoteFrame);
+    assert.ok(remoteDoc.body.textContent.includes('Cross-origin iframe'), 'placeholder label is visible');
+    assert.equal(remoteDoc.body.textContent.includes('SECRET_REMOTE_BODY'), false, 'placeholder document has no remote text');
     for (const nested of Array.from(mirrorDoc.querySelectorAll('iframe'))) {
       assert.equal((nested.getAttribute('sandbox') || '').includes('allow-scripts'), false, 'no nested iframe has allow-scripts');
     }
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-08 add-op frame payloads install without a full snapshot', () => {
+  const env = setupEnv('<div id="viewer" style="width:900px;height:700px"></div>');
+  try {
+    const wire = createManualTransport();
+    env.viewer = createViewer({
+      container: env.document.getElementById('viewer'),
+      transport: wire.transport,
+      logger: silentLogger(),
+    });
+
+    wire.emit(STREAM.SNAPSHOT, baseSnapshot());
+    const mirrorDoc = glueIframe(viewerIframe(env));
+
+    wire.emit(STREAM.MUTATIONS, {
+      streamSessionId: 'stream-frames',
+      snapshotId: 1,
+      mutations: [{
+        op: DIFF_OP.ADD,
+        parentNid: 'root-nid',
+        html: '<iframe id="late-same-frame"></iframe>',
+        nodeIds: ['late-frame-nid'],
+        frames: [{
+          frameNid: 'late-frame-nid',
+          kind: 'same-origin',
+          html: '<input id="late-frame-input" value="ready" onfocus="alert(1)">',
+          nodeIds: ['late-frame-input-nid'],
+          stylesheets: [],
+          inlineStyles: [],
+          htmlAttrs: {},
+          bodyAttrs: {},
+        }],
+      }],
+    });
+
+    const lateFrame = mirrorDoc.getElementById('late-same-frame');
+    assert.ok(lateFrame, 'late iframe host was inserted');
+    assert.equal(typeof lateFrame.getAttribute('srcdoc'), 'string', 'late same-origin frame payload installs as srcdoc');
+    const lateDoc = glueIframe(lateFrame);
+    assert.equal(lateDoc.getElementById('late-frame-input').value, 'ready');
+    assert.equal(lateDoc.getElementById('late-frame-input').hasAttribute('onfocus'), false, 'late frame srcdoc is sanitized');
+    assert.ok(env.viewer.resolveNode('late-frame-input-nid'), 'late frame descendant nid resolves after add-op installation');
   } finally {
     env.teardown();
   }
