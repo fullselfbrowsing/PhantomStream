@@ -258,3 +258,273 @@ export async function decodeWireMessage(raw, options) {
     return { ok: false, error: 'inner-json-parse-failed' };
   }
 }
+
+function copyCounters(counters) {
+  var out = {};
+  for (var key in counters) {
+    if (Object.prototype.hasOwnProperty.call(counters, key)) out[key] = counters[key];
+  }
+  return out;
+}
+
+function pushBounded(list, entry, limit) {
+  list.push(entry);
+  while (list.length > limit) list.shift();
+}
+
+function addSocketListener(ws, type, handler) {
+  if (ws && typeof ws.addEventListener === 'function') {
+    ws.addEventListener(type, handler);
+    return function () {
+      try {
+        ws.removeEventListener(type, handler);
+      } catch (e) { /* listener already gone */ }
+    };
+  }
+  var key = 'on' + type;
+  var previous = ws ? ws[key] : null;
+  if (ws) ws[key] = handler;
+  return function () {
+    if (ws && ws[key] === handler) ws[key] = previous || null;
+  };
+}
+
+/**
+ * Create a browser-compatible WebSocket transport for capture and viewer.
+ *
+ * @param {Object} options
+ * @returns {{
+ *   send: (type: string, payload: Object) => void,
+ *   flush: () => Promise<void>,
+ *   onMessage: (handler: (type: string, payload: Object) => void) => (() => void),
+ *   onStatus: (handler: (status: Object) => void) => (() => void),
+ *   close: () => void,
+ *   getHealth: () => Object
+ * }}
+ */
+export function createWebSocketTransport(options) {
+  var cfg = options || {};
+  var url = cfg.url;
+  if (!url || typeof url !== 'string') throw new Error('websocket-url-required');
+  var WebSocketCtor = cfg.WebSocket || (typeof WebSocket !== 'undefined' ? WebSocket : null);
+  if (typeof WebSocketCtor !== 'function') throw new Error('websocket-constructor-required');
+
+  var logger = cfg.logger || {
+    info: function () {},
+    warn: function () {},
+    error: function () {}
+  };
+  var now = typeof cfg.now === 'function' ? cfg.now : defaultNow;
+  var openState = typeof WebSocketCtor.OPEN === 'number' ? WebSocketCtor.OPEN : 1;
+  var statusState = 'connecting';
+  var messageHandlers = new Set();
+  var statusHandlers = new Set();
+  var sentByType = {};
+  var receivedByType = {};
+  var errors = [];
+  var drops = 0;
+  var lastSendAt = 0;
+  var lastReceiveAt = 0;
+  var sendQueue = Promise.resolve();
+  var receiveQueue = Promise.resolve();
+  var unsubscribers = [];
+  var ws = new WebSocketCtor(url);
+  if (ws && Object.prototype.hasOwnProperty.call(ws, 'binaryType')) {
+    try {
+      ws.binaryType = 'arraybuffer';
+    } catch (e) { /* non-browser fakes may reject binaryType */ }
+  }
+
+  function bufferedAmount() {
+    return ws && typeof ws.bufferedAmount === 'number' ? ws.bufferedAmount : 0;
+  }
+
+  function healthSnapshot(extra) {
+    return Object.assign({
+      state: statusState,
+      role: cfg.role || '',
+      readyState: ws && typeof ws.readyState !== 'undefined' ? ws.readyState : null,
+      bufferedAmount: bufferedAmount(),
+      sentByType: copyCounters(sentByType),
+      receivedByType: copyCounters(receivedByType),
+      lastSendAt: lastSendAt,
+      lastReceiveAt: lastReceiveAt,
+      drops: drops,
+      errors: errors.slice()
+    }, extra || {});
+  }
+
+  function emitStatus(state, extra) {
+    statusState = state || statusState;
+    var status = healthSnapshot(extra);
+    statusHandlers.forEach(function (handler) {
+      try {
+        handler(status);
+      } catch (e) {
+        recordError('status-handler-failed');
+      }
+    });
+  }
+
+  function recordError(code) {
+    var entry = {
+      code: code || 'transport-error',
+      ts: now()
+    };
+    pushBounded(errors, entry, 50);
+    return entry;
+  }
+
+  function increment(counter, type) {
+    var key = typeof type === 'string' && type ? type : 'unknown';
+    counter[key] = (counter[key] || 0) + 1;
+  }
+
+  function encodeOptions() {
+    return Object.assign({}, cfg, {
+      onStatus: function (status) {
+        if (status && status.reason) {
+          recordError(status.reason);
+          emitStatus(statusState, { reason: status.reason });
+        }
+      }
+    });
+  }
+
+  function safeLog(level, message, detail) {
+    try {
+      if (logger && typeof logger[level] === 'function') logger[level](message, detail);
+    } catch (e) { /* logging must not affect transport */ }
+  }
+
+  function isOpen() {
+    return ws && ws.readyState === openState;
+  }
+
+  function send(type, payload) {
+    var msg = { type: type, payload: payload || {}, ts: now() };
+    sendQueue = sendQueue.then(async function () {
+      if (!isOpen()) {
+        drops += 1;
+        recordError('websocket-not-open');
+        emitStatus('error', { reason: 'websocket-not-open' });
+        return;
+      }
+      var raw;
+      try {
+        raw = await encodeWireMessage(msg, encodeOptions());
+      } catch (err) {
+        recordError('encode-failed');
+        safeLog('error', '[Transport] encode failed', err);
+        emitStatus('error', { reason: 'encode-failed' });
+        return;
+      }
+      try {
+        ws.send(raw);
+        increment(sentByType, type);
+        lastSendAt = now();
+      } catch (err) {
+        drops += 1;
+        recordError('websocket-send-failed');
+        safeLog('error', '[Transport] websocket send failed', err);
+        emitStatus('error', { reason: 'websocket-send-failed' });
+      }
+    }, async function () {
+      recordError('send-queue-recovered');
+    });
+    sendQueue = sendQueue.catch(function (err) {
+      recordError('send-queue-failed');
+      safeLog('error', '[Transport] send queue failed', err);
+    });
+    return undefined;
+  }
+
+  function flush() {
+    return sendQueue.then(function () {});
+  }
+
+  function onMessage(handler) {
+    if (typeof handler !== 'function') return function () {};
+    messageHandlers.add(handler);
+    return function () {
+      messageHandlers.delete(handler);
+    };
+  }
+
+  function onStatus(handler) {
+    if (typeof handler !== 'function') return function () {};
+    statusHandlers.add(handler);
+    try {
+      handler(healthSnapshot());
+    } catch (e) {
+      recordError('status-handler-failed');
+    }
+    return function () {
+      statusHandlers.delete(handler);
+    };
+  }
+
+  async function handleMessage(event) {
+    var decoded = await decodeWireMessage(event && Object.prototype.hasOwnProperty.call(event, 'data') ? event.data : event, cfg);
+    if (!decoded.ok) {
+      recordError(decoded.error);
+      emitStatus('error', { reason: decoded.error });
+      return;
+    }
+    var msg = decoded.msg || {};
+    increment(receivedByType, msg.type);
+    lastReceiveAt = now();
+    messageHandlers.forEach(function (handler) {
+      try {
+        handler(msg.type, msg.payload || {});
+      } catch (err) {
+        recordError('message-handler-failed');
+        safeLog('error', '[Transport] message handler failed', err);
+      }
+    });
+  }
+
+  unsubscribers.push(addSocketListener(ws, 'open', function () {
+    emitStatus('open');
+  }));
+  unsubscribers.push(addSocketListener(ws, 'message', function (event) {
+    receiveQueue = receiveQueue.then(function () {
+      return handleMessage(event);
+    }).catch(function (err) {
+      recordError('message-decode-failed');
+      safeLog('error', '[Transport] message decode failed', err);
+      emitStatus('error', { reason: 'message-decode-failed' });
+    });
+  }));
+  unsubscribers.push(addSocketListener(ws, 'error', function () {
+    recordError('websocket-error');
+    emitStatus('error', { reason: 'websocket-error' });
+  }));
+  unsubscribers.push(addSocketListener(ws, 'close', function (event) {
+    emitStatus('closed', {
+      closeCode: event && typeof event.code === 'number' ? event.code : null,
+      closeReason: event && typeof event.reason === 'string' ? event.reason : ''
+    });
+  }));
+
+  function close() {
+    try {
+      unsubscribers.forEach(function (unsubscribe) { unsubscribe(); });
+      unsubscribers = [];
+      if (ws && typeof ws.close === 'function') ws.close();
+    } catch (err) {
+      recordError('websocket-close-failed');
+      safeLog('error', '[Transport] websocket close failed', err);
+      emitStatus('error', { reason: 'websocket-close-failed' });
+    }
+  }
+
+  return {
+    send: send,
+    flush: flush,
+    onMessage: onMessage,
+    onStatus: onStatus,
+    close: close,
+    getHealth: healthSnapshot
+  };
+}
