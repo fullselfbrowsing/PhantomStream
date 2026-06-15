@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 07-02-PLAN.md
-last_updated: "2026-06-15T16:26:29.667Z"
+stopped_at: Completed 07-03-PLAN.md
+last_updated: "2026-06-15T16:38:46.278Z"
 last_activity: 2026-06-15
 progress:
   total_phases: 13
   completed_phases: 6
   total_plans: 35
-  completed_plans: 33
-  percent: 94
+  completed_plans: 34
+  percent: 97
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-06-14)
 ## Current Position
 
 Phase: 07 (weakmap-node-identity-semantic-addressing-api) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-06-15
 
-Progress: [█████████░] 94%
+Progress: [██████████] 97%
 
 ## Performance Metrics
 
@@ -75,6 +75,7 @@ Progress: [█████████░] 94%
 | Phase 06 P05 | 17 min | 3 tasks | 7 files |
 | Phase 07 P01 | 20 min | 3 tasks | 11 files |
 | Phase 07 P02 | 14 min | 3 tasks | 8 files |
+| Phase 07 P03 | 7min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -120,6 +121,9 @@ Recent decisions affecting current work:
 - [Phase 07]: Renderer identity is owned by createViewer and rebuilt from nodeIds after post-parse sanitization. — Ensures only sanitized mirror nodes are addressable and keeps identity state inside the viewer lifecycle.
 - [Phase 07]: applyMutations has no nid selector fallback; callers must inject identity hooks for nid-addressed ops. — Prevents reintroducing per-op querySelector identity resolution and keeps diff.js document-parameterized.
 - [Phase 07]: Viewer tests now inspect normal page ids or sidecar metadata instead of mirror data-fsb-nid attributes. — The mirror DOM no longer carries framework identity attributes after the renderer index migration.
+- [Phase 07]: Viewer semantic resolution returns geometry and identity only. — Prevents the public semantic API from exposing mirrored HTML, text, attrs, payloads, URLs, titles, or DOM references.
+- [Phase 07]: highlightNode is local renderer overlay behavior. — Node highlighting uses the existing host overlay layer and never sends STREAM.OVERLAY or expands remote-control dispatch.
+- [Phase 07]: Capture getNodeId is live-public while internal removed-node identity remains available. — Public hosts get null for detached or inactive nodes, but capture internals can still emit correct removal diffs during mutation batching.
 
 ### Pending Todos
 
@@ -143,6 +147,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-15T16:26:29.663Z
-Stopped at: Completed 07-02-PLAN.md
+Last session: 2026-06-15T16:38:46.273Z
+Stopped at: Completed 07-03-PLAN.md
 Resume file: None
