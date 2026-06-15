@@ -25,7 +25,7 @@ index.js      createViewer factory + barrel re-exports of all of the above
 import { createViewer } from '@fullselfbrowsing/phantom-stream/renderer';
 
 const viewer = createViewer({ container, transport, logger });
-// -> { detach, destroy, registerOverlay, on, resolveNode, highlightNode, clearHighlight }
+// -> { detach, destroy, registerOverlay, on, resolveNode, highlightNode, clearHighlight, requestSubtree }
 ```
 
 Calling the factory auto-attaches a live mirror: the viewer root (stamped
@@ -120,6 +120,12 @@ streaming.
   resolved nid using the existing overlay layer. Optional labels are written
   with `textContent`. Returns `false` for unresolved ids.
 - `clearHighlight()` — remove the local semantic highlight. Idempotent.
+- `requestSubtree(nid, options?)` — ask capture for one missing or truncated
+  subtree. Returns a generated request id when the nid is current and no
+  request for that nid is already in flight, otherwise `null`. Requests carry
+  the active `streamSessionId`/`snapshotId`; stale, miss, and mismatched
+  `STREAM.SUBTREE_RESPONSE` frames are ignored softly and clear only their
+  matching latch.
 
 ## Node identity index and semantic addressing
 
@@ -134,6 +140,56 @@ not own an identity selector fallback, and normal nid-addressed ops do not use
 per-op `querySelector` lookup. Overlay anchor resolution, `resolveNode`, and
 `highlightNode` all route through the same index, so stale ids fail softly in
 one place with content-free diagnostics.
+
+The same index now spans Phase 8 scopes. Snapshot, add-op, and subtree payloads
+can carry `shadowRoots[]` and `frames[]` sidecars; the renderer indexes those
+descendants only after the mirror document, shadow fragment, or frame document
+has been parsed and sanitized.
+
+## Phase 8 reconstruction and recovery
+
+### Shadow roots
+
+`STREAM.SNAPSHOT`, add ops, and `DIFF_OP.SHADOW_ROOT` mutations can include
+open shadow root sidecars keyed by `hostNid`. The renderer resolves the host
+through the private identity index, calls `attachShadow({ mode: 'open' })`,
+parses the sidecar HTML in a template, runs `sanitizeFragment`, appends the
+fragment, and indexes the shadow `nodeIds`. Slotted light-DOM children are not
+duplicated into the shadow payload; the browser's real slot distribution owns
+projection.
+
+Closed shadow roots are not reconstructed because capture cannot read them.
+There is no selector fallback for shadow addressing.
+
+### Iframes
+
+Same-origin frame sidecars are rendered as inert nested `srcdoc` documents with
+the same CSP discipline and a sandbox that does not include `allow-scripts`.
+The renderer indexes frame-local `nodeIds` after the frame document loads.
+Cross-origin iframe content is not mirrored; cross-origin entries render as
+content-free labeled placeholders using safe src/origin metadata only.
+
+### Value diffs
+
+`DIFF_OP.VALUE` applies form-control property state without replacing the
+node. The applier resolves `nid` through the identity index and updates
+`value`, `checked`, and `selectedValues` as present. Missing nids follow the
+same stale-miss accounting as other diff ops. Capture masks value payloads
+before transport, so the renderer never receives raw password values when
+masking applies.
+
+### Subtree responses
+
+`requestSubtree` sends `CONTROL.SUBTREE_REQUEST` for a specific current nid and
+latches by nid until a matching response arrives. `STREAM.SUBTREE_RESPONSE`
+with `status: 'ok'` replaces only the matching
+`data-phantomstream-truncated="true"` marker after parsing and
+`sanitizeFragment`; response `nodeIds`, `shadowRoots[]`, and `frames[]` are
+then indexed through the same hooks used by snapshots and add ops.
+
+Stale, gone, skipped, blocked, untracked, or mismatched responses do not mutate
+the mirror. The latch is bounded so one missing region cannot create request
+storms.
 
 ## Event contract (VIEW-02)
 

@@ -156,23 +156,46 @@ function extractReferenceIdentityHtml(html) {
 function normalizeIdentitySidecarPayloadPair(refPayload, otherPayload) {
   if (!refPayload || !otherPayload) return [refPayload, otherPayload];
   if (typeof refPayload.html !== 'string' || typeof otherPayload.html !== 'string') {
-    return [refPayload, otherPayload];
+    return normalizeEmptyPhase8SidecarsPair(refPayload, otherPayload);
   }
   if (!Array.isArray(otherPayload.nodeIds)) return [refPayload, otherPayload];
 
   const refIdentity = extractReferenceIdentityHtml(refPayload.html);
-  if (refIdentity.nodeIds.length === 0) return [refPayload, otherPayload];
+  if (refIdentity.nodeIds.length === 0) {
+    return normalizeEmptyPhase8SidecarsPair(refPayload, otherPayload);
+  }
   if (!sameStringArray(refIdentity.nodeIds, otherPayload.nodeIds)) {
-    return [refPayload, otherPayload];
+    return normalizeEmptyPhase8SidecarsPair(refPayload, otherPayload);
   }
 
-  return [
+  return normalizeEmptyPhase8SidecarsPair(
     Object.assign({}, refPayload, {
       html: refIdentity.html,
       nodeIds: refIdentity.nodeIds,
     }),
-    otherPayload,
-  ];
+    otherPayload
+  );
+}
+
+function hasOwn(obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function normalizeEmptyPhase8SidecarsPair(refPayload, otherPayload) {
+  if (!refPayload || !otherPayload) return [refPayload, otherPayload];
+
+  const nextRef = Object.assign({}, refPayload);
+  let changed = false;
+  for (const key of ['shadowRoots', 'frames']) {
+    if (!hasOwn(nextRef, key)
+      && Array.isArray(otherPayload[key])
+      && otherPayload[key].length === 0) {
+      nextRef[key] = [];
+      changed = true;
+    }
+  }
+
+  return changed ? [nextRef, otherPayload] : [refPayload, otherPayload];
 }
 
 function normalizeIdentitySidecarMutationPair(refPayload, otherPayload) {

@@ -121,7 +121,8 @@ test('renderer modules never reference allow-scripts outside comments', () => {
 
 test('renderer innerHTML assignment sinks are allowlisted and explained', () => {
   const expectedInnerHtmlAssignments = {
-    'diff.js': 1,
+    'diff.js': 2,
+    'index.js': 2,
     'overlays.js': 2
   };
 
@@ -137,7 +138,7 @@ test('renderer innerHTML assignment sinks are allowlisted and explained', () => 
       expected,
       `src/renderer/${file} has ${count} innerHTML assignment sink(s); ` +
         'new wire-content sinks must route through sanitizeFragment. ' +
-        'Only diff.js template parsing and overlays.js static ICON_SVG writes are sanctioned.'
+        'Only diff.js/index.js template parsing and overlays.js static ICON_SVG writes are sanctioned.'
     );
   }
 
@@ -145,6 +146,16 @@ test('renderer innerHTML assignment sinks are allowlisted and explained', () => 
   assert.ok(
     /tpl\.innerHTML\s*=\s*m\.html/.test(diff),
     'diff.js innerHTML sink must remain the template parse of m.html'
+  );
+  assert.ok(
+    /tpl\.innerHTML\s*=\s*p\.html\s*\|\|\s*''/.test(diff),
+    'diff.js shadow root sink must remain the template parse of p.html'
+  );
+  const index = strippedRendererModule('index.js');
+  assert.equal(
+    countMatches(index, /tpl\.innerHTML\s*=\s*p\.html\s*\|\|\s*''/g),
+    2,
+    'index.js sinks must remain the template parses of Phase 8 shadow/subtree p.html'
   );
 });
 

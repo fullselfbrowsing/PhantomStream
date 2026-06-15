@@ -18,7 +18,7 @@ is side-effect free.
 import { createCapture } from '@fullselfbrowsing/phantom-stream/capture';
 
 const capture = createCapture({ transport, logger, overlayProvider, skipElement });
-// -> { start, stop, pause, resume, getNodeId }
+// -> { start, stop, pause, resume, getNodeId, handleControl }
 ```
 
 | Option | Required | Default | Purpose |
@@ -91,6 +91,85 @@ const nid = capture.getNodeId(element);
 `Element`, or `null` for inactive sessions, skipped nodes, untracked nodes,
 non-elements, and disconnected elements. It is the capture-side bridge for
 semantic addressing; it exposes identity only, never mirrored content.
+
+## Phase 8 fidelity surfaces
+
+Open shadow roots, same-origin iframes, live form values, late-added computed
+styles, and truncated subtree recovery extend the same Phase 7 identity model.
+They do not reintroduce live-page `data-fsb-nid` writes or selector fallback.
+
+### Open shadow roots
+
+Snapshot and add-op serialization traverses every discovered open `shadowRoot`
+and emits `shadowRoots[]` sidecars keyed by the light-DOM host nid. The host
+stays in the main `html`; shadow content travels as sanitized shadow HTML plus
+its own `nodeIds`. `<slot>` elements remain in the shadow payload, while
+slotted light-DOM children remain owned by the host's normal child list, so
+slot projection is not duplicated.
+
+Capture observes open shadow roots deliberately. Existing roots are observed
+when streaming starts, newly attached roots are discovered through the
+`attachShadow` wrapper, and later shadow mutations emit `DIFF_OP.SHADOW_ROOT`
+replacement ops keyed by `hostNid`. Closed shadow roots are not introspectable
+and are not captured.
+
+### Iframes
+
+Same-origin iframes serialize through `frames[]` sidecars keyed by `frameNid`.
+Accessible frame documents carry sanitized body HTML, frame-local `nodeIds`,
+frame shell attrs/styles, nested `frames[]`, and head stylesheet metadata.
+Frame document roots are observed so same-origin frame mutations and value
+diffs stream with frame-scoped identity.
+
+Cross-origin iframe content is never read. Inaccessible frames emit
+content-free metadata only: kind, safe src/origin labels, and dimensions where
+available. The main payload keeps the iframe host but not remote document
+content.
+
+### Live value diffs
+
+MutationObserver cannot see property-only form value drift, so capture installs
+`input` and `change` listeners on the main document, open shadow roots, and
+same-origin frame documents. Listener output is a narrow `DIFF_OP.VALUE` op
+with the control nid plus only the relevant state: `value`, `checked`, and/or
+`selectedValues`.
+
+All value-bearing fields pass through the existing masking chokepoint before
+transport. Password values remain always masked; `maskInputs` and
+`maskInputFn` apply to value diffs exactly as they do to snapshot and attr
+paths. Diagnostics and health telemetry do not carry typed values.
+
+### Added-node styles
+
+Add ops now collect curated computed styles for each live element in the added
+subtree before mutating the detached wire clone. This reuses `CURATED_PROPS`
+and `STYLE_DEFAULTS`, appending declarations to existing inline styles before
+`sanitizeForWire('subtree')`. The capture does not enumerate every computed
+property and does not implement full CSSOM capture; stylesheet-centric CSSOM
+mode remains Phase 9.
+
+### Subtree requests
+
+Budget truncation replaces dropped roots with
+`data-phantomstream-truncated="true"` markers while preserving their nids in
+`nodeIds`. Hosts/viewers can request a specific missing or truncated nid by
+calling capture through:
+
+```js
+capture.handleControl(CONTROL.SUBTREE_REQUEST, {
+  requestId,
+  nid,
+  streamSessionId,
+  snapshotId,
+  reason,
+});
+```
+
+`handleControl` emits `STREAM.SUBTREE_RESPONSE` with `status: 'ok'`, `stale`,
+`gone`, `skipped`, `blocked`, or `untracked`. Successful responses reuse the
+add-op serialization policy: sanitized HTML, masking, URL absolutification,
+curated styles, `nodeIds`, `shadowRoots[]`, and `frames[]`. Miss responses are
+content-free and clear the request path without exposing page data.
 
 ## Module layout
 
@@ -167,8 +246,6 @@ divergence, so it lives here rather than in the differential ledger):
 
 ## Behavioral changes queued for the standalone version
 
-- Capture computed styles for nodes added after the snapshot (Phase 8;
-  reference gap #2 in ARCHITECTURE.md §6).
 - Optional stylesheet-centric capture mode (CSSOM) for the paper's ablation
   study (Phase 9).
 

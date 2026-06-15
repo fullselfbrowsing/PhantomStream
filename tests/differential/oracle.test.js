@@ -13,7 +13,8 @@
 // Mode 2 (ref-vs-EXTRACTED, the phase exit bar): the same matrix with side B
 // flipped to src/capture/index.js behind a flush-less loopback transport.
 // Every intentional divergence must be a declared ledger entry (D1 in
-// pause-resume, D6 in text-childlist, D7 in sanitize-divergence); any
+// pause-resume, D6 in text-childlist, D7 in sanitize-divergence, and
+// D24-scoped Phase 8 protocol extensions); any
 // undeclared divergence fails the suite, and stale-entry detection (LAST test
 // in the file) proves every mismatch-kind ledger entry actually matched a real
 // divergence.
@@ -34,6 +35,7 @@ import * as dialog from './scenarios/dialog.js';
 import * as pauseResume from './scenarios/pause-resume.js';
 import * as textChildlist from './scenarios/text-childlist.js';
 import * as sanitizeDivergence from './scenarios/sanitize-divergence.js';
+import * as phase8ProtocolExtensions from './scenarios/phase8-protocol-extensions.js';
 
 /**
  * The full fixture x scenario matrix. Every reliability defense from the
@@ -55,6 +57,7 @@ const MATRIX = [
   { fixture: 'truncation-overflow.html', scenario: snapshotOnly, config: { patchRects: true } },
   { fixture: 'canvas.html', scenario: snapshotOnly, config: {} },
   { fixture: 'dialog.html', scenario: dialog, config: { runScripts: 'dangerously' } },
+  { fixture: 'phase8-fidelity.html', scenario: phase8ProtocolExtensions, config: {} },
 ];
 
 function loadFixture(fixtureFile) {
@@ -363,13 +366,47 @@ for (const entry of MATRIX) {
         extOps.some((op) => op.op === DIFF_OP.ATTR && op.attr === 'href' && op.val === null),
         'extracted mutation batch carries the href removal attr op'
       );
+    } else if (entry.fixture === 'truncation-overflow.html' && entry.scenario.name === 'snapshot-only') {
+      assert.ok(
+        matched.has('D24-phase8-truncated-subtree-markers'),
+        'truncation-overflow snapshot-only exercises the Phase 8 subtree marker ledger entry'
+      );
+      assert.equal(
+        matched.size,
+        1,
+        `only D24 subtree marker entry consulted for truncation-overflow (matched: ${[...matched].join(', ')})`
+      );
+    } else if (['basic-mutations', 'mutation-burst', 'structural-ops'].includes(entry.scenario.name)) {
+      assert.ok(
+        matched.has('D24-phase8-add-op-computed-styles'),
+        `${entry.scenario.name} exercises the Phase 8 add-op computed style ledger entry`
+      );
+      assert.equal(
+        matched.size,
+        1,
+        `only D24 add-op computed style entry consulted (matched: ${[...matched].join(', ')})`
+      );
+    } else if (entry.scenario.name === 'phase8-protocol-extensions') {
+      assert.ok(
+        matched.has('D24-phase8-shadow-frame-snapshot-sidecars'),
+        'Phase 8 fixture exercises shadow/frame snapshot sidecar divergence'
+      );
+      assert.ok(
+        matched.has('D24-phase8-shadow-value-mutations'),
+        'Phase 8 fixture exercises shadow-root and value mutation divergence'
+      );
+      assert.equal(
+        matched.size,
+        2,
+        `only D24 Phase 8 protocol entries consulted (matched: ${[...matched].join(', ')})`
+      );
     } else {
-      // D1/D6/D7 (and any future mismatch entry) must stay scoped: every
-      // scenario other than pause-resume, text-childlist, and
-      // sanitize-divergence compares clean with ZERO ledger consultations.
+      // D1/D6/D7/D24 (and any future mismatch entry) must stay scoped:
+      // every scenario other than the named divergence scenarios compares
+      // clean with ZERO ledger consultations.
       assert.equal(
         matched.size, 0,
-        `no ledger consultation outside pause-resume/text-childlist/sanitize-divergence (matched: ${[...matched].join(', ') || 'none'})`
+        `no ledger consultation outside pinned divergence scenarios (matched: ${[...matched].join(', ') || 'none'})`
       );
     }
   });
@@ -443,6 +480,36 @@ test('sanitize-divergence with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D
   // The divergence is REAL: without the ledger, the exact same stream pair
   // that passes above must fail loudly. This proves D7 is the thing
   // permitting it, not a comparison blind spot.
+  assert.throws(
+    () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
+    /UNDECLARED DIVERGENCE/
+  );
+});
+
+test('phase8-protocol-extensions with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D24 entries are load-bearing', async () => {
+  const entry = MATRIX.find((p) => p.scenario === phase8ProtocolExtensions);
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
+  assert.throws(
+    () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
+    /UNDECLARED DIVERGENCE/
+  );
+});
+
+test('truncation-overflow snapshot-only with an EMPTY ledger throws UNDECLARED DIVERGENCE -- subtree markers are load-bearing', async () => {
+  const entry = MATRIX.find((p) => p.fixture === 'truncation-overflow.html');
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
+  assert.throws(
+    () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
+    /UNDECLARED DIVERGENCE/
+  );
+});
+
+test('basic-mutations with an EMPTY ledger throws UNDECLARED DIVERGENCE -- add-op computed styles are load-bearing', async () => {
+  const entry = MATRIX.find((p) => p.scenario === basicMutations);
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
   assert.throws(
     () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
     /UNDECLARED DIVERGENCE/

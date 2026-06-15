@@ -10,9 +10,11 @@ PhantomStream mirrors a live browser tab to a remote viewer by streaming the pag
 **structured DOM data** rather than pixels:
 
 1. **Snapshot** — a one-time, style-inlined serialization of `document.body`, rebuilt by the
-   viewer into a sandboxed iframe.
+   viewer into a sandboxed iframe. Standalone Phase 8 extends the snapshot with
+   `nodeIds`, `shadowRoots[]`, and `frames[]` sidecars for scoped identity.
 2. **Diffs** — incremental MutationObserver batches (`add` / `rm` / `attr` / `text` ops)
-   addressed by stable node IDs, applied surgically to the mirror.
+   addressed by stable node IDs, applied surgically to the mirror. Phase 8 also
+   streams `shadow-root` replacement ops and narrow `value` ops.
 3. **Side channels** — scroll position, automation overlays (action glow, progress), and
    native dialog mirroring.
 4. **Reverse path** — remote control: clicks, typing, and scrolling performed on the mirror
@@ -53,7 +55,12 @@ page data rather than PhantomStream identity.
 - Absolutifies URL attributes (`src`, `href`, `action`, `poster`, `data`, `srcset`,
   SVG `xlink:href`) against `document.baseURI`.
 - Converts `<canvas>` to a data-URL `<img>` (tainted canvases degrade gracefully).
-- Keeps iframes live with absolutified `src` but neuters them with `pointer-events:none`.
+- In the FSB reference, iframes stayed live with absolutified `src` and
+  `pointer-events:none`. In the standalone Phase 8 framework, same-origin
+  iframes serialize as scoped `frames[]` sidecars keyed by `frameNid`, while
+  cross-origin iframe content remains a content-free placeholder.
+- Open shadow roots serialize as `shadowRoots[]` sidecars keyed by `hostNid`.
+  Shadow slots remain slots; slotted light-DOM children are not duplicated.
 - Captures **curated computed styles**: ~85 visual-fidelity CSS properties
   (`CURATED_PROPS`) inlined as a `style` attribute, with common default values elided
   (`STYLE_DEFAULTS`). Iterating all 300+ computed properties made a YouTube serialize take
@@ -88,16 +95,33 @@ matched to the page's paint cadence. `processMutationBatch` converts records to 
 | `rm` | `nid` | remove subtree |
 | `attr` | `nid`, `attr`, `val` | attribute change (URLs re-absolutified) |
 | `text` | `nid`, `text` | character data change (addressed via parent nid) |
+| `shadow-root` | `hostNid`, `html`, `nodeIds` | replace a mirrored open shadow root after sanitization |
+| `value` | `nid`, `value` / `checked` / `selectedValues` | apply property-only form value drift |
 
 Mutations on untracked nodes (no nid) and on the host's own overlay are skipped.
+Open shadow roots and same-origin frame documents are observed explicitly, so
+their mutations do not depend on `document.body` observer reachability.
+Newly added subtrees carry curated computed styles in add-op HTML, collected in
+a read pass before detached clone mutation.
 
-### 2.5 Watchdog #1 (content script)
+### 2.5 Subtree recovery
+
+Standalone Phase 8 makes truncation interactive instead of purely passive.
+Dropped snapshot roots are replaced by `data-phantomstream-truncated="true"`
+markers whose nids stay in `nodeIds`. The viewer or host can request a single
+nid with `CONTROL.SUBTREE_REQUEST`; capture answers with
+`STREAM.SUBTREE_RESPONSE` carrying either content-free miss status or an `ok`
+payload that reuses add-op serialization: sanitized HTML, masking, URL
+absolutification, curated styles, `nodeIds`, `shadowRoots[]`, and `frames[]`.
+Requests are session/snapshot checked and are bounded by renderer-side latches.
+
+### 2.6 Watchdog #1 (content script)
 
 A 5 s self-watchdog (a `setTimeout` chain, not `setInterval`, so cadence resets on every
 drain) force-flushes a stuck mutation queue and increments `staleFlushCount`, which rides
 the next flush envelope so the host can observe rescue frequency.
 
-### 2.6 Side channels
+### 2.7 Side channels
 
 - **Scroll** — passive listener, throttled to 1 event / 200 ms.
 - **Overlay** — broadcasts the automation action-glow rect and progress card state,
@@ -106,7 +130,7 @@ the next flush envelope so the host can observe rescue frequency.
   `prompt` to dispatch `CustomEvent`s before/after the native call; the content script
   relays open/closed states so the viewer can show styled dialog cards.
 
-### 2.7 Lifecycle & readiness
+### 2.8 Lifecycle & readiness
 
 Control messages: `domStreamStart` (fresh session + snapshot + observers),
 `domStreamStop`, `domStreamPause` (observers off, session retained), `domStreamResume`
@@ -157,6 +181,14 @@ script.
   nids through an internal `Map<nid, Node>` index. Misses are still recorded
   (a consequence of truncation or lost messages) and degrade to awaiting the
   next snapshot.
+- **Shadow/frame reconstruction**: Phase 8 installs real open mirror shadow
+  roots from sanitized sidecars and reconstructs same-origin frame payloads as
+  inert nested `srcdoc` documents. Cross-origin iframe content is rendered only
+  as a safe placeholder label; no origin bypass is attempted.
+- **Value/subtree handling**: `DIFF_OP.VALUE` updates form-control properties
+  through the identity index. `requestSubtree()` sends bounded
+  `CONTROL.SUBTREE_REQUEST` frames and applies current `STREAM.SUBTREE_RESPONSE`
+  payloads only after render-side sanitization.
 - **Layout modes**: inline, maximized, picture-in-picture (drag-to-reposition), fullscreen
   (mouse-tracked exit overlay), with viewport-adaptive scale math per mode.
 - **Overlays**: action glow rect, progress card, and dialog cards positioned in mirror
@@ -181,27 +213,34 @@ script.
 
 ## 6. Known limitations (inherited; targets for the standalone framework)
 
-These are honest weaknesses of the shipped design, documented here because fixing them is
-part of this repository's roadmap (and the paper's discussion section):
+These are honest weaknesses of the shipped/reference design and the remaining
+standalone limitations after Phase 8:
 
-1. **Frozen computed styles.** Inlined styles are snapshot-time state. Class-flip diffs
+1. **Frozen computed styles / CSSOM mode remains Phase 9.** Inlined styles are snapshot-time state. Class-flip diffs
    (`attr` ops) cannot override stale inline styles in the mirror, so style-dynamic UI
    drifts until the next full snapshot. A stylesheet-centric capture (CSSOM /
    `adoptedStyleSheets`) would fix this and shrink payloads enough to retire most of the
    truncation machinery.
-2. **Added nodes carry no computed styles.** Add ops carry `nodeIds` sidecars
-   and fixed URLs, but do not capture computed styles, so post-snapshot content
-   renders inconsistently with snapshot-era siblings.
+2. **Added-node computed styles resolved in standalone Phase 8.** Add ops now
+   carry curated computed styles using the same default-elision discipline as
+   snapshots. Full CSSOM capture is still not part of Phase 8.
 3. **Former nid stamping limitation resolved in standalone Phase 7.** The
    reference `data-fsb-nid` live-page mutation is now replaced by WeakMap
    capture identity and `nodeIds` sidecars in the standalone framework. This
    entry remains here as design history for the FSB reference behavior, not as
    a current framework limitation.
-4. **Truncation recovery is passive.** Diff targets inside dropped subtrees miss until the
-   next snapshot; an on-demand subtree fetch would close the gap.
+4. **Truncation recovery resolved in standalone Phase 8 for explicit requests.**
+   Diff targets inside dropped subtrees no longer have to wait for the next full
+   snapshot when the host/viewer calls `requestSubtree`. Recovery is still
+   bounded and explicit; PhantomStream does not automatically crawl every miss.
 5. **Blocklist sanitizer coverage is intentionally conservative.** Capture and renderer
    chokepoints now strip event handlers, dangerous URL schemes, `srcdoc`,
    object/embed/script-like subtrees, and hostile CSS before mirrored content is
    transported or inserted. This is still a framework-maintained blocklist, so the
    viewer iframe remains sandboxed without `allow-scripts` as defense in depth.
-6. **Shadow DOM, `<video>`/`<audio>`, and cross-origin iframe content are not mirrored.**
+6. **Open shadow DOM and same-origin iframes resolved in standalone Phase 8.**
+   Remaining limits are closed shadow roots, cross-origin iframe content,
+   `<video>`/`<audio>` media pixels/streams, and full CSSOM stylesheet-centric
+   capture. Closed shadow roots and cross-origin iframe content are browser
+   security boundaries; Phase 8 documents them as non-captured content rather
+   than faking or bypassing them.

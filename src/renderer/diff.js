@@ -171,8 +171,10 @@ export function applyMutations(doc, mutations, counters, hooks) {
             // TEMPLATE-context parse (03-RESEARCH Pattern 2, jsdom-29-
             // verified): template content accepts any HTML, so context-
             // dependent elements (<tr>, <td>, <col>, <option>, ...) no
-            // longer drop. This is the renderer's ONLY innerHTML sink for
-            // wire content (plan 03-05's purity scan pins it).
+            // longer drop. This is one of the renderer's two sanctioned
+            // innerHTML sinks for wire content; the other is the Phase 8
+            // shadow-root replacement parser above. Both are followed by
+            // sanitizeFragment and pinned by the purity scan.
             var tpl = doc.createElement('template');
             tpl.innerHTML = m.html;
             // RENDER-SIDE CHOKEPOINT (SEC-02): scrub the PARSED fragment

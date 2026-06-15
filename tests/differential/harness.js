@@ -297,6 +297,9 @@ export async function settle(win) {
  */
 export async function runScenario(side, scenario) {
   try {
+    if (typeof scenario.beforeStart === 'function') {
+      await scenario.beforeStart(side, settle);
+    }
     side.start();
     await scenario.run(side, settle);
     side.stop();

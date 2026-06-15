@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PhantomStream Phase 8 fidelity fixture</title>
+  <style>
+    fs-card { display: block; color: rgb(30, 30, 30); }
+    iframe { border: 0; width: 320px; height: 180px; }
+  </style>
+</head>
+<body>
+  <main id="phase8-root">
+    <fs-card id="phase8-card">
+      <span id="phase8-title" slot="title">Projected title</span>
+      <p id="phase8-light-body">Projected body</p>
+    </fs-card>
+    <iframe id="phase8-frame" src="/frame.html"></iframe>
+    <label for="phase8-input">Live value</label>
+    <input id="phase8-input" type="text" value="before">
+  </main>
+</body>
+</html>
