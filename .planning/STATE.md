@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 7 context gathered
-last_updated: "2026-06-15T16:07:10.010Z"
+stopped_at: Completed 07-02-PLAN.md
+last_updated: "2026-06-15T16:26:29.667Z"
 last_activity: 2026-06-15
 progress:
   total_phases: 13
   completed_phases: 6
   total_plans: 35
-  completed_plans: 32
-  percent: 46
+  completed_plans: 33
+  percent: 94
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-06-14)
 ## Current Position
 
 Phase: 07 (weakmap-node-identity-semantic-addressing-api) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-06-15
 
-Progress: [█████████░] 91%
+Progress: [█████████░] 94%
 
 ## Performance Metrics
 
@@ -74,6 +74,7 @@ Progress: [█████████░] 91%
 | Phase 06 P03 | 20 min | 3 tasks | 7 files |
 | Phase 06 P05 | 17 min | 3 tasks | 7 files |
 | Phase 07 P01 | 20 min | 3 tasks | 11 files |
+| Phase 07 P02 | 14 min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -116,6 +117,9 @@ Recent decisions affecting current work:
 - [Phase 07]: nodeIds sidecars preserve snapshot/add identity while existing diff fields remain nid-addressed.
 - [Phase 07]: Renderer bridge stamps mirror DOM from sidecars until 07-02 replaces selector lookup with a Map index.
 - [Phase 07]: Capture identity is WeakMap-backed and page-owned data-fsb-nid remains ordinary page data.
+- [Phase 07]: Renderer identity is owned by createViewer and rebuilt from nodeIds after post-parse sanitization. — Ensures only sanitized mirror nodes are addressable and keeps identity state inside the viewer lifecycle.
+- [Phase 07]: applyMutations has no nid selector fallback; callers must inject identity hooks for nid-addressed ops. — Prevents reintroducing per-op querySelector identity resolution and keeps diff.js document-parameterized.
+- [Phase 07]: Viewer tests now inspect normal page ids or sidecar metadata instead of mirror data-fsb-nid attributes. — The mirror DOM no longer carries framework identity attributes after the renderer index migration.
 
 ### Pending Todos
 
@@ -139,6 +143,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-15T16:05:11.481Z
-Stopped at: Phase 7 context gathered
+Last session: 2026-06-15T16:26:29.663Z
+Stopped at: Completed 07-02-PLAN.md
 Resume file: None
