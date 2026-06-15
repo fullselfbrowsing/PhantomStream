@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 4 context gathered
-last_updated: "2026-06-15T05:16:26.880Z"
-last_activity: 2026-06-15 -- Phase 04 execution started
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-06-15T05:27:55.620Z"
+last_activity: 2026-06-15
 progress:
   total_phases: 13
   completed_phases: 3
   total_plans: 20
-  completed_plans: 16
-  percent: 80
+  completed_plans: 17
+  percent: 85
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-06-14)
 ## Current Position
 
 Phase: 04 (relay-ws-transport-two-tab-demo) — EXECUTING
-Plan: 1 of 4
-Status: Executing Phase 04
-Last activity: 2026-06-15 -- Phase 04 execution started
+Plan: 2 of 4
+Status: Ready to execute
+Last activity: 2026-06-15
 
 Progress: [██████████] 100%
 
@@ -56,6 +56,7 @@ Progress: [██████████] 100%
 *Updated after each plan completion*
 | Phase 03 P03 | 5min | 2 tasks | 2 files |
 | Phase 03 P04 | 6 min | 2 tasks | 4 files |
+| Phase 04 P01 | 7 min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -72,6 +73,9 @@ Recent decisions affecting current work:
 - [Phase 03]: Masking stays capture-side only; createViewer remains untouched. — SEC-03 requires masked content to be transformed before transport; renderer-side masking would be too late.
 - [Phase 03]: Blocked elements serialize as rr_width/rr_height/data-fsb-nid placeholders only. — This preserves layout/addressability without sending blocked attributes, children, or text.
 - [Phase 03]: D7-capture-sanitization is one scenario-pinned, same-index mismatch entry covering snapshot and mutation sanitization/masking.
+- [Phase 04]: Relay fan-out remains raw and transport-agnostic; payload transform/compression stays at endpoints. — Maintains D-08/D-09 and keeps future WebSocket transport responsible for endpoint compression.
+- [Phase 04]: The ws backend validates path, room, and role before room attachment and disables permessage-deflate. — Satisfies RELY-01/T-04-01/T-04-09 while preserving independently decodable PhantomStream frames.
+- [Phase 04]: Oversize and backpressure failures stay in bounded in-memory diagnostics for this phase. — Matches D-11/D-12/D-13 and keeps relay observability testable without adding an admin surface.
 
 ### Pending Todos
 
@@ -95,6 +99,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-15T04:13:28.550Z
-Stopped at: Phase 4 context gathered
-Resume file: .planning/phases/04-relay-ws-transport-two-tab-demo/04-CONTEXT.md
+Last session: 2026-06-15T05:27:55.617Z
+Stopped at: Completed 04-01-PLAN.md
+Resume file: None

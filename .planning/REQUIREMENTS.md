@@ -39,7 +39,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Transport & Relay (RELY)
 
-- [ ] **RELY-01**: Relay is transport-agnostic with pluggable backends; a self-hostable WebSocket reference implementation ships with per-message size cap and oversize diagnostics
+- [x] **RELY-01**: Relay is transport-agnostic with pluggable backends; a self-hostable WebSocket reference implementation ships with per-message size cap and oversize diagnostics
 - [ ] **RELY-02**: Compression envelope uses native `CompressionStream('deflate-raw')` by default with lz-string-compatible decode for FSB backward compatibility; async codec preserves message ordering
 
 ### Host Adapters (ADPT)
@@ -132,7 +132,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | VIEW-04 | Phase 2 | Complete |
 | VIEW-05 | Phase 5 | Pending |
 | VIEW-06 | Phase 2 | Complete |
-| RELY-01 | Phase 4 | Pending |
+| RELY-01 | Phase 4 | Complete |
 | RELY-02 | Phase 4 | Pending |
 | ADPT-01 | Phase 6 | Pending |
 | ADPT-02 | Phase 5 | Pending |

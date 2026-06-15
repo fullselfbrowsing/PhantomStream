@@ -15,8 +15,13 @@ managua/                          # Repo root
 │   │   └── index.js              # Re-exports all protocol symbols
 │   ├── capture/                  # STUB — page-side capture (README only)
 │   │   └── README.md
-│   ├── relay/                    # STUB — transport relay (README only)
-│   │   └── README.md
+│   ├── relay/                    # ACTIVE — relay core, limits, ws backend
+│   │   ├── README.md
+│   │   ├── index.js              # Re-exports relay surfaces
+│   │   ├── limits.js             # Frame classification + 1 MiB cap checks
+│   │   ├── relay.js              # Transport-agnostic room fan-out core
+│   │   └── backends/
+│   │       └── ws.js             # ws-backed reference backend
 │   └── renderer/                 # STUB — viewer-side reconstruction (README only)
 │       └── README.md
 ├── reference/                    # Verbatim FSB source (provenance: commit 867d6f0c)
@@ -53,8 +58,10 @@ managua/                          # Repo root
 │   │       ├── 211-stream-reliability-diagnostic-logging/
 │   │       └── 276-dashboard-dom-streaming-diagnostic-minimum-patch/
 │   └── README.md                 # Reference provenance note
-├── tests/                        # Framework tests (protocol module)
-│   └── protocol.test.js          # Node built-in test runner; 7 tests
+├── tests/                        # Framework tests (protocol/capture/renderer/relay)
+│   ├── protocol.test.js          # Protocol envelope/constants tests
+│   ├── relay-core.test.js        # Relay routing, limits, diagnostics, backpressure
+│   └── relay-ws-backend.test.js  # Real ws backend admission and fan-out tests
 ├── docs/                         # Project documentation
 │   ├── ARCHITECTURE.md           # End-to-end shipped-system architecture
 │   ├── DESIGN-HISTORY.md         # Evolution, failures, known limitations
@@ -86,10 +93,12 @@ managua/                          # Repo root
 - Status: Stub only — no implementation yet
 
 **`src/relay/`:**
-- Purpose: Placeholder for extraction of `reference/server/ws-handler.js`
-- Contains: `README.md` describing the transport-agnostic relay design with pluggable
-  backends
-- Status: Stub only — no implementation yet
+- Purpose: Transport-agnostic relay core and pluggable backend seam extracted from
+  `reference/server/ws-handler.js`
+- Contains: `relay.js` room fan-out core, `limits.js` frame classification and cap checks,
+  `backends/ws.js` self-hostable `ws` reference backend, and `index.js` barrel export
+- Status: Active implementation for RELY-01 — raw source/viewer fan-out, 1 MiB cap
+  diagnostics, and per-client backpressure drops are tested
 
 **`src/renderer/`:**
 - Purpose: Placeholder for extraction of the viewer code from `reference/dashboard/dashboard.js`
@@ -129,8 +138,9 @@ managua/                          # Repo root
 
 **`tests/`:**
 - Purpose: Framework-level tests for `src/`
-- Contains: `protocol.test.js` — 7 tests using Node built-in `node:test` runner, covering
-  envelope round-trip, staleness guard, session ID, and budget constants
+- Contains protocol, capture, renderer, security, differential, and relay tests using
+  Node built-in `node:test`; relay coverage includes core routing/cap/backpressure and
+  real `ws` backend admission/fan-out
 
 **`docs/`:**
 - Purpose: Project documentation read by humans and referenced by development agents
@@ -143,9 +153,19 @@ managua/                          # Repo root
 **Protocol entry point:**
 - `src/protocol/index.js` — single import target for all protocol symbols
 
+**Relay entry point:**
+- `src/relay/index.js` — package-exported at `./relay`; re-exports relay limits, relay core,
+  and the `ws` backend
+
 **Wire constants (must stay in sync between capture and relay):**
 - `src/protocol/constants.js` — `RELAY_PER_MESSAGE_LIMIT_BYTES`, `SNAPSHOT_BUDGET_BYTES`,
   throttle and watchdog intervals
+
+**Relay implementation:**
+- `src/relay/limits.js` — classifies raw relay frames and enforces the shared 1 MiB cap
+- `src/relay/relay.js` — transport-agnostic source/viewer room relay with diagnostics
+- `src/relay/backends/ws.js` — Node `ws` backend with `/ws` admission validation and
+  `perMessageDeflate: false`
 
 **Capture reference (authoritative for `src/capture/` extraction):**
 - `reference/extension/dom-stream.js` — full 1117-line content script
@@ -166,14 +186,16 @@ managua/                          # Repo root
 
 **Framework tests:**
 - `tests/protocol.test.js`
+- `tests/relay-core.test.js`
+- `tests/relay-ws-backend.test.js`
 
 **Reference tests:**
 - `reference/tests/` — 6 test files
 
 **Package manifest:**
 - `package.json` — `"type": "module"`, `"main": "src/protocol/index.js"`,
-  `"exports": { "./protocol": "./src/protocol/index.js" }`,
-  test command: `node --test tests/*.test.js`
+  exports for `./protocol`, `./capture`, `./renderer`, and `./relay`,
+  test command: `node --test tests/*.test.js tests/differential/*.test.js`
 
 ## Naming Conventions
 

@@ -19,8 +19,8 @@
 - Node.js v24.x — test runner and relay server
 
 **Package Manager:**
-- npm (inferred; no lockfile present — `package.json` has no `dependencies` or `devDependencies` entries)
-- Lockfile: missing (`node_modules/` absent; no `package-lock.json` or `yarn.lock`)
+- npm
+- Lockfile: `package-lock.json` (lockfileVersion 3)
 
 ## Frameworks
 
@@ -41,13 +41,16 @@
 - No transpiler (Babel, TypeScript, etc.)
 - No bundler (Webpack, Rollup, esbuild, etc.)
 
-**Server-side (reference only):**
-- `ws` npm package — WebSocket server in `reference/server/ws-handler.js` (`const WebSocket = require('ws')`)
+**Server-side relay/backend:**
+- `ws@8.21.0` — WebSocket server/backend in `src/relay/backends/ws.js`; reference server
+  still uses CommonJS `ws` in `reference/server/ws-handler.js`
 
 ## Key Dependencies
 
 **Runtime (src/ standalone framework):**
-- None. `package.json` lists no `dependencies`.
+- `ws@8.21.0` — Node-only dependency isolated to the relay WebSocket backend and future
+  demo server path. Browser-injected capture/renderer/protocol modules remain free of
+  runtime npm dependencies.
 
 **LZ-string (reference, vendored):**
 - `lz-string` — LZ-string compression library, vendored as `reference/extension/lz-string.min.js` (4.8 KB minified). Used for wire-transport compression. NOT imported via npm — loaded via browser script tag or `importScripts()` in the extension Service Worker (background.js). The `src/protocol/envelope.js` accepts an injected codec rather than importing lz-string directly, keeping the protocol module dependency-free.
@@ -59,7 +62,8 @@
 
 **Package:**
 - `package.json` — name `@fullselfbrowsing/phantom-stream`, version `0.1.0`, `"type": "module"`
-- Entry point: `src/protocol/index.js` (via `"main"` and `"exports": { "./protocol": ... }`)
+- Entry point: `src/protocol/index.js` (via `"main"`). Package exports currently include
+  `./protocol`, `./capture`, `./renderer`, and `./relay`.
 
 **Environment:**
 - No `.env` files present
@@ -75,7 +79,8 @@
 **Development:**
 - Node.js 18+ (uses `node:test` and `node:assert/strict` — available since Node 18)
 - Tested on Node.js v24.x (confirmed in environment)
-- No npm install required to run `tests/protocol.test.js` — zero external dependencies
+- `npm install` installs `jsdom` for capture/renderer tests and `ws@8.21.0` for relay
+  backend tests
 
 **Reference extension (capture/transport):**
 - Chrome or Chromium — Manifest V3 extension
@@ -87,8 +92,9 @@
 - Node.js — `reference/server/ws-handler.js` runs server-side
 - Depends on `ws` package (not in this repo's `package.json`)
 
-**Production (future framework):**
+**Production framework surfaces:**
 - `src/protocol/` — universal: works in any JS runtime (extension content script, service worker, browser, Node) by design (noted in `src/protocol/envelope.js` line 9)
+- `src/relay/` — Node-oriented relay core/backend surface exported as `./relay`
 - Planned extraction targets: Chrome extension content script, Playwright/CDP `Page.addScriptToEvaluateOnNewDocument`, bookmarklet, embedded SDK (see `src/capture/README.md`)
 
 ---

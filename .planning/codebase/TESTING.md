@@ -26,7 +26,7 @@ New code in `src/` must use the **new-style** (`node:test`) patterns. The refere
 
 **Run Commands:**
 ```bash
-node --test tests/*.test.js   # Run all tests (from package.json "test" script)
+node --test tests/*.test.js tests/differential/*.test.js   # Run all tests (from package.json "test" script)
 npm test                      # Same via npm
 ```
 
@@ -51,6 +51,8 @@ managua/
 │       └── index.js
 └── tests/
     └── protocol.test.js     ← tests for the entire protocol module
+    └── relay-core.test.js   ← tests relay core routing, caps, diagnostics
+    └── relay-ws-backend.test.js ← tests real ws backend admission and fan-out
 ```
 
 ---
