@@ -49,7 +49,7 @@ import {
   WATCHDOG_TICK_MS,
   INLINE_STYLE_MAX_BYTES,
 } from '../protocol/constants.js';
-import { STREAM, createStreamSessionId } from '../protocol/messages.js';
+import { STREAM, DIFF_OP, createStreamSessionId } from '../protocol/messages.js';
 
 // RELAY_PER_MESSAGE_LIMIT_BYTES is the relay's hard per-message cap;
 // SNAPSHOT_BUDGET_BYTES is the 80% truncation budget derived from it
@@ -594,6 +594,9 @@ export function createCapture(config) {
   var lastDrainTs = 0;
   var staleFlushCount = 0;
   var watchdogTimer = null;
+  var observedShadowRoots = new WeakSet();
+  var nativeAttachShadow = null;
+  var attachShadowProto = null;
 
   // SEC-01 sanitization strip counters (closure state, staleFlushCount
   // pattern). Lifecycle is PER-SESSION (03-RESEARCH.md Pitfall 3): reset in
@@ -721,6 +724,202 @@ export function createCapture(config) {
       if (cloneToNid.has(el)) nodeIds.push(cloneToNid.get(el));
     }
     return nodeIds;
+  }
+
+  function mutationObserverOptions() {
+    return {
+      childList: true,
+      attributes: true,
+      characterData: true,
+      subtree: true,
+      attributeOldValue: true
+    };
+  }
+
+  function isOpenShadowRoot(root) {
+    return !!(root
+      && root.nodeType === Node.DOCUMENT_FRAGMENT_NODE
+      && root.host
+      && root.mode === 'open');
+  }
+
+  function elementsUnderRoot(root) {
+    var elements = [];
+    if (!root) return elements;
+    if (root.nodeType === Node.ELEMENT_NODE) elements.push(root);
+    if (root.querySelectorAll) {
+      var descendants = root.querySelectorAll('*');
+      for (var i = 0; i < descendants.length; i++) elements.push(descendants[i]);
+    }
+    return elements;
+  }
+
+  function getMutationShadowHost(target) {
+    if (!target || typeof target.getRootNode !== 'function') return null;
+    var root = target.getRootNode();
+    if (!isOpenShadowRoot(root)) return null;
+    return root.host || null;
+  }
+
+  function shadowSlotAssignment(root) {
+    if (!root || !root.querySelectorAll) return 'none';
+    var slots = root.querySelectorAll('slot');
+    var hasDefault = false;
+    var hasNamed = false;
+    for (var i = 0; i < slots.length; i++) {
+      if (slots[i].getAttribute('name')) hasNamed = true;
+      else hasDefault = true;
+    }
+    if (hasNamed) return 'named';
+    if (hasDefault) return 'default';
+    return 'none';
+  }
+
+  function prepareShadowClone(root, container, cloneToNid) {
+    var liveDescendants = root && root.querySelectorAll ? root.querySelectorAll('*') : [];
+    var cloneDescendants = container.querySelectorAll('*');
+    for (var i = 0; i < liveDescendants.length; i++) {
+      var live = liveDescendants[i];
+      var clone = cloneDescendants[i];
+      if (!clone) continue;
+      if (wireDroppedWithAncestors(live) || skipElementWithAncestors(live)) {
+        if (clone.parentNode) clone.parentNode.removeChild(clone);
+        continue;
+      }
+      if (blockedWithAncestors(live.parentElement)) continue;
+      var nid = ensureNodeId(live);
+      if (nid) cloneToNid.set(clone, nid);
+      for (var a = 0; a < URL_ATTRS.length; a++) {
+        var val = clone.getAttribute(URL_ATTRS[a]);
+        if (val) clone.setAttribute(URL_ATTRS[a], absolutifyUrl(val));
+      }
+      var srcset = clone.getAttribute('srcset');
+      if (srcset) clone.setAttribute('srcset', absolutifySrcset(srcset));
+      captureComputedStyles(live, clone);
+    }
+  }
+
+  function serializeOpenShadowRoot(host, hostNid) {
+    if (!host || !host.shadowRoot || !hostNid) return null;
+    var root = host.shadowRoot;
+    if (!isOpenShadowRoot(root)) return null;
+
+    var container = document.createElement('div');
+    for (var child = root.firstChild; child; child = child.nextSibling) {
+      container.appendChild(child.cloneNode(true));
+    }
+
+    var cloneToNid = new Map();
+    prepareShadowClone(root, container, cloneToNid);
+    var subtreeResult = sanitizeForWire('subtree', {
+      root: container,
+      liveRoot: root,
+      cloneToNid: cloneToNid
+    });
+    if (subtreeResult && subtreeResult.drop) return null;
+
+    return {
+      hostNid: String(hostNid),
+      mode: 'open',
+      html: container.innerHTML || '',
+      nodeIds: buildNodeIdSidecar(container, cloneToNid, false),
+      slotAssignment: shadowSlotAssignment(root)
+    };
+  }
+
+  function collectShadowRootPayloads(root, hostNodeIds) {
+    var payloads = [];
+    var allowed = null;
+    if (Array.isArray(hostNodeIds)) {
+      allowed = new Set();
+      for (var h = 0; h < hostNodeIds.length; h++) allowed.add(String(hostNodeIds[h]));
+    }
+
+    function visit(treeRoot) {
+      var elements = elementsUnderRoot(treeRoot);
+      for (var i = 0; i < elements.length; i++) {
+        var el = elements[i];
+        if (!el || !el.shadowRoot || !isOpenShadowRoot(el.shadowRoot)) continue;
+        var hostNid = getTrackedNodeId(el) || ensureNodeId(el);
+        if (!hostNid) continue;
+        if (allowed && !allowed.has(String(hostNid))) continue;
+        var payload = serializeOpenShadowRoot(el, hostNid);
+        if (payload) payloads.push(payload);
+        if (allowed && payload && Array.isArray(payload.nodeIds)) {
+          for (var n = 0; n < payload.nodeIds.length; n++) {
+            allowed.add(String(payload.nodeIds[n]));
+          }
+        }
+        visit(el.shadowRoot);
+      }
+    }
+
+    visit(root);
+    return payloads;
+  }
+
+  function observeOpenShadowRoot(root) {
+    if (!mutationObserver || !isOpenShadowRoot(root)) return;
+    if (observedShadowRoots.has(root)) return;
+    try {
+      mutationObserver.observe(root, mutationObserverOptions());
+      observedShadowRoots.add(root);
+    } catch (err) {
+      logger.error('[DOM Stream] shadow root observe failed', err);
+      return;
+    }
+    observeOpenShadowRoots(root);
+  }
+
+  function observeOpenShadowRoots(root) {
+    var elements = elementsUnderRoot(root);
+    for (var i = 0; i < elements.length; i++) {
+      if (elements[i].shadowRoot && isOpenShadowRoot(elements[i].shadowRoot)) {
+        observeOpenShadowRoot(elements[i].shadowRoot);
+      }
+    }
+  }
+
+  function wrapAttachShadow() {
+    if (nativeAttachShadow) return;
+    var proto = window && window.Element && window.Element.prototype;
+    if (!proto || typeof proto.attachShadow !== 'function') return;
+    attachShadowProto = proto;
+    nativeAttachShadow = proto.attachShadow;
+    proto.attachShadow = function() {
+      var root = nativeAttachShadow.apply(this, arguments);
+      try {
+        if (isOpenShadowRoot(root)) {
+          observeOpenShadowRoot(root);
+          if (streaming) {
+            var hostNid = ensureNodeId(this);
+            var payload = serializeOpenShadowRoot(this, hostNid);
+            if (payload) {
+              safeSend(STREAM.MUTATIONS, {
+                mutations: [Object.assign({ op: DIFF_OP.SHADOW_ROOT }, payload)],
+                streamSessionId: streamSessionId || '',
+                snapshotId: currentSnapshotId || 0,
+                staleFlushCount: staleFlushCount
+              });
+            }
+          }
+        }
+      } catch (err) {
+        logger.error('[DOM Stream] attachShadow wrapper failed', err);
+      }
+      return root;
+    };
+  }
+
+  function restoreAttachShadow() {
+    if (!nativeAttachShadow || !attachShadowProto) return;
+    try {
+      attachShadowProto.attachShadow = nativeAttachShadow;
+    } catch (err) {
+      logger.error('[DOM Stream] attachShadow restore failed', err);
+    }
+    nativeAttachShadow = null;
+    attachShadowProto = null;
   }
 
   // =========================================================================
@@ -1902,9 +2101,13 @@ export function createCapture(config) {
     // SEC-01: one aggregate strip warn per serialization pass (never silent).
     warnIfSanitizeStrips(sanBefore);
 
+    var nodeIds = buildNodeIdSidecar(clone, cloneToNid, false);
+    var shadowRoots = collectShadowRootPayloads(document.body, nodeIds);
+
     return {
       html: html,
-      nodeIds: buildNodeIdSidecar(clone, cloneToNid, false),
+      nodeIds: nodeIds,
+      shadowRoots: shadowRoots,
       truncated: truncated,
       missingDescendants: missingDescendants,
       stylesheets: stylesheets,
@@ -2011,9 +2214,12 @@ export function createCapture(config) {
       cloneToNid: cloneToNid
     });
     if (subtreeResult && subtreeResult.drop) return null;
+    var nodeIds = buildNodeIdSidecar(wireClone, cloneToNid, true);
+    var shadowRoots = collectShadowRootPayloads(el, nodeIds);
     return {
       html: wireClone.outerHTML || '',
-      nodeIds: buildNodeIdSidecar(wireClone, cloneToNid, true)
+      nodeIds: nodeIds,
+      shadowRoots: shadowRoots
     };
   }
 
@@ -2025,6 +2231,7 @@ export function createCapture(config) {
   function processMutationBatch(mutations) {
     var diffs = [];
     var removedRoots = [];
+    var shadowHosts = new Map();
     // Dedup registry for childList-derived text ops (fidelity fix, ledger
     // D6): multiple childList records in one batch targeting the same
     // element (e.g. two textContent= writes between flushes) collapse to a
@@ -2048,6 +2255,16 @@ export function createCapture(config) {
           (skipElementWithAncestors(m.target.parentElement)
             || blockedWithAncestors(m.target.parentElement)
             || wireDroppedWithAncestors(m.target.parentElement))) {
+        continue;
+      }
+
+      var shadowHost = getMutationShadowHost(m.target);
+      if (shadowHost) {
+        if (skipElementWithAncestors(shadowHost) || blockedWithAncestors(shadowHost) || wireDroppedWithAncestors(shadowHost)) {
+          continue;
+        }
+        var shadowHostNid = getTrackedNodeId(shadowHost) || ensureNodeId(shadowHost);
+        if (shadowHostNid) shadowHosts.set(String(shadowHostNid), shadowHost);
         continue;
       }
 
@@ -2080,6 +2297,7 @@ export function createCapture(config) {
             // SEC-01: a forbidden root (script/noscript/object/embed)
             // scrubs to nothing -- emit no add op rather than an empty op.
             if (!addedPayload || !addedPayload.html) continue;
+            observeOpenShadowRoots(added);
             var nextSib = added.nextElementSibling;
             var beforeNid = getTrackedNodeId(nextSib);
 
@@ -2088,7 +2306,8 @@ export function createCapture(config) {
               parentNid: parentNid,
               html: addedPayload.html,
               beforeNid: beforeNid,
-              nodeIds: addedPayload.nodeIds
+              nodeIds: addedPayload.nodeIds,
+              shadowRoots: addedPayload.shadowRoots || []
             });
           } else if (added.nodeType === Node.TEXT_NODE || added.nodeType === Node.CDATA_SECTION_NODE) {
             sawBareTextNode = true;
@@ -2195,6 +2414,12 @@ export function createCapture(config) {
       }
     }
 
+    shadowHosts.forEach(function(host, hostNid) {
+      var payload = serializeOpenShadowRoot(host, hostNid);
+      if (!payload) return;
+      diffs.push(Object.assign({ op: DIFF_OP.SHADOW_ROOT }, payload));
+    });
+
     for (var rr = 0; rr < removedRoots.length; rr++) {
       if (!removedRoots[rr].isConnected) {
         forgetSubtreeIdentity(removedRoots[rr]);
@@ -2247,6 +2472,7 @@ export function createCapture(config) {
     }
 
     pendingMutations = [];
+    observedShadowRoots = new WeakSet();
 
     mutationObserver = new MutationObserver(function(mutations) {
       // Accumulate mutations
@@ -2259,13 +2485,9 @@ export function createCapture(config) {
       batchTimer = requestAnimationFrame(flushMutations);
     });
 
-    mutationObserver.observe(document.body, {
-      childList: true,
-      attributes: true,
-      characterData: true,
-      subtree: true,
-      attributeOldValue: true
-    });
+    mutationObserver.observe(document.body, mutationObserverOptions());
+    observeOpenShadowRoots(document.body);
+    wrapAttachShadow();
 
     // Phase 211-02 STREAM-01: 5s capture-side self-watchdog (trip wire).
     // Detects stuck mutation queues without involving the host. Uses a
@@ -2315,6 +2537,8 @@ export function createCapture(config) {
       mutationObserver.disconnect();
       mutationObserver = null;
     }
+    observedShadowRoots = new WeakSet();
+    restoreAttachShadow();
 
     // Flush any remaining mutations.
     // PARITY: the stop-path payload intentionally omits staleFlushCount,

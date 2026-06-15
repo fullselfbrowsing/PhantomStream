@@ -226,6 +226,7 @@ export function createViewer(options) {
         sanitizeFragment(scrubDoc.body, sanitizeCounters, logger);
         if (lastSnapshotPayload) {
           resetIdentityIndex(scrubDoc, lastSnapshotPayload.nodeIds || []);
+          installShadowRoots(scrubDoc, lastSnapshotPayload.shadowRoots || []);
         }
       }
     } catch (e) {
@@ -637,6 +638,54 @@ export function createViewer(options) {
     }
   }
 
+  function installOneShadowRoot(targetDoc, payload) {
+    var p = payload || {};
+    if (!targetDoc || !p.hostNid) return false;
+    if (p.mode && p.mode !== 'open') return false;
+    var host = resolveIndexedNode(p.hostNid);
+    if (!host) {
+      logger.warn('[Renderer] shadow root host missing', { hostNid: p.hostNid || '' });
+      return false;
+    }
+    var shadowRoot = host.shadowRoot || null;
+    if (!shadowRoot) {
+      if (typeof host.attachShadow !== 'function') {
+        logger.warn('[Renderer] shadow root unsupported', { hostNid: p.hostNid || '' });
+        return false;
+      }
+      try {
+        shadowRoot = host.attachShadow({ mode: 'open' });
+      } catch (err) {
+        logger.warn('[Renderer] shadow root attach failed', {
+          hostNid: p.hostNid || '',
+          error: err && err.message ? err.message : String(err)
+        });
+        return false;
+      }
+    }
+
+    removeIndexedSubtree(shadowRoot);
+    while (shadowRoot.firstChild) shadowRoot.removeChild(shadowRoot.firstChild);
+
+    var tpl = targetDoc.createElement('template');
+    tpl.innerHTML = p.html || '';
+    sanitizeFragment(tpl.content, sanitizeCounters, logger);
+    shadowRoot.appendChild(targetDoc.importNode(tpl.content, true));
+    pairIdentityElements(
+      Array.prototype.slice.call(shadowRoot.querySelectorAll('*')),
+      p.nodeIds || [],
+      'shadow'
+    );
+    return true;
+  }
+
+  function installShadowRoots(targetDoc, shadowRoots) {
+    if (!Array.isArray(shadowRoots)) return;
+    for (var i = 0; i < shadowRoots.length; i++) {
+      installOneShadowRoot(targetDoc, shadowRoots[i]);
+    }
+  }
+
   function hostRectForElement(el) {
     var rect = el.getBoundingClientRect();
     return mapRectToHost(
@@ -787,7 +836,11 @@ export function createViewer(options) {
       identity: {
         resolve: resolveIndexedNode,
         indexSubtree: indexSubtree,
-        removeSubtree: removeIndexedSubtree
+        removeSubtree: removeIndexedSubtree,
+        installShadowRoot: function(hostNid, payload) {
+          var opPayload = Object.assign({}, payload || {}, { hostNid: hostNid });
+          installOneShadowRoot(cd, opPayload);
+        }
       }
     });
     if (!resyncPending) markLive('mutations');

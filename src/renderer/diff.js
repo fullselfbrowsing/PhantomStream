@@ -39,6 +39,30 @@
 import { DIFF_OP } from '../protocol/messages.js';
 import { sanitizeFragment, sanitizeAttrValue } from './sanitize.js';
 
+function installShadowRootDirect(doc, host, payload, sanitizeCounters, logger, indexSubtree, removeSubtree) {
+  var p = payload || {};
+  if (!doc || !host) return false;
+  if (p.mode && p.mode !== 'open') return false;
+  var shadowRoot = host.shadowRoot || null;
+  if (!shadowRoot) {
+    if (typeof host.attachShadow !== 'function') {
+      logger.warn('[Renderer] shadow root unsupported', { hostNid: p.hostNid || '' });
+      return false;
+    }
+    shadowRoot = host.attachShadow({ mode: 'open' });
+  }
+
+  removeSubtree(shadowRoot);
+  while (shadowRoot.firstChild) shadowRoot.removeChild(shadowRoot.firstChild);
+
+  var tpl = doc.createElement('template');
+  tpl.innerHTML = p.html || '';
+  sanitizeFragment(tpl.content, sanitizeCounters, logger);
+  shadowRoot.appendChild(doc.importNode(tpl.content, true));
+  indexSubtree(shadowRoot, p.nodeIds || []);
+  return true;
+}
+
 /**
  * @typedef {Object} DiffCounters
  * @property {number} staleMisses   Nid lookups that found no element (stale ops)
@@ -99,6 +123,9 @@ export function applyMutations(doc, mutations, counters, hooks) {
   var removeSubtree = typeof identity.removeSubtree === 'function'
     ? function (root) { identity.removeSubtree(root); }
     : function () {};
+  var installShadowRoot = typeof identity.installShadowRoot === 'function'
+    ? function (hostNid, payload) { identity.installShadowRoot(hostNid, payload); }
+    : null;
 
   // Shared miss path: count, warn, and escalate at the parity threshold.
   function recordStaleMiss(op, nid) {
@@ -111,6 +138,21 @@ export function applyMutations(doc, mutations, counters, hooks) {
     if (tallies.staleMisses >= 3) {
       requestResync('stale-mutation-parent', { op: op, nid: nid || '' });
     }
+  }
+
+  function applyShadowRoot(payload) {
+    var p = payload || {};
+    var hostNid = p.hostNid;
+    var host = resolve(hostNid);
+    if (!host) {
+      recordStaleMiss(DIFF_OP.SHADOW_ROOT, hostNid);
+      return;
+    }
+    if (installShadowRoot) {
+      installShadowRoot(hostNid, p);
+      return;
+    }
+    installShadowRootDirect(doc, host, p, sanitizeCounters, logger, indexSubtree, removeSubtree);
   }
 
   try {
@@ -159,6 +201,15 @@ export function applyMutations(doc, mutations, counters, hooks) {
               parent.appendChild(imported);
             }
             indexSubtree(imported, m.nodeIds || []);
+            if (Array.isArray(m.shadowRoots)) {
+              for (var s = 0; s < m.shadowRoots.length; s++) {
+                applyShadowRoot(m.shadowRoots[s]);
+              }
+            }
+            break;
+          }
+          case DIFF_OP.SHADOW_ROOT: {
+            applyShadowRoot(m);
             break;
           }
           case DIFF_OP.REMOVE: {
