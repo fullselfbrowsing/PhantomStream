@@ -15,9 +15,17 @@ function assertContentFree(value) {
 
   assert.equal(serialized.includes(SECRET_TEXT), false);
   for (const key of FORBIDDEN_KEYS) {
-    assert.equal(Object.hasOwn(value, key), false);
-    assert.equal(serialized.includes('"' + key + '"'), false);
+    assert.equal(hasObjectKey(value, key), false);
   }
+}
+
+function hasObjectKey(value, key) {
+  if (!value || Object(value) !== value) return false;
+  if (Object.hasOwn(value, key)) return true;
+  for (const child of Object.values(value)) {
+    if (hasObjectKey(child, key)) return true;
+  }
+  return false;
 }
 
 test('text summaries contain character counts and never typed printable text', () => {

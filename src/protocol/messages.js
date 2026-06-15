@@ -31,6 +31,28 @@ export const STREAM = {
   STATE: 'ext:stream-state',
 };
 
+/** Viewer -> adapter remote-control frames, plus adapter -> viewer state. */
+export const REMOTE_CONTROL = {
+  REQUEST: 'dash:ps-control-request',
+  STOP: 'dash:ps-control-stop',
+  CLICK: 'dash:ps-control-click',
+  TEXT: 'dash:ps-control-text',
+  KEY: 'dash:ps-control-key',
+  SCROLL: 'dash:ps-control-scroll',
+  STATE: 'ext:ps-control-state',
+};
+
+/** Content-free remote-control authorization/replay states. */
+const REMOTE_CONTROL_STATE_VALUES = {
+  LOCKED: 'locked',
+  REQUESTING: 'requesting',
+  ACTIVE: 'active',
+  DENIED: 'denied',
+  STOPPED: 'stopped',
+};
+
+export { REMOTE_CONTROL_STATE_VALUES as REMOTE_CONTROL_STATE };
+
 /** Diff op codes carried in STREAM.MUTATIONS payloads. */
 export const DIFF_OP = {
   /** { op:'add', parentNid, html, beforeNid|null } — insert serialized subtree */
