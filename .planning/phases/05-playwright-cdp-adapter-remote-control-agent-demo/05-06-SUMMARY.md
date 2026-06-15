@@ -9,6 +9,7 @@ requires:
 provides:
   - Browser verification evidence for denied inertness, approved click/type/scroll, and navigation re-snapshot
   - Adapter resnapshot handling for viewer stream-start requests
+  - Async replay failure containment for transport-delivered remote-control messages
   - Demo segmented-control hit-area hardening
 affects: [phase-05, playwright-demo, browser-verification, remote-control-adapter]
 tech-stack:
@@ -27,6 +28,7 @@ key-files:
 key-decisions:
   - "Use Playwright Chromium for the browser checkpoint when FSB cannot attach its browser extension."
   - "Handle viewer `dash:dom-stream-start` requests in the Playwright adapter by restarting injected capture."
+  - "Contain async remote-control replay failures inside the adapter transport subscription."
   - "Constrain invisible segmented-control radio inputs to their label boxes so they cannot intercept adjacent controls."
 patterns-established:
   - "Playwright adapter transport handlers may service renderer lifecycle control frames separately from remote-control frames."
@@ -54,18 +56,20 @@ completed: 2026-06-15
 - Verified default-deny control changes no driven-page state and dispatches zero driver input.
 - Verified approved mirror click, printable type, scroll, stop, and fixture navigation against a real Chromium page through the Playwright/CDP adapter.
 - Fixed two issues found only under browser verification: missed viewer-attached resnapshot and hidden radio hit-area overlap.
+- Fixed one code-review finding: async driver replay failures from transport-delivered remote-control messages are now logged and surfaced as sanitized state.
 
 ## Task Commits
 
 Each task was committed atomically:
 
 1. **Task 1-3: Browser verification, browser-found fixes, and evidence artifact** - `f1365f6` (fix)
+2. **Code review fix: Contain async Playwright replay failures** - `6643714` (fix)
 
 ## Files Created/Modified
 
 - `.planning/phases/05-playwright-cdp-adapter-remote-control-agent-demo/05-BROWSER-VERIFICATION.md` - Records commands, local browser evidence, counters, FSB limitation, and PASS sections.
-- `src/adapters/playwright.js` - Restarts injected capture when the viewer sends `dash:dom-stream-start`.
-- `tests/playwright-adapter.test.js` - Adds regression coverage for viewer stream-start resnapshot requests.
+- `src/adapters/playwright.js` - Restarts injected capture when the viewer sends `dash:dom-stream-start` and contains async replay failures from transport-delivered control messages.
+- `tests/playwright-adapter.test.js` - Adds regression coverage for viewer stream-start resnapshot requests and rejected driver replay through the transport path.
 - `examples/playwright-demo/demo.css` - Constrains invisible segmented-control radio hit areas to their labels.
 - `tests/playwright-demo-cli.test.js` - Pins the segmented-control CSS contract.
 
@@ -95,9 +99,17 @@ Each task was committed atomically:
 - **Verification:** Focused demo tests, full `npm test`, and real-browser checkpoint.
 - **Committed in:** `f1365f6`
 
+**3. [Rule 1 - Bug] Transport-delivered control replay rejection was not contained**
+- **Found during:** Code review gate
+- **Issue:** The adapter subscribed to transport messages and called the async `handleControlMessage()` without a rejection boundary, so a driver/CDP replay failure could become an unhandled rejection.
+- **Fix:** Added a `.catch()` boundary in the transport subscription that logs `control-message-failed` and emits a sanitized `control-dispatch-failed` state reason.
+- **Files modified:** `src/adapters/playwright.js`, `tests/playwright-adapter.test.js`
+- **Verification:** Focused adapter tests, Phase 05 quick gate, and full `npm test`.
+- **Committed in:** `6643714`
+
 ---
 
-**Total deviations:** 2 auto-fixed (2 bugs)
+**Total deviations:** 3 auto-fixed (3 bugs)
 **Impact on plan:** Both fixes were required for the planned browser checkpoint and did not expand scope.
 
 ## Issues Encountered
@@ -116,9 +128,9 @@ None. The artifact records local URLs, states, counters, and typed character cou
 
 - `npx playwright install chromium` - passed.
 - `npx playwright --version` - `Version 1.60.0`.
-- `node --test tests/playwright-adapter.test.js tests/playwright-adapter-cdp.test.js tests/playwright-demo-cli.test.js` - passed, 17 tests.
-- `node --test tests/remote-control-protocol.test.js tests/playwright-adapter.test.js tests/playwright-adapter-cdp.test.js tests/renderer-remote-control.test.js tests/playwright-demo-cli.test.js` - passed, 30 tests.
-- `npm test` - passed, 288 tests.
+- `node --test tests/playwright-adapter.test.js tests/playwright-adapter-cdp.test.js tests/playwright-demo-cli.test.js` - passed, 18 tests after the code-review containment fix.
+- `node --test tests/remote-control-protocol.test.js tests/playwright-adapter.test.js tests/playwright-adapter-cdp.test.js tests/renderer-remote-control.test.js tests/playwright-demo-cli.test.js` - passed, 31 tests.
+- `npm test` - passed, 289 tests.
 - Real-browser checkpoint - passed for denied inertness, approved click/type/scroll, navigation re-snapshot, and stopped state.
 - `grep -n "Denied control inert: PASS\|Approved click/type/scroll: PASS\|Navigation re-snapshot: PASS" .planning/phases/05-playwright-cdp-adapter-remote-control-agent-demo/05-BROWSER-VERIFICATION.md` - passed.
 - `grep -n "secret\|password\|<html\|<div\|typed words" .planning/phases/05-playwright-cdp-adapter-remote-control-agent-demo/05-BROWSER-VERIFICATION.md || true` - returned no matches.
@@ -135,7 +147,7 @@ Phase 05 now has protocol, adapter, renderer mapping, CLI/demo UI, and browser e
 
 - Found required browser verification artifact and PASS headings.
 - Found task commit `f1365f6` in git history.
-- Full `npm test` passed after the browser-found fixes.
+- Full `npm test` passed after the browser-found fixes and code-review containment fix.
 
 ---
 *Phase: 05-playwright-cdp-adapter-remote-control-agent-demo*
