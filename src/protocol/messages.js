@@ -55,7 +55,7 @@ export { REMOTE_CONTROL_STATE_VALUES as REMOTE_CONTROL_STATE };
 
 /** Diff op codes carried in STREAM.MUTATIONS payloads. */
 export const DIFF_OP = {
-  /** { op:'add', parentNid, html, beforeNid|null } — insert serialized subtree */
+  /** { op:'add', parentNid, html, beforeNid|null, nodeIds:string[] } — insert serialized subtree */
   ADD: 'add',
   /** { op:'rm', nid } — remove subtree */
   REMOVE: 'rm',
@@ -66,15 +66,26 @@ export const DIFF_OP = {
 };
 
 /**
- * The attribute used to stamp stable node identity on captured elements.
- * Every diff op, overlay rect, and remote-control action addresses nodes
- * by this key.
+ * Legacy identity attribute name retained for compatibility with renderer
+ * and fixture code that still consumes nid-stamped mirror DOM. Capture-side
+ * framework identity now travels through SnapshotPayload.nodeIds and add-op
+ * nodeIds sidecars instead of mutating observed page elements.
  */
 export const NID_ATTR = 'data-fsb-nid';
 
 /**
+ * @typedef {Object} AddDiffOp
+ * @property {'add'} op
+ * @property {string} parentNid        Parent node id in the current mirror
+ * @property {string} html             Serialized subtree HTML, without framework identity attrs
+ * @property {string|null} beforeNid   Insert before this sibling nid, or append when null
+ * @property {string[]} nodeIds        Preorder ids for every serialized element in html
+ */
+
+/**
  * @typedef {Object} SnapshotPayload
- * @property {string} html              Serialized body innerHTML (nid-stamped, style-inlined)
+ * @property {string} html              Serialized body innerHTML (style-inlined; framework identity-clean)
+ * @property {string[]} nodeIds         Preorder ids for every serialized element in html
  * @property {boolean} truncated        True if the size budget forced subtree drops
  * @property {number} missingDescendants Count of dropped subtrees
  * @property {string[]} stylesheets     Absolutified <link rel=stylesheet> URLs

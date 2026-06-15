@@ -49,7 +49,7 @@ import {
   WATCHDOG_TICK_MS,
   INLINE_STYLE_MAX_BYTES,
 } from '../protocol/constants.js';
-import { STREAM, NID_ATTR, createStreamSessionId } from '../protocol/messages.js';
+import { STREAM, createStreamSessionId } from '../protocol/messages.js';
 
 // RELAY_PER_MESSAGE_LIMIT_BYTES is the relay's hard per-message cap;
 // SNAPSHOT_BUDGET_BYTES is the 80% truncation budget derived from it
@@ -432,6 +432,9 @@ function defaultMaskText(text) {
  * @property {() => void} stop    Stop observers (final flush included).
  * @property {() => void} pause   Stop observers, keep the session alive.
  * @property {() => void} resume  Re-arm observers; same session, no snapshot.
+ * @property {(element: Element) => string|null} getNodeId
+ *   Return the active PhantomStream nid for a tracked live element, or null
+ *   for untracked, skipped, disconnected, or inactive-session nodes.
  */
 
 /**
@@ -579,6 +582,8 @@ export function createCapture(config) {
   var batchTimer = null;
   var pendingMutations = [];
   var nextNodeId = 1;
+  var elementToNid = new WeakMap();
+  var nidToElement = new Map();
   var scrollHandler = null;
   var lastScrollSend = 0;
   var dialogRelayActive = false;
@@ -633,15 +638,88 @@ export function createCapture(config) {
     return Object.assign({}, payload || {}, getCurrentStreamMetadata());
   }
 
-  function assignNodeId(original, clone) {
+  function ensureNodeId(element) {
+    if (!element || element.nodeType !== Node.ELEMENT_NODE) return null;
+    var existing = elementToNid.get(element);
+    if (existing) return existing;
     var nid = String(nextNodeId++);
-    if (original && original.nodeType === Node.ELEMENT_NODE) {
-      original.setAttribute(NID_ATTR, nid);
+    elementToNid.set(element, nid);
+    nidToElement.set(nid, element);
+    return nid;
+  }
+
+  function reserveNodeId() {
+    nextNodeId++;
+  }
+
+  function getTrackedNodeId(element) {
+    if (!element || element.nodeType !== Node.ELEMENT_NODE) return null;
+    var nid = elementToNid.get(element);
+    if (!nid) return null;
+    if (nidToElement.get(nid) !== element) return null;
+    return nid;
+  }
+
+  function clearNodeMirror() {
+    elementToNid = new WeakMap();
+    nidToElement.clear();
+  }
+
+  function forgetSubtreeIdentity(root) {
+    if (!root || root.nodeType !== Node.ELEMENT_NODE) return;
+    var nodes = [root];
+    if (root.querySelectorAll) {
+      var descendants = root.querySelectorAll('*');
+      for (var i = 0; i < descendants.length; i++) nodes.push(descendants[i]);
     }
-    if (clone && clone.nodeType === Node.ELEMENT_NODE) {
-      clone.setAttribute(NID_ATTR, nid);
+    for (var n = 0; n < nodes.length; n++) {
+      var nid = elementToNid.get(nodes[n]);
+      if (nid) {
+        elementToNid.delete(nodes[n]);
+        if (nidToElement.get(nid) === nodes[n]) nidToElement.delete(nid);
+      }
+    }
+  }
+
+  function assignNodeId(original, clone, cloneToNid) {
+    var nid = ensureNodeId(original);
+    if (nid && clone && clone.nodeType === Node.ELEMENT_NODE && cloneToNid) {
+      cloneToNid.set(clone, nid);
     }
     return nid;
+  }
+
+  function cloneElementsWithNodeIds(root, cloneToNid) {
+    var out = [];
+    if (!root || !cloneToNid) return out;
+    var walker = root.ownerDocument.createTreeWalker(
+      root,
+      NodeFilter.SHOW_ELEMENT,
+      null
+    );
+    var el;
+    while ((el = walker.nextNode())) {
+      if (cloneToNid.has(el)) out.push(el);
+    }
+    return out;
+  }
+
+  function buildNodeIdSidecar(root, cloneToNid, includeRoot) {
+    var nodeIds = [];
+    if (!root || !cloneToNid) return nodeIds;
+    if (includeRoot && root.nodeType === Node.ELEMENT_NODE && cloneToNid.has(root)) {
+      nodeIds.push(cloneToNid.get(root));
+    }
+    var walker = root.ownerDocument.createTreeWalker(
+      root,
+      NodeFilter.SHOW_ELEMENT,
+      null
+    );
+    var el;
+    while ((el = walker.nextNode())) {
+      if (cloneToNid.has(el)) nodeIds.push(cloneToNid.get(el));
+    }
+    return nodeIds;
   }
 
   // =========================================================================
@@ -1039,18 +1117,17 @@ export function createCapture(config) {
   }
 
   /**
-   * Build the placeholder for a blocked element. It carries only dimensions
-   * and nid: no original attributes, no children, no text.
+   * Build the placeholder for a blocked element. It carries only dimensions:
+   * no original attributes, no children, no text. Its identity travels in
+   * the nodeIds sidecar.
    * @param {Document} doc
-   * @param {string} nid
    * @param {{width: number, height: number}} rect
    * @returns {Element}
    */
-  function createBlockPlaceholder(doc, nid, rect) {
+  function createBlockPlaceholder(doc, rect) {
     var placeholder = doc.createElement('div');
     placeholder.setAttribute('rr_width', String(rect.width || 0) + 'px');
     placeholder.setAttribute('rr_height', String(rect.height || 0) + 'px');
-    if (nid) placeholder.setAttribute(NID_ATTR, nid);
     return placeholder;
   }
 
@@ -1059,14 +1136,19 @@ export function createCapture(config) {
    * @param {Element} liveEl
    * @param {Element} cloneEl
    * @param {{width: number, height: number}} rect
+   * @param {Map<Element, string>} [cloneToNid]
    * @returns {Element|null}
    */
-  function replaceWithBlockPlaceholder(liveEl, cloneEl, rect) {
+  function replaceWithBlockPlaceholder(liveEl, cloneEl, rect, cloneToNid) {
     if (!cloneEl || !cloneEl.parentNode) return null;
-    var nid = cloneEl.getAttribute ? cloneEl.getAttribute(NID_ATTR) : '';
-    if (!nid && liveEl && liveEl.getAttribute) nid = liveEl.getAttribute(NID_ATTR) || '';
-    var placeholder = createBlockPlaceholder(cloneEl.ownerDocument, nid, rect);
+    var nid = cloneToNid && cloneToNid.get(cloneEl);
+    if (!nid) nid = getTrackedNodeId(liveEl) || '';
+    var placeholder = createBlockPlaceholder(cloneEl.ownerDocument, rect);
     cloneEl.parentNode.replaceChild(placeholder, cloneEl);
+    if (cloneToNid) {
+      cloneToNid.delete(cloneEl);
+      if (nid) cloneToNid.set(placeholder, nid);
+    }
     sanitizeCounters.blockedSubtrees++;
     return placeholder;
   }
@@ -1316,7 +1398,7 @@ export function createCapture(config) {
         if (liveDesc && wireDroppedWithAncestors(liveDesc.parentElement)) continue;
         if (liveDesc && blockedWithAncestors(liveDesc.parentElement)) continue;
         if (liveDesc && blockMatches(liveDesc)) {
-          replaceWithBlockPlaceholder(liveDesc, desc, readBlockRect(liveDesc));
+          replaceWithBlockPlaceholder(liveDesc, desc, readBlockRect(liveDesc), payload.cloneToNid);
           continue;
         }
         var descResult = sanitizeForWire('element', { orig: liveDesc, clone: desc });
@@ -1523,9 +1605,9 @@ export function createCapture(config) {
 
   /**
    * Serialize the full DOM body into a clean HTML string.
-   * Strips scripts, absolutifies URLs, assigns stable node-id attributes
-   * (NID_ATTR), renders iframes live with absolutified src, and captures
-   * curated computed styles.
+   * Strips scripts, absolutifies URLs, assigns stable node identity through
+   * the internal mirror, renders iframes live with absolutified src, and
+   * captures curated computed styles.
    *
    * @returns {Object} { html, stylesheets, scrollX, scrollY, viewportWidth, viewportHeight,
    *                     pageWidth, pageHeight, url, title }
@@ -1534,11 +1616,9 @@ export function createCapture(config) {
     // SEC-01: counter snapshot for the ONE aggregate strip warn per pass.
     var sanBefore = sanitizeCountersSnapshot();
 
-    // Reset node ID counter for each full snapshot
-    nextNodeId = 1;
-
     // Clone the body for transformation
     var clone = document.body.cloneNode(true);
+    var cloneToNid = new Map();
 
     // Build a map from original elements to cloned elements for computed style capture.
     // Walk original body and clone in parallel using TreeWalker.
@@ -1573,7 +1653,7 @@ export function createCapture(config) {
       var tag = cl.tagName ? cl.tagName.toLowerCase() : '';
 
       if (wireDroppedWithAncestors(orig.parentElement)) {
-        nextNodeId++;
+        reserveNodeId();
         continue;
       }
 
@@ -1609,20 +1689,20 @@ export function createCapture(config) {
 
       // blockSelector: descendants of a blocked root get no nid assignment
       // (the root swap discards the whole cloned subtree). The blocked root
-      // itself is still nid-stamped, then replaced after this walk by a
-      // dimension-preserving placeholder.
+      // itself is still tracked, then replaced after this walk by a
+      // dimension-preserving placeholder whose identity travels in nodeIds.
       if (blockedWithAncestors(orig.parentElement)) {
         continue;
       }
       if (blockMatches(orig)) {
-        var blockedNid = assignNodeId(orig, cl);
-        blockedPairs.push({ orig: orig, clone: cl, nid: blockedNid });
+        assignNodeId(orig, cl, cloneToNid);
+        blockedPairs.push({ orig: orig, clone: cl });
         continue;
       }
 
       // Keep iframes live with absolutified src (D-04)
       if (tag === 'iframe') {
-        assignNodeId(orig, cl);
+        assignNodeId(orig, cl, cloneToNid);
         var iframeSrc = cl.getAttribute('src');
         if (iframeSrc) {
           cl.setAttribute('src', absolutifyUrl(iframeSrc));
@@ -1639,8 +1719,8 @@ export function createCapture(config) {
         continue;
       }
 
-      // Assign stable node IDs on both the live DOM and the serialized clone.
-      var nid = assignNodeId(orig, cl);
+      // Assign stable node identity in the internal mirror and sidecar map.
+      var nid = assignNodeId(orig, cl, cloneToNid);
 
       // Canvas-to-img conversion: capture canvas content before it's lost in the clone
       if (tag === 'canvas') {
@@ -1648,14 +1728,14 @@ export function createCapture(config) {
           var dataUrl = orig.toDataURL('image/png');
           var img = clone.ownerDocument.createElement('img');
           img.src = dataUrl;
-          img.setAttribute(NID_ATTR, nid);
           img.setAttribute('style', 'width:' + (orig.width || 300) + 'px;height:' + (orig.height || 150) + 'px;');
           if (cl.parentNode) {
             cl.parentNode.replaceChild(img, cl);
+            cloneToNid.delete(cl);
+            if (nid) cloneToNid.set(img, nid);
           }
         } catch (e) {
           // Tainted canvas or security error -- leave as empty canvas
-          cl.setAttribute(NID_ATTR, nid);
         }
         continue;
       }
@@ -1709,7 +1789,7 @@ export function createCapture(config) {
     }
 
     for (var br = 0; br < blockedPairs.length; br++) {
-      replaceWithBlockPlaceholder(blockedPairs[br].orig, blockedPairs[br].clone, blockedRects[br]);
+      replaceWithBlockPlaceholder(blockedPairs[br].orig, blockedPairs[br].clone, blockedRects[br], cloneToNid);
     }
 
     // Collect stylesheet URLs from document.head
@@ -1745,11 +1825,11 @@ export function createCapture(config) {
     var missingDescendants = 0;
 
     // Phase 211-02 (STREAM-03 + STREAM-04): single TreeWalker pre-pass on the
-    // LIVE document reads getBoundingClientRect().top per nid-annotated
-    // element into a Map BEFORE any clone mutation. This collapses N forced
-    // layout flushes into 1 (web-perf folklore: read-then-write batching).
-    // The Map is the authoritative position source because the clone is not
-    // in the document tree and getBoundingClientRect() on it returns zeros.
+    // LIVE document reads getBoundingClientRect().top per tracked element into
+    // a Map BEFORE any clone mutation. This collapses N forced layout flushes
+    // into 1 (web-perf folklore: read-then-write batching). The Map is the
+    // authoritative position source because the clone is not in the document
+    // tree and getBoundingClientRect() on it returns zeros.
     var topByNid = new Map();
     try {
       var walker = document.createTreeWalker(
@@ -1757,15 +1837,13 @@ export function createCapture(config) {
         NodeFilter.SHOW_ELEMENT,
         {
           acceptNode: function(el) {
-            return (el.hasAttribute && el.hasAttribute(NID_ATTR))
-              ? NodeFilter.FILTER_ACCEPT
-              : NodeFilter.FILTER_SKIP;
+            return getTrackedNodeId(el) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
           }
         }
       );
       var liveEl;
       while ((liveEl = walker.nextNode())) {
-        var liveNid = liveEl.getAttribute(NID_ATTR);
+        var liveNid = getTrackedNodeId(liveEl);
         if (liveNid) {
           // Single getBoundingClientRect call per annotated element.
           // All reads happen before any clone mutation -> 1 layout flush.
@@ -1786,14 +1864,15 @@ export function createCapture(config) {
       // consult the Map for live top. Removing a parent later in the loop
       // also removes its children, so we walk last-to-first to keep indices
       // stable as we mutate.
-      var cloneEls1 = clone.querySelectorAll('[' + NID_ATTR + ']');
+      var cloneEls1 = cloneElementsWithNodeIds(clone, cloneToNid);
       for (var t = cloneEls1.length - 1; t >= 0; t--) {
-        var nidVal1 = cloneEls1[t].getAttribute(NID_ATTR);
+        var nidVal1 = cloneToNid.get(cloneEls1[t]);
         var top1 = topByNid.get(nidVal1);
         if (typeof top1 === 'number' && top1 > viewportCutoff) {
           var parent1 = cloneEls1[t].parentNode;
           if (parent1) {
             parent1.removeChild(cloneEls1[t]);
+            cloneToNid.delete(cloneEls1[t]);
             missingDescendants++;
           }
         }
@@ -1804,11 +1883,12 @@ export function createCapture(config) {
       // cap. Only complete subtrees are removed -- never a mid-element cut.
       html = clone.innerHTML;
       if (html.length > SNAPSHOT_BUDGET_BYTES) {
-        var cloneEls2 = clone.querySelectorAll('[' + NID_ATTR + ']');
+        var cloneEls2 = cloneElementsWithNodeIds(clone, cloneToNid);
         for (var u = cloneEls2.length - 1; u >= 0 && clone.innerHTML.length > SNAPSHOT_BUDGET_BYTES; u--) {
           var parent2 = cloneEls2[u].parentNode;
           if (parent2 && cloneEls2[u].parentNode) {
             parent2.removeChild(cloneEls2[u]);
+            cloneToNid.delete(cloneEls2[u]);
             missingDescendants++;
           }
         }
@@ -1816,11 +1896,14 @@ export function createCapture(config) {
       }
     }
 
+    html = clone.innerHTML;
+
     // SEC-01: one aggregate strip warn per serialization pass (never silent).
     warnIfSanitizeStrips(sanBefore);
 
     return {
       html: html,
+      nodeIds: buildNodeIdSidecar(clone, cloneToNid, false),
       truncated: truncated,
       missingDescendants: missingDescendants,
       stylesheets: stylesheets,
@@ -1847,38 +1930,42 @@ export function createCapture(config) {
   // =========================================================================
 
   /**
-   * Stamp node ids on an added node and its descendants and absolutify URLs,
+   * Mirror node ids for an added node and its descendants, absolutify URLs,
    * then serialize a SCRUBBED detached clone of it (for add ops).
    *
-   * SEC-01: the live node keeps its nid stamping and URL absolutification
-   * exactly as before (reference parity -- the observed page must keep its
-   * event handlers; stripping the live node would change page behavior).
+   * SEC-01: the live node keeps URL absolutification exactly as before
+   * (reference parity -- the observed page must keep its event handlers;
+   * stripping the live node would change page behavior). PhantomStream
+   * identity stays in the internal mirror, not live attributes.
    * The wire HTML is then built from a detached cloneNode(true) routed
    * through sanitizeForWire('subtree') -- the serialized output never comes
    * from the live node directly (threat T-03-06).
    *
    * @param {Element} el - Added element to process
-   * @returns {string} Scrubbed wire HTML ('' when the root itself is a
-   *   forbidden element -- the caller emits no add op for it)
+   * @returns {{html: string, nodeIds: string[]}|null} Scrubbed wire HTML and
+   *   sidecar ids, or null when the root itself is forbidden.
    */
   function processAddedNode(el) {
-    if (el.nodeType !== Node.ELEMENT_NODE) return '';
+    if (el.nodeType !== Node.ELEMENT_NODE) return null;
     if (wireDroppedWithAncestors(el)) {
-      nextNodeId++;
+      reserveNodeId();
       if (isWireDroppedElement(el)) sanitizeCounters.blockedSubtrees++;
-      return '';
+      return null;
     }
 
-    // Live-node stamping + absolutification (reference parity, unchanged).
-    el.setAttribute(NID_ATTR, String(nextNodeId++));
+    // Live-node identity mirror + absolutification (reference parity for URL
+    // mutation, but no framework identity attributes on the observed page).
+    var rootNid = ensureNodeId(el);
     if (blockMatches(el)) {
       var blockedRootPlaceholder = createBlockPlaceholder(
         document,
-        el.getAttribute(NID_ATTR) || '',
         readBlockRect(el)
       );
       sanitizeCounters.blockedSubtrees++;
-      return blockedRootPlaceholder.outerHTML || '';
+      return {
+        html: blockedRootPlaceholder.outerHTML || '',
+        nodeIds: rootNid ? [rootNid] : []
+      };
     }
     for (var a = 0; a < URL_ATTRS.length; a++) {
       var val = el.getAttribute(URL_ATTRS[a]);
@@ -1892,11 +1979,11 @@ export function createCapture(config) {
     for (var d = 0; d < descendants.length; d++) {
       var desc = descendants[d];
       if (wireDroppedWithAncestors(desc)) {
-        nextNodeId++;
+        reserveNodeId();
         continue;
       }
       if (blockedWithAncestors(desc.parentElement)) continue;
-      desc.setAttribute(NID_ATTR, String(nextNodeId++));
+      ensureNodeId(desc);
       if (blockMatches(desc)) continue;
       for (var b = 0; b < URL_ATTRS.length; b++) {
         var dv = desc.getAttribute(URL_ATTRS[b]);
@@ -1909,9 +1996,24 @@ export function createCapture(config) {
     // SEC-01: scrub a detached wire clone through the chokepoint and
     // serialize THAT -- never the live node's own markup.
     var wireClone = el.cloneNode(true);
-    var subtreeResult = sanitizeForWire('subtree', { root: wireClone, liveRoot: el });
-    if (subtreeResult && subtreeResult.drop) return '';
-    return wireClone.outerHTML || '';
+    var cloneToNid = new Map();
+    if (rootNid) cloneToNid.set(wireClone, rootNid);
+    var liveDescendants = el.querySelectorAll('*');
+    var cloneDescendants = wireClone.querySelectorAll('*');
+    for (var c = 0; c < liveDescendants.length; c++) {
+      var liveNid = getTrackedNodeId(liveDescendants[c]);
+      if (liveNid && cloneDescendants[c]) cloneToNid.set(cloneDescendants[c], liveNid);
+    }
+    var subtreeResult = sanitizeForWire('subtree', {
+      root: wireClone,
+      liveRoot: el,
+      cloneToNid: cloneToNid
+    });
+    if (subtreeResult && subtreeResult.drop) return null;
+    return {
+      html: wireClone.outerHTML || '',
+      nodeIds: buildNodeIdSidecar(wireClone, cloneToNid, true)
+    };
   }
 
   /**
@@ -1921,6 +2023,7 @@ export function createCapture(config) {
    */
   function processMutationBatch(mutations) {
     var diffs = [];
+    var removedRoots = [];
     // Dedup registry for childList-derived text ops (fidelity fix, ledger
     // D6): multiple childList records in one batch targeting the same
     // element (e.g. two textContent= writes between flushes) collapse to a
@@ -1969,24 +2072,22 @@ export function createCapture(config) {
             if (wireDroppedWithAncestors(added.parentElement)) continue;
             if (blockedWithAncestors(added.parentElement)) continue;
 
-            // Node identity is read through the NID_ATTR protocol constant
-            // (single source of truth, src/protocol/messages.js) -- never a
-            // hardcoded dataset-key mirror that could silently desync.
-            var parentNid = m.target.getAttribute ? m.target.getAttribute(NID_ATTR) : null;
+            var parentNid = getTrackedNodeId(m.target);
             if (!parentNid) continue; // Parent not tracked
 
-            var html = processAddedNode(added);
+            var addedPayload = processAddedNode(added);
             // SEC-01: a forbidden root (script/noscript/object/embed)
             // scrubs to nothing -- emit no add op rather than an empty op.
-            if (!html) continue;
+            if (!addedPayload || !addedPayload.html) continue;
             var nextSib = added.nextElementSibling;
-            var beforeNid = (nextSib && nextSib.getAttribute) ? nextSib.getAttribute(NID_ATTR) || null : null;
+            var beforeNid = getTrackedNodeId(nextSib);
 
             diffs.push({
               op: 'add',
               parentNid: parentNid,
-              html: html,
-              beforeNid: beforeNid
+              html: addedPayload.html,
+              beforeNid: beforeNid,
+              nodeIds: addedPayload.nodeIds
             });
           } else if (added.nodeType === Node.TEXT_NODE || added.nodeType === Node.CDATA_SECTION_NODE) {
             sawBareTextNode = true;
@@ -1998,9 +2099,10 @@ export function createCapture(config) {
           var removed = m.removedNodes[r];
           if (removed.nodeType === Node.ELEMENT_NODE) {
             if (wireDroppedWithAncestors(removed)) continue;
-            var nid = removed.getAttribute ? removed.getAttribute(NID_ATTR) : null;
+            var nid = getTrackedNodeId(removed);
             if (!nid) continue; // Not tracked
             diffs.push({ op: 'rm', nid: nid });
+            removedRoots.push(removed);
           } else if (removed.nodeType === Node.TEXT_NODE || removed.nodeType === Node.CDATA_SECTION_NODE) {
             sawBareTextNode = true;
           }
@@ -2024,7 +2126,7 @@ export function createCapture(config) {
         // intact. Residual gap documented in the E2 README entry and the D6
         // ledger rationale.
         if (sawBareTextNode && !m.target.firstElementChild) {
-          var textTargetNid = m.target.getAttribute ? m.target.getAttribute(NID_ATTR) : null;
+          var textTargetNid = getTrackedNodeId(m.target);
           if (textTargetNid && !textOpNids[textTargetNid]) {
             textOpNids[textTargetNid] = true;
             // SEC-03 masking seam (plan 03-03): maskTextSelector /
@@ -2044,7 +2146,7 @@ export function createCapture(config) {
           }
         }
       } else if (m.type === 'attributes') {
-        var targetNid = m.target.getAttribute ? m.target.getAttribute(NID_ATTR) : null;
+        var targetNid = getTrackedNodeId(m.target);
         if (!targetNid) continue;
 
         var attrVal = m.target.getAttribute(m.attributeName);
@@ -2074,7 +2176,7 @@ export function createCapture(config) {
         });
       } else if (m.type === 'characterData') {
         var parentEl = m.target.parentElement;
-        var textNid = (parentEl && parentEl.getAttribute) ? parentEl.getAttribute(NID_ATTR) : null;
+        var textNid = getTrackedNodeId(parentEl);
         if (!textNid) continue;
 
         // SEC-03 masking seam (plan 03-03): maskTextSelector / maskTextFn
@@ -2089,6 +2191,12 @@ export function createCapture(config) {
           nid: textNid,
           text: textResult.text
         });
+      }
+    }
+
+    for (var rr = 0; rr < removedRoots.length; rr++) {
+      if (!removedRoots[rr].isConnected) {
+        forgetSubtreeIdentity(removedRoots[rr]);
       }
     }
 
@@ -2352,6 +2460,8 @@ export function createCapture(config) {
       stopScrollTracker();
     }
     beginStreamSession();
+    clearNodeMirror();
+    nextNodeId = 1;
     var snapshot = serializeDOM();
     safeSend(STREAM.SNAPSHOT, snapshot);
     startMutationStream();
@@ -2369,6 +2479,7 @@ export function createCapture(config) {
     stopMutationStream();
     stopScrollTracker();
     streaming = false;
+    clearNodeMirror();
     safeFlush();
   }
 
@@ -2399,6 +2510,11 @@ export function createCapture(config) {
     streaming = true;
   }
 
+  function getNodeId(element) {
+    if (!streaming) return null;
+    return getTrackedNodeId(element);
+  }
+
   // Readiness signal. The reference pinged its host once at script-load
   // time; the factory's creation moment is the closest analog for an
   // explicitly imported module (any residual timing difference is
@@ -2412,6 +2528,7 @@ export function createCapture(config) {
     start: start,
     stop: stop,
     pause: pause,
-    resume: resume
+    resume: resume,
+    getNodeId: getNodeId
   };
 }

@@ -24,7 +24,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { createCapture } from '../src/capture/index.js';
-import { STREAM, DIFF_OP, NID_ATTR } from '../src/protocol/messages.js';
+import { STREAM, DIFF_OP } from '../src/protocol/messages.js';
 
 // Complete global set the capture core dereferences (audited from the
 // reference source in 01-RESEARCH.md Pattern 2).
@@ -154,6 +154,14 @@ function addOps(transport) {
     .filter((op) => op.op === DIFF_OP.ADD);
 }
 
+function nodeIdForSerializedElement(payload, element) {
+  const elements = Array.from(element.getRootNode().querySelectorAll('*'));
+  const index = elements.indexOf(element);
+  assert.ok(index >= 0, 'serialized element belongs to the parsed payload');
+  assert.ok(Array.isArray(payload.nodeIds), 'payload carries nodeIds sidecar');
+  return payload.nodeIds[index];
+}
+
 // .blocked subtrees are the blockSelector targets; the inputs cover the
 // always-on password mask plus the configurable maskInputs rule.
 const BLOCK_BODY_HTML = '<div id="root">'
@@ -199,7 +207,8 @@ test('snapshot masks maskTextSelector-matched text (descendants included) with w
 
     const snapshots = transport.sent.filter((m) => m.type === STREAM.SNAPSHOT);
     assert.equal(snapshots.length, 1, 'start() emits exactly one snapshot');
-    const html = snapshots[0].payload.html;
+    const snapshot = snapshots[0].payload;
+    const html = snapshot.html;
 
     // Re-parse the snapshot html to extract masked text exactly.
     const tpl = env.document.createElement('template');
@@ -514,7 +523,8 @@ test('a blockSelector-matched element emits ONLY a rr_width/rr_height placeholde
 
     const snapshots = transport.sent.filter((m) => m.type === STREAM.SNAPSHOT);
     assert.equal(snapshots.length, 1, 'start() emits exactly one snapshot');
-    const html = snapshots[0].payload.html;
+    const snapshot = snapshots[0].payload;
+    const html = snapshot.html;
 
     // Nothing of the blocked element's content reaches the snapshot.
     assert.ok(!html.includes('blocked content text'), 'blocked text absent');
@@ -523,22 +533,23 @@ test('a blockSelector-matched element emits ONLY a rr_width/rr_height placeholde
     assert.ok(!html.includes('blk-child'), 'blocked descendant absent');
 
     // The placeholder carries rr_width/rr_height (px from the live rect)
-    // plus the nid attribute and NOTHING else.
+    // and NOTHING else. Identity travels in the nodeIds sidecar.
     const tpl = env.document.createElement('template');
     tpl.innerHTML = html;
     const placeholder = tpl.content.querySelector('[rr_width]');
     assert.ok(placeholder, 'placeholder present in the snapshot');
     assert.equal(placeholder.getAttribute('rr_width'), '320px', 'rr_width carries the live px width');
     assert.equal(placeholder.getAttribute('rr_height'), '240px', 'rr_height carries the live px height');
-    assert.ok(placeholder.getAttribute(NID_ATTR), 'placeholder carries the nid');
-    assert.equal(placeholder.attributes.length, 3, 'placeholder has EXACTLY rr_width + rr_height + nid');
+    assert.equal(placeholder.attributes.length, 2, 'placeholder has EXACTLY rr_width + rr_height');
     assert.equal(placeholder.childNodes.length, 0, 'placeholder has no children and no text');
 
-    // The live blocked element is nid-stamped (placeholder addressable for
-    // later rm ops) and the nids match.
-    assert.equal(env.document.getElementById('blk').getAttribute(NID_ATTR),
-      placeholder.getAttribute(NID_ATTR),
-      'placeholder nid matches the live blocked element nid');
+    // The live blocked element is tracked (placeholder addressable for
+    // later rm ops) and the sidecar nid matches.
+    assert.equal(
+      nodeIdForSerializedElement(snapshot, placeholder),
+      env.capture.getNodeId(env.document.getElementById('blk')),
+      'placeholder sidecar nid matches the live blocked element nid'
+    );
   } finally {
     env.teardown();
   }
@@ -610,7 +621,7 @@ test('a blockSelector-matched element ADDED post-snapshot emits an add op whose 
     assert.equal(adds.length, 1, 'exactly one add op emitted');
     assert.ok(adds[0].html.includes('rr_width="111px"'), 'add-op html is the placeholder (rr_width)');
     assert.ok(adds[0].html.includes('rr_height="222px"'), 'add-op html is the placeholder (rr_height)');
-    assert.ok(adds[0].html.includes(NID_ATTR), 'placeholder carries a nid');
+    assert.deepEqual(adds[0].nodeIds, [env.capture.getNodeId(late)], 'placeholder identity travels in nodeIds');
     assert.ok(!adds[0].html.includes('late blocked secret'), 'blocked content absent from the add op');
     assert.ok(!adds[0].html.includes('late-attr-secret'), 'blocked attribute absent from the add op');
     const wire = wireText(transport);
@@ -663,14 +674,19 @@ test('input[type=password] value is masked in the snapshot even with NO masking 
     env.capture.start();
 
     const snapshots = transport.sent.filter((m) => m.type === STREAM.SNAPSHOT);
-    const html = snapshots[0].payload.html;
+    const snapshot = snapshots[0].payload;
+    const html = snapshot.html;
     assert.ok(!html.includes('hunter2'), 'password plaintext absent from the snapshot');
 
     const tpl = env.document.createElement('template');
     tpl.innerHTML = html;
     const pw = tpl.content.querySelector('#pw');
     assert.ok(pw, 'password input still mirrored');
-    assert.ok(pw.getAttribute(NID_ATTR), 'password input nid still present (element mirrored, value masked)');
+    assert.equal(
+      nodeIdForSerializedElement(snapshot, pw),
+      env.capture.getNodeId(env.document.getElementById('pw')),
+      'password input sidecar nid still present (element mirrored, value masked)'
+    );
     assert.equal(pw.getAttribute('value'), expectMask('hunter2'), 'password value masked with the default mask');
 
     // Non-password values pass through raw with maskInputs off (default).
@@ -747,7 +763,7 @@ test('with maskInputs true, a text input value is masked in snapshot AND attr-op
     assert.ok(!wire.includes('updated-input'), 'mutated input value never on the wire');
 
     const ta = env.document.getElementById('ta');
-    const taNid = ta.getAttribute(NID_ATTR);
+    const taNid = env.capture.getNodeId(ta);
     ta.firstChild.nodeValue = 'textarea edited secret';
     await settle(env.window);
     assert.ok(
