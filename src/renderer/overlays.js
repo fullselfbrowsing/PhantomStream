@@ -155,6 +155,48 @@ export function mapRectToHost(rect, scale) {
 }
 
 /**
+ * Map a host-document point over the scaled mirror back into captured-page
+ * viewport CSS pixels. Letterbox/out-of-bounds points are classified before
+ * rounding and clamping so hosts can reject non-dispatchable input.
+ *
+ * @param {{x: number, y: number}} point
+ *   Host-stage point relative to the viewer root.
+ * @param {{s?: number, offsetX?: number, offsetY?: number, pageW?: number, pageH?: number}} scale
+ *   Scale state from the viewer. Missing page dimensions are treated as 0.
+ * @returns {{inside: boolean, x: number|null, y: number|null}}
+ *   Dispatchable viewport coordinates, or null coordinates when outside.
+ */
+export function mapHostPointToViewport(point, scale) {
+  var p = point || {};
+  var sc = scale || {};
+  var s = (typeof sc.s === 'number' && isFinite(sc.s) && sc.s > 0) ? sc.s : 1;
+  var offsetX = (typeof sc.offsetX === 'number' && isFinite(sc.offsetX)) ? sc.offsetX : 0;
+  var offsetY = (typeof sc.offsetY === 'number' && isFinite(sc.offsetY)) ? sc.offsetY : 0;
+  var pageW = (typeof sc.pageW === 'number' && isFinite(sc.pageW)) ? Math.max(0, sc.pageW) : 0;
+  var pageH = (typeof sc.pageH === 'number' && isFinite(sc.pageH)) ? Math.max(0, sc.pageH) : 0;
+
+  if (pageW <= 0 || pageH <= 0 ||
+      typeof p.x !== 'number' || !isFinite(p.x) ||
+      typeof p.y !== 'number' || !isFinite(p.y)) {
+    return { inside: false, x: null, y: null };
+  }
+
+  var rawX = (p.x - offsetX) / s;
+  var rawY = (p.y - offsetY) / s;
+  if (rawX < 0 || rawY < 0 || rawX >= pageW || rawY >= pageH) {
+    return { inside: false, x: null, y: null };
+  }
+
+  var maxX = Math.max(0, Math.floor(pageW) - 1);
+  var maxY = Math.max(0, Math.floor(pageH) - 1);
+  return {
+    inside: true,
+    x: Math.max(0, Math.min(maxX, Math.round(rawX))),
+    y: Math.max(0, Math.min(maxY, Math.round(rawY)))
+  };
+}
+
+/**
  * Per-message context handed to handleOverlayMessage by the viewer.
  * @typedef {Object} OverlayContext
  * @property {{s: number, offsetX: number, offsetY: number}} scale

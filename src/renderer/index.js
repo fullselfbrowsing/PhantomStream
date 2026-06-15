@@ -87,6 +87,9 @@ import { STREAM, CONTROL, NID_ATTR, isCurrentStream } from '../protocol/messages
  *   the viewer root from the container. Idempotent.
  * @property {() => void} destroy
  *   detach() plus state/overlay reset. Idempotent.
+ * @property {() => {scale: Object, viewport: Object, container: Object}} getViewportMapping
+ *   Return cloned scale, viewport, and container geometry for host-owned
+ *   input overlays.
  * @property {(kind: string, renderFn: (payload: *, anchorRect: ?Object, layer: Element) => void) => void} registerOverlay
  *   Register a custom overlay kind (delegates to the overlays registry --
  *   the host-facing extension seam from D-10).
@@ -539,6 +542,26 @@ export function createViewer(options) {
     iframe.style.transform = 'scale(' + scaleState.s + ')';
   }
 
+  function getViewportMapping() {
+    return {
+      scale: {
+        s: scaleState.s,
+        offsetX: scaleState.offsetX,
+        offsetY: scaleState.offsetY,
+        pageW: scaleState.pageW,
+        pageH: scaleState.pageH
+      },
+      viewport: {
+        width: scaleState.pageW,
+        height: scaleState.pageH
+      },
+      container: {
+        width: container.clientWidth || 0,
+        height: container.clientHeight || 0
+      }
+    };
+  }
+
   /**
    * Resolve a captured node id to a host-document overlay rect. Reads the
    * mirror contentDocument FRESH per call (never cached -- re-snapshots
@@ -817,6 +840,7 @@ export function createViewer(options) {
   return {
     detach: detach,
     destroy: destroy,
+    getViewportMapping: getViewportMapping,
     on: on,
     registerOverlay: registerOverlay
   };
@@ -826,4 +850,4 @@ export function createViewer(options) {
 // (package exports map "./renderer" -> this file in plan 02-05).
 export { escapeAttribute, buildShellAttributeString, buildSnapshotHtml } from './snapshot.js';
 export { applyMutations } from './diff.js';
-export { createOverlays, mapRectToHost, OVERLAY_CSS } from './overlays.js';
+export { createOverlays, mapRectToHost, mapHostPointToViewport, OVERLAY_CSS } from './overlays.js';
