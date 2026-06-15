@@ -4,7 +4,7 @@
 // Pins: factory-time validation throws ('viewer-container-required',
 // 'viewer-transport-required', 'viewer-sandbox-invalid' is creation-only),
 // the exact sandbox token list (phase criterion 3), viewer DOM structure,
-// the locked handle shape {detach, destroy, registerOverlay}, snapshot
+// the locked handle shape {detach, destroy, registerOverlay, on}, snapshot
 // srcdoc write + identity adoption, staleness rejection, waiting-state
 // gating (02-RESEARCH Pitfall 4 parity), the latched CONTROL.START resync
 // path (one send per generation, latch released only by the next snapshot),
@@ -254,7 +254,7 @@ test('iframe sandbox is exactly allow-same-origin (token list length 1)', () => 
   }
 });
 
-test('handle has exactly detach, destroy, and registerOverlay functions', () => {
+test('handle has exactly detach, destroy, registerOverlay, and on functions', () => {
   const env = setupEnv();
   try {
     const transport = createRecordingTransport();
@@ -265,12 +265,13 @@ test('handle has exactly detach, destroy, and registerOverlay functions', () => 
     });
     assert.deepEqual(
       Object.keys(env.viewer).sort(),
-      ['destroy', 'detach', 'registerOverlay'],
-      'handle surface is locked to exactly three members'
+      ['destroy', 'detach', 'on', 'registerOverlay'],
+      'handle surface is locked to exactly four members'
     );
     assert.equal(typeof env.viewer.detach, 'function');
     assert.equal(typeof env.viewer.destroy, 'function');
     assert.equal(typeof env.viewer.registerOverlay, 'function');
+    assert.equal(typeof env.viewer.on, 'function');
   } finally {
     env.teardown();
   }
