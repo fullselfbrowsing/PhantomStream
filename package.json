@@ -10,6 +10,7 @@
   "exports": {
     "./protocol": "./src/protocol/index.js",
     "./capture": "./src/capture/index.js",
+    "./adapters/playwright": "./src/adapters/playwright.js",
     "./renderer": "./src/renderer/index.js",
     "./relay": "./src/relay/index.js",
     "./transport/websocket": "./src/transport/websocket.js"
