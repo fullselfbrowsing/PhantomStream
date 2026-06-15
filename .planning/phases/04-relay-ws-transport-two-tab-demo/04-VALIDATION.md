@@ -41,12 +41,12 @@ created: 2026-06-14
 | 04-01-01 | 01 | 1 | RELY-01 | T-04-01 | Relay routes source-to-viewer and viewer-to-source by room/role without same-side echo. | unit | `node --test tests/relay-core.test.js` | no | pending |
 | 04-01-02 | 01 | 1 | RELY-01 | T-04-02 | Oversize frames are rejected before delivery and diagnostics include room prefix, role, type, size, cap, and compressed flag. | unit | `node --test tests/relay-core.test.js` | no | pending |
 | 04-01-03 | 01 | 1 | RELY-01 | T-04-03 | Wedged clients over the backpressure limit drop frames and increment diagnostics without blocking other clients. | unit | `node --test tests/relay-core.test.js` | no | pending |
-| 04-02-01 | 02 | 1 | RELY-02 | T-04-04 | Native deflate, plain JSON, and legacy `_lz` frames decode correctly without leaking exceptions. | unit | `node --test tests/websocket-transport.test.js tests/protocol.test.js` | no / yes | pending |
-| 04-02-02 | 02 | 1 | RELY-02 | T-04-05 | Async compression preserves FIFO send order and `flush()` resolves after queued sends drain. | unit | `node --test tests/websocket-transport.test.js` | no | pending |
-| 04-03-01 | 03 | 2 | VIEW-02 | T-04-06 | `viewer.on('state')` emits `connecting`, `live`, `stale`, `disconnected`; unsubscribe works; existing handle methods remain. | unit | `node --test tests/renderer-health-events.test.js tests/renderer-viewer.test.js` | no / yes | pending |
-| 04-03-02 | 03 | 2 | VIEW-02 | T-04-07 | `viewer.on('health')` exposes counters and timestamps only, never mirrored HTML/text payload content. | unit | `node --test tests/renderer-health-events.test.js` | no | pending |
-| 04-04-01 | 04 | 3 | PKG-01 | T-04-08 | CLI demo server binds `127.0.0.1`, prints source/viewer URLs and room prefix, and serves ESM with safe path handling. | integration | `node --test tests/demo-cli.test.js` | no | pending |
-| 04-04-02 | 04 | 3 | PKG-01 | T-04-09 | Browser demo mirrors a live mutation and relay shutdown produces `live -> stale -> disconnected`. | browser/manual | `node bin/phantom-stream.js demo`, open printed URLs, mutate source, stop relay process | no | pending |
+| 04-02-01 | 02 | 2 | RELY-02 | T-04-04 | Native deflate, plain JSON, and legacy `_lz` frames decode correctly without leaking exceptions. | unit | `node --test tests/websocket-transport.test.js tests/protocol.test.js` | no / yes | pending |
+| 04-02-02 | 02 | 2 | RELY-02 | T-04-05 | Async compression preserves FIFO send order and `flush()` resolves after queued sends drain. | unit | `node --test tests/websocket-transport.test.js` | no | pending |
+| 04-03-01 | 03 | 3 | VIEW-02 | T-04-06 | `viewer.on('state')` emits `connecting`, `live`, `stale`, `disconnected`; unsubscribe works; existing handle methods remain. | unit | `node --test tests/renderer-health-events.test.js tests/renderer-viewer.test.js` | no / yes | pending |
+| 04-03-02 | 03 | 3 | VIEW-02 | T-04-07 | `viewer.on('health')` exposes counters and timestamps only, never mirrored HTML/text payload content. | unit | `node --test tests/renderer-health-events.test.js` | no | pending |
+| 04-04-01 | 04 | 4 | PKG-01 | T-04-08 | CLI demo server binds `127.0.0.1`, prints source/viewer URLs and room prefix, and serves ESM with safe path handling. | integration | `node --test tests/demo-cli.test.js` | no | pending |
+| 04-04-02 | 04 | 4 | PKG-01 | T-04-09 | Browser demo mirrors a live mutation and relay shutdown produces `live -> stale -> disconnected`. | browser/manual | `node bin/phantom-stream.js demo`, open printed URLs, mutate source, stop relay process | no | pending |
 
 ---
 
