@@ -10,6 +10,13 @@ import { startPlaywrightDemoServer } from '../examples/playwright-demo/server.js
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const BIN = join(ROOT, 'bin/phantom-stream.js');
+const PLAYWRIGHT_DEMO_DIR = join(ROOT, 'examples/playwright-demo');
+
+function assertIncludesAll(source, values) {
+  values.forEach(function (value) {
+    assert.ok(source.includes(value), 'missing required text: ' + value);
+  });
+}
 
 async function get(pathname, port) {
   return new Promise(function (resolveRequest, rejectRequest) {
@@ -109,6 +116,88 @@ test('Playwright demo static assets are served no-store', async () => {
     assert.equal(css.headers['content-type'], 'text/css; charset=utf-8');
     assert.equal(css.headers['cache-control'], 'no-store');
   });
+});
+
+test('Playwright demo viewer serves the approved operational UI contract', async () => {
+  await withPlaywrightDemoServer(async function (demo) {
+    const viewer = await get('/playwright/viewer', demo.server.address().port);
+
+    assert.equal(viewer.statusCode, 200);
+    assertIncludesAll(viewer.body, [
+      'PhantomStream — Playwright Remote Demo',
+      'Script-driven page mirrored through the local relay.',
+      'MIRROR',
+      'REMOTE CONTROL',
+      'HEALTH',
+      'Waiting for driven page',
+      'Remote control denied',
+      'Authorization hook',
+      'Approve',
+      'Deny',
+    ]);
+    assert.match(viewer.body, /id="lifecycle-badge"[^>]*role="status"[^>]*aria-live="polite"/);
+    assert.match(viewer.body, /name="authorization-mode"[^>]*value="deny"[^>]*checked/);
+  });
+});
+
+test('Playwright demo fixture serves deterministic remote-control targets', async () => {
+  await withPlaywrightDemoServer(async function (demo) {
+    const fixture = await get('/playwright/fixture', demo.server.address().port);
+
+    assert.equal(fixture.statusCode, 200);
+    assertIncludesAll(fixture.body, [
+      'Click target',
+      'Remote text',
+      'Navigate fixture',
+      'remote-text-echo',
+      'scroll-marker',
+    ]);
+  });
+});
+
+test('Playwright demo static files pin viewer fixture JS and CSS contracts', async () => {
+  const viewerHtml = await readFile(join(PLAYWRIGHT_DEMO_DIR, 'viewer.html'), 'utf8');
+  const viewerJs = await readFile(join(PLAYWRIGHT_DEMO_DIR, 'viewer.js'), 'utf8');
+  const fixtureHtml = await readFile(join(PLAYWRIGHT_DEMO_DIR, 'fixture.html'), 'utf8');
+  const fixtureJs = await readFile(join(PLAYWRIGHT_DEMO_DIR, 'fixture.js'), 'utf8');
+  const css = await readFile(join(PLAYWRIGHT_DEMO_DIR, 'demo.css'), 'utf8');
+
+  assertIncludesAll(viewerHtml, [
+    'PhantomStream — Playwright Remote Demo',
+    'Script-driven page mirrored through the local relay.',
+    'MIRROR',
+    'REMOTE CONTROL',
+    'HEALTH',
+    'Waiting for driven page',
+    'Remote control denied',
+    'Authorization hook',
+    'Approve',
+    'Deny',
+  ]);
+  assert.match(viewerHtml, /id="lifecycle-badge"[^>]*role="status"[^>]*aria-live="polite"/);
+  assert.match(viewerHtml, /name="authorization-mode"[^>]*value="deny"[^>]*checked/);
+
+  assert.match(viewerJs, /REMOTE_CONTROL/);
+  assert.match(viewerJs, /createViewer/);
+  assert.match(viewerJs, /createWebSocketTransport/);
+  assert.match(viewerJs, /mapHostPointToViewport/);
+  assert.match(viewerJs, /Type sent: .*chars/);
+  assert.doesNotMatch(viewerJs, /Type sent: .*payload\.text/);
+  assert.doesNotMatch(viewerJs, /Type sent: .*event\.key/);
+
+  assertIncludesAll(fixtureHtml + fixtureJs, [
+    'Click target',
+    'Remote text',
+    'Navigate fixture',
+    'remote-text-echo',
+    'scroll-marker',
+  ]);
+
+  assert.match(css, /aspect-ratio: 16 \/ 10/);
+  assert.match(css, /height: min\(72vh, 720px\)/);
+  assert.match(css, /background: #0f1117/);
+  assert.match(css, /#f59e0b/);
+  assert.doesNotMatch(css, /gradient|orb/i);
 });
 
 test('CLI playwright-demo prints local viewer driven page room and default-deny lines', async () => {
