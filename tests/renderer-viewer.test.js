@@ -5,7 +5,7 @@
 // 'viewer-transport-required', 'viewer-sandbox-invalid' is creation-only),
 // the exact sandbox token list (phase criterion 3), viewer DOM structure,
 // the locked handle shape {detach, destroy, getViewportMapping, registerOverlay, on,
-// resolveNode, highlightNode, clearHighlight}, snapshot
+// resolveNode, highlightNode, clearHighlight, requestSubtree}, snapshot
 // srcdoc write + identity adoption, staleness rejection, waiting-state
 // gating (02-RESEARCH Pitfall 4 parity), the latched CONTROL.START resync
 // path (one send per generation, latch released only by the next snapshot),
@@ -255,7 +255,7 @@ test('iframe sandbox is exactly allow-same-origin (token list length 1)', () => 
   }
 });
 
-test('handle has exactly detach, destroy, getViewportMapping, semantic addressing, registerOverlay, and on functions', () => {
+test('handle has exactly detach, destroy, getViewportMapping, semantic addressing, subtree recovery, registerOverlay, and on functions', () => {
   const env = setupEnv();
   try {
     const transport = createRecordingTransport();
@@ -274,9 +274,10 @@ test('handle has exactly detach, destroy, getViewportMapping, semantic addressin
         'highlightNode',
         'on',
         'registerOverlay',
+        'requestSubtree',
         'resolveNode',
       ],
-      'handle surface is locked to exactly eight members'
+      'handle surface is locked to exactly nine members'
     );
     assert.equal(typeof env.viewer.detach, 'function');
     assert.equal(typeof env.viewer.destroy, 'function');
@@ -284,6 +285,7 @@ test('handle has exactly detach, destroy, getViewportMapping, semantic addressin
     assert.equal(typeof env.viewer.resolveNode, 'function');
     assert.equal(typeof env.viewer.highlightNode, 'function');
     assert.equal(typeof env.viewer.clearHighlight, 'function');
+    assert.equal(typeof env.viewer.requestSubtree, 'function');
     assert.equal(typeof env.viewer.registerOverlay, 'function');
     assert.equal(typeof env.viewer.on, 'function');
   } finally {

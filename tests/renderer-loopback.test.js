@@ -225,8 +225,9 @@ function wireLoopback(env, opts = {}) {
   // The resync round-trip glue: the viewer's re-snapshot request IS
   // CONTROL.START (02-RESEARCH Pattern 2 -- dash:request-snapshot does not
   // exist in the protocol); the host maps it to a clean capture restart.
-  transport.onControl((type) => {
+  transport.onControl((type, payload) => {
     if (type === CONTROL.START) capture.start();
+    if (type === CONTROL.SUBTREE_REQUEST) capture.handleControl(type, payload);
   });
 
   return { transport, received, controls, viewer, capture };
@@ -705,6 +706,58 @@ test('stale-miss threshold drives the CONTROL.START resync round-trip end-to-end
       controlStartsOf(ctx.controls).length, 1,
       'still exactly one CONTROL.START -- recovery did not re-trigger resync'
     );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('on-demand subtree request recovers a truncated loopback region without full resnapshot', async () => {
+  const hugeText = 'x'.repeat(900000);
+  const env = setupEnv(
+    '<div id="source-pane">'
+      + '<section id="huge-region">' + hugeText + '</section>'
+      + '</div>'
+      + '<div id="mirror-container"></div>'
+  );
+  try {
+    const ctx = wireLoopback(env);
+    ctx.capture.start();
+    await settle(env.window);
+    const iframe = viewerIframe(env);
+    await waitForStreaming(iframe);
+    const cd = glueMirror(iframe);
+
+    const huge = env.document.getElementById('huge-region');
+    const hugeNid = ctx.capture.getNodeId(huge);
+    assert.ok(hugeNid, 'truncated live region remains tracked by nid');
+    assert.ok(
+      cd.querySelector('[data-phantomstream-truncated="true"]'),
+      'initial mirror contains a requestable truncated marker'
+    );
+    const markerCountBefore = cd.querySelectorAll('[data-phantomstream-truncated="true"]').length;
+
+    const requestId = ctx.viewer.requestSubtree(hugeNid, { reason: 'loopback-truncated-region' });
+    assert.match(requestId, /^subtree_[a-z0-9]+_\d+$/, 'viewer returned a concrete subtree requestId');
+    await settle(env.window);
+
+    assert.ok(
+      ctx.controls.some((c) => c.type === CONTROL.SUBTREE_REQUEST && c.payload.requestId === requestId),
+      'request traveled over the viewer-to-capture control path'
+    );
+    assert.equal(
+      snapshotsOf(ctx.received).length,
+      1,
+      'recovery did not request a full replacement snapshot'
+    );
+    assert.equal(
+      cd.querySelectorAll('[data-phantomstream-truncated="true"]').length,
+      markerCountBefore - 1,
+      'requested truncated marker was replaced'
+    );
+    const recovered = cd.getElementById('huge-region');
+    assert.ok(recovered, 'recovered source region was installed in the mirror');
+    assert.equal(recovered.textContent.length, hugeText.length, 'recovered subtree content matches');
+    assert.ok(ctx.viewer.resolveNode(hugeNid), 'original truncated nid now resolves to recovered content');
   } finally {
     env.teardown();
   }
