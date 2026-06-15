@@ -34,10 +34,9 @@
 // parent variant for add, a target variant for rm/attr/text) feed ONE
 // counter there and one here; the resync reason collapses to the parent
 // variant per the plan contract. Phase 7 routes node addressing through
-// injected identity hooks owned by createViewer; the selector path below is
-// only the transitional fallback removed by the static identity gate.
+// injected identity hooks owned by createViewer.
 
-import { DIFF_OP, NID_ATTR } from '../protocol/messages.js';
+import { DIFF_OP } from '../protocol/messages.js';
 import { sanitizeFragment, sanitizeAttrValue } from './sanitize.js';
 
 /**
@@ -62,7 +61,7 @@ import { sanitizeFragment, sanitizeAttrValue } from './sanitize.js';
 /**
  * Apply a batch of capture diff ops against an injected Document.
  * Behavioral port of dashboard.js:3209-3356: each op addresses its target
- * by nid selector; a lookup miss is counted and warned, never thrown; a
+ * by the injected identity resolver; a lookup miss is counted and warned, never thrown; a
  * throwing op is contained per-op so the rest of the batch still applies;
  * a failure of the batch machinery itself is caught once and escalated
  * immediately. Missing or empty batches return without side effects.
@@ -89,29 +88,14 @@ export function applyMutations(doc, mutations, counters, hooks) {
   if (!doc || !doc.body) return;
   if (!mutations) return; // missing batch: not an error (reference defaults to [])
 
-  function selectByNid(nid) {
-    return doc.querySelector('[' + NID_ATTR + '="' + nid + '"]');
-  }
-
-  function stampNodeIds(root, nodeIds) {
-    if (!root || !Array.isArray(nodeIds) || nodeIds.length === 0) return;
-    var elements = [root];
-    if (root.querySelectorAll) {
-      var descendants = root.querySelectorAll('*');
-      for (var i = 0; i < descendants.length; i++) elements.push(descendants[i]);
-    }
-    for (var n = 0; n < elements.length && n < nodeIds.length; n++) {
-      elements[n].setAttribute(NID_ATTR, nodeIds[n]);
-    }
-  }
-
+  // hooks.identity is normalized through opts so omitted hooks stay safe.
   var identity = opts.identity || {};
   var resolve = typeof identity.resolve === 'function'
     ? function (nid) { return identity.resolve(nid); }
-    : selectByNid;
+    : function () { return null; };
   var indexSubtree = typeof identity.indexSubtree === 'function'
     ? function (root, nodeIds) { identity.indexSubtree(root, nodeIds || []); }
-    : stampNodeIds;
+    : function () {};
   var removeSubtree = typeof identity.removeSubtree === 'function'
     ? function (root) { identity.removeSubtree(root); }
     : function () {};
