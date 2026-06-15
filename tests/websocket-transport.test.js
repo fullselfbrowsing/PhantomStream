@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
+  createWebSocketTransport,
   encodeWireMessage,
   decodeWireMessage,
 } from '../src/transport/websocket.js';
@@ -18,6 +19,70 @@ function utf8Codec() {
     },
     async decompress(bytes) {
       return new TextDecoder().decode(bytes);
+    }
+  };
+}
+
+function tick() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function createFakeWebSocketClass() {
+  return class FakeWebSocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+    static instances = [];
+
+    constructor(url) {
+      this.url = url;
+      this.readyState = FakeWebSocket.CONNECTING;
+      this.bufferedAmount = 0;
+      this.sent = [];
+      this.closed = false;
+      this.listeners = {
+        open: new Set(),
+        message: new Set(),
+        error: new Set(),
+        close: new Set(),
+      };
+      FakeWebSocket.instances.push(this);
+    }
+
+    addEventListener(type, handler) {
+      this.listeners[type].add(handler);
+    }
+
+    removeEventListener(type, handler) {
+      this.listeners[type].delete(handler);
+    }
+
+    send(raw) {
+      this.sent.push(raw);
+    }
+
+    close(code, reason) {
+      this.closed = true;
+      this.readyState = FakeWebSocket.CLOSED;
+      this.emit('close', { code: code || 1000, reason: reason || '' });
+    }
+
+    emit(type, event) {
+      this.listeners[type].forEach((handler) => handler(event || {}));
+    }
+
+    open() {
+      this.readyState = FakeWebSocket.OPEN;
+      this.emit('open', {});
+    }
+
+    message(data) {
+      this.emit('message', { data });
+    }
+
+    error(error) {
+      this.emit('error', { error });
     }
   };
 }
@@ -117,4 +182,177 @@ test('native compression fallback records a status diagnostic', async () => {
 
   assert.deepEqual(JSON.parse(wire), msg);
   assert.ok(statuses.some((status) => status.reason === 'native-deflate-unavailable'));
+});
+
+test('send is fire-and-forget and returns undefined', () => {
+  const FakeWebSocket = createFakeWebSocketClass();
+  const transport = createWebSocketTransport({
+    url: 'ws://example.test/ws',
+    WebSocket: FakeWebSocket,
+    codec: utf8Codec(),
+    compressionThresholdBytes: 0
+  });
+  FakeWebSocket.instances[0].open();
+
+  assert.equal(transport.send('ext:a', { html: '<secret>' }), undefined);
+});
+
+test('async encoding preserves FIFO send order', async () => {
+  const FakeWebSocket = createFakeWebSocketClass();
+  const codec = {
+    async compress(raw) {
+      if (JSON.parse(raw).type === 'ext:b') {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      return new TextEncoder().encode(raw);
+    },
+    async decompress(bytes) {
+      return new TextDecoder().decode(bytes);
+    }
+  };
+  const transport = createWebSocketTransport({
+    url: 'ws://example.test/ws',
+    WebSocket: FakeWebSocket,
+    codec,
+    compressionThresholdBytes: 0
+  });
+  const ws = FakeWebSocket.instances[0];
+  ws.open();
+
+  transport.send('ext:a', { n: 1 });
+  transport.send('ext:b', { n: 2 });
+  transport.send('ext:c', { n: 3 });
+  await transport.flush();
+
+  const decoded = await Promise.all(ws.sent.map((raw) => decodeWireMessage(raw, { codec })));
+  assert.deepEqual(decoded.map((result) => result.msg.type), ['ext:a', 'ext:b', 'ext:c']);
+});
+
+test('flush resolves only after queued sends are on the socket', async () => {
+  const FakeWebSocket = createFakeWebSocketClass();
+  let release;
+  const codec = {
+    async compress(raw) {
+      await new Promise((resolve) => { release = resolve; });
+      return new TextEncoder().encode(raw);
+    },
+    async decompress(bytes) {
+      return new TextDecoder().decode(bytes);
+    }
+  };
+  const transport = createWebSocketTransport({
+    url: 'ws://example.test/ws',
+    WebSocket: FakeWebSocket,
+    codec,
+    compressionThresholdBytes: 0
+  });
+  const ws = FakeWebSocket.instances[0];
+  ws.open();
+
+  transport.send('ext:slow', { n: 1 });
+  let flushed = false;
+  const flushPromise = transport.flush().then(() => { flushed = true; });
+  await tick();
+  assert.equal(flushed, false);
+  assert.equal(ws.sent.length, 0);
+
+  release();
+  await flushPromise;
+  assert.equal(flushed, true);
+  assert.equal(ws.sent.length, 1);
+});
+
+test('inbound plain native and legacy frames fan out to subscribers', async () => {
+  const FakeWebSocket = createFakeWebSocketClass();
+  const transport = createWebSocketTransport({
+    url: 'ws://example.test/ws',
+    WebSocket: FakeWebSocket,
+    codec: utf8Codec(),
+    lz: fakeLz,
+    compressionThresholdBytes: 0
+  });
+  const ws = FakeWebSocket.instances[0];
+  const first = [];
+  const second = [];
+  const unsubscribe = transport.onMessage((type, payload) => first.push({ type, payload }));
+  transport.onMessage((type, payload) => second.push({ type, payload }));
+
+  ws.message(JSON.stringify({ type: 'ext:plain', payload: { a: 1 }, ts: 1 }));
+  await tick();
+  unsubscribe();
+  ws.message(await encodeWireMessage({ type: 'ext:native', payload: { b: 2 }, ts: 2 }, {
+    codec: utf8Codec(),
+    compressionThresholdBytes: 0
+  }));
+  ws.message(JSON.stringify({
+    _lz: true,
+    d: fakeLz.compressToBase64(JSON.stringify({ type: 'ext:legacy', payload: { c: 3 }, ts: 3 }))
+  }));
+  await tick();
+
+  assert.deepEqual(first, [{ type: 'ext:plain', payload: { a: 1 } }]);
+  assert.deepEqual(second.map((entry) => entry.type), ['ext:plain', 'ext:native', 'ext:legacy']);
+  assert.deepEqual(second.map((entry) => entry.payload), [{ a: 1 }, { b: 2 }, { c: 3 }]);
+});
+
+test('status subscribers receive lifecycle states and unsubscribe', () => {
+  const FakeWebSocket = createFakeWebSocketClass();
+  const transport = createWebSocketTransport({
+    url: 'ws://example.test/ws',
+    WebSocket: FakeWebSocket
+  });
+  const ws = FakeWebSocket.instances[0];
+  const states = [];
+  const unsubscribe = transport.onStatus((status) => states.push(status.state));
+
+  ws.open();
+  ws.error(new Error('boom'));
+  ws.close(1006, 'down');
+  unsubscribe();
+  ws.open();
+
+  assert.deepEqual(states, ['connecting', 'open', 'error', 'closed']);
+});
+
+test('health counters omit mirrored content fields', async () => {
+  const FakeWebSocket = createFakeWebSocketClass();
+  let now = 1000;
+  const transport = createWebSocketTransport({
+    url: 'ws://example.test/ws',
+    WebSocket: FakeWebSocket,
+    codec: utf8Codec(),
+    compressionThresholdBytes: 0,
+    now() {
+      now += 1;
+      return now;
+    }
+  });
+  const ws = FakeWebSocket.instances[0];
+  ws.bufferedAmount = 42;
+  ws.open();
+
+  transport.send('ext:dom-snapshot', {
+    html: '<main>secret</main>',
+    text: 'secret',
+    payload: 'secret',
+    url: 'https://secret.test',
+    title: 'secret'
+  });
+  await transport.flush();
+  ws.message(JSON.stringify({ type: 'ext:dom-mutations', payload: { html: '<p>secret</p>' }, ts: 9 }));
+  await tick();
+
+  const health = transport.getHealth();
+  assert.equal(health.sentByType['ext:dom-snapshot'], 1);
+  assert.equal(health.receivedByType['ext:dom-mutations'], 1);
+  assert.equal(health.lastSendAt > 0, true);
+  assert.equal(health.lastReceiveAt > 0, true);
+  assert.equal(health.bufferedAmount, 42);
+  assert.equal(typeof health.drops, 'number');
+  assert.ok(Array.isArray(health.errors));
+
+  const serialized = JSON.stringify(health);
+  for (const key of ['html', 'text', 'payload', 'url', 'title']) {
+    assert.equal(serialized.includes(key), false);
+  }
 });
