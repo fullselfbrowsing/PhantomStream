@@ -18,6 +18,7 @@
   "scripts": {
     "test": "node --test tests/*.test.js tests/differential/*.test.js",
     "demo": "node bin/phantom-stream.js demo",
+    "demo:playwright": "node bin/phantom-stream.js playwright-demo",
     "example:loopback": "node examples/serve.js"
   },
   "repository": {
@@ -36,7 +37,8 @@
   "author": "Lakshman Turlapati",
   "license": "MIT",
   "devDependencies": {
-    "jsdom": "^29.1.1"
+    "jsdom": "^29.1.1",
+    "playwright": "^1.60.0"
   },
   "dependencies": {
     "ws": "8.21.0"

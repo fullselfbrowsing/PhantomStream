@@ -65,14 +65,21 @@ test('startPlaywrightDemoServer binds 127.0.0.1 and returns actual bound URLs', 
     assert.equal(driven.pathname, '/playwright/fixture');
     assert.equal(viewer.searchParams.get('room'), demo.roomKey);
     assert.equal(driven.searchParams.get('room'), demo.roomKey);
-    assert.equal(viewer.searchParams.get('ws'), demo.wsUrl);
+    assert.equal(viewer.searchParams.get('ws'), demo.viewerWsUrl);
     assert.equal(driven.searchParams.get('ws'), demo.wsUrl);
 
-    const ws = new URL(demo.wsUrl);
-    assert.equal(ws.protocol, 'ws:');
-    assert.equal(ws.hostname, '127.0.0.1');
-    assert.equal(ws.pathname, '/ws');
-    assert.equal(ws.searchParams.get('room'), demo.roomKey);
+    const sourceWs = new URL(demo.wsUrl);
+    const viewerWs = new URL(demo.viewerWsUrl);
+    assert.equal(sourceWs.protocol, 'ws:');
+    assert.equal(viewerWs.protocol, 'ws:');
+    assert.equal(sourceWs.hostname, '127.0.0.1');
+    assert.equal(viewerWs.hostname, '127.0.0.1');
+    assert.equal(sourceWs.pathname, '/ws');
+    assert.equal(viewerWs.pathname, '/ws');
+    assert.equal(sourceWs.searchParams.get('room'), demo.roomKey);
+    assert.equal(viewerWs.searchParams.get('room'), demo.roomKey);
+    assert.equal(sourceWs.searchParams.get('role'), 'source');
+    assert.equal(viewerWs.searchParams.get('role'), 'viewer');
   });
 });
 
