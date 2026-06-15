@@ -5,6 +5,9 @@
 //     Document created via createHTMLDocument -- jsdom 29 never parses
 //     srcdoc (02-RESEARCH.md Pattern 3, verified), so the Document seam is
 //     the only unit-testable target. No iframe here.
+//   - Renderer identity is sidecar-driven: fixtures intentionally contain
+//     no framework data-fsb-nid attributes, and tests pass an injected
+//     identity resolver/index built from nodeIds sidecars.
 //   - Miss accounting: a nid lookup miss increments counters.staleMisses,
 //     warns through hooks.logger, never throws; >= 3 misses fire the
 //     injected resync callback with reason 'stale-mutation-parent'.
@@ -23,7 +26,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { applyMutations } from '../src/renderer/diff.js';
-import { NID_ATTR, DIFF_OP } from '../src/protocol/messages.js';
+import { DIFF_OP } from '../src/protocol/messages.js';
 
 /**
  * Build a fresh JSDOM instance and return an env whose makeDoc() mints
@@ -71,31 +74,86 @@ function recordingHooks() {
   };
 }
 
+function elementsInSubtree(root) {
+  const elements = [];
+  if (!root) return elements;
+  if (root.nodeType === 1) elements.push(root);
+  if (root.querySelectorAll) {
+    for (const el of root.querySelectorAll('*')) elements.push(el);
+  }
+  return elements;
+}
+
+function createIdentityIndex(doc, nodeIds) {
+  const nidToNode = new Map();
+  const nodeToNid = new WeakMap();
+
+  function pair(elements, ids) {
+    const safeIds = Array.isArray(ids) ? ids : [];
+    for (let i = 0; i < elements.length && i < safeIds.length; i++) {
+      const nid = String(safeIds[i]);
+      nidToNode.set(nid, elements[i]);
+      nodeToNid.set(elements[i], nid);
+    }
+  }
+
+  function indexSubtree(root, ids) {
+    pair(elementsInSubtree(root), ids);
+  }
+
+  function removeSubtree(root) {
+    for (const el of elementsInSubtree(root)) {
+      const nid = nodeToNid.get(el);
+      if (nid) nidToNode.delete(nid);
+      nodeToNid.delete(el);
+    }
+  }
+
+  pair(Array.from(doc.body.querySelectorAll('*')), nodeIds);
+
+  return {
+    resolve(nid) { return nidToNode.get(String(nid)) || null; },
+    indexSubtree,
+    removeSubtree,
+  };
+}
+
+function indexedHooks(doc, nodeIds) {
+  const rec = recordingHooks();
+  const identity = createIdentityIndex(doc, nodeIds);
+  rec.identity = identity;
+  rec.hooks.identity = identity;
+  return rec;
+}
+
 function freshCounters() {
   return { staleMisses: 0, applyFailures: 0 };
 }
 
-/** Fixture element stamped through the protocol constant. */
-function nidEl(tag, nid, inner) {
-  return '<' + tag + ' ' + NID_ATTR + '="' + nid + '">' + (inner || '') + '</' + tag + '>';
+/** Fixture element with no framework identity attributes. */
+function el(tag, inner) {
+  return '<' + tag + '>' + (inner || '') + '</' + tag + '>';
 }
 
-const BODY_HTML = nidEl('div', '1', nidEl('span', '2', 'hello') + nidEl('span', '3', 'world'));
+const BODY_HTML = el('div', el('span', 'hello') + el('span', 'world'));
+const BODY_NODE_IDS = ['1', '2', '3'];
 
 test("'add' op inserts the html's first element via TEMPLATE-context parsing + importNode", () => {
   const env = setupEnv();
   try {
     const doc = env.makeDoc(BODY_HTML);
-    const rec = recordingHooks();
+    const rec = indexedHooks(doc, BODY_NODE_IDS);
     const counters = freshCounters();
+    const add = { op: DIFF_OP.ADD, parentNid: '1', html: '<p>new</p>', nodeIds: ['9'] };
+    assert.equal(add.html.includes('data-fsb-nid'), false, 'add html is sidecar-only');
     applyMutations(doc, [
-      { op: DIFF_OP.ADD, parentNid: '1', html: nidEl('p', '9', 'new') },
+      add,
     ], counters, rec.hooks);
-    const added = doc.querySelector('[' + NID_ATTR + '="9"]');
+    const added = rec.identity.resolve('9');
     assert.ok(added, 'new node is present in the target Document');
     assert.equal(added.tagName, 'P', 'first element of the template-parsed html was inserted');
     assert.equal(added.ownerDocument, doc, 'importNode adopted the node into the target Document');
-    assert.equal(added.parentElement.getAttribute(NID_ATTR), '1', 'appended under parentNid');
+    assert.equal(added.parentElement, rec.identity.resolve('1'), 'appended under parentNid');
     assert.equal(added.parentElement.lastElementChild, added, 'appendChild when no beforeNid');
     assert.equal(counters.staleMisses, 0);
     assert.equal(counters.applyFailures, 0);
@@ -109,19 +167,19 @@ test("'add' with beforeNid uses insertBefore; a missing beforeNid lookup behaves
   const env = setupEnv();
   try {
     const doc = env.makeDoc(BODY_HTML);
-    const rec = recordingHooks();
+    const rec = indexedHooks(doc, BODY_NODE_IDS);
     const counters = freshCounters();
     applyMutations(doc, [
-      { op: DIFF_OP.ADD, parentNid: '1', html: nidEl('p', '9', 'first'), beforeNid: '2' },
-      { op: DIFF_OP.ADD, parentNid: '1', html: nidEl('p', '10', 'last'), beforeNid: 'nope' },
+      { op: DIFF_OP.ADD, parentNid: '1', html: '<p>first</p>', beforeNid: '2', nodeIds: ['9'] },
+      { op: DIFF_OP.ADD, parentNid: '1', html: '<p>last</p>', beforeNid: 'nope', nodeIds: ['10'] },
     ], counters, rec.hooks);
-    const parent = doc.querySelector('[' + NID_ATTR + '="1"]');
+    const parent = rec.identity.resolve('1');
     assert.equal(
-      parent.firstElementChild.getAttribute(NID_ATTR), '9',
+      parent.firstElementChild, rec.identity.resolve('9'),
       'beforeNid hit: inserted before the addressed sibling'
     );
     assert.equal(
-      parent.lastElementChild.getAttribute(NID_ATTR), '10',
+      parent.lastElementChild, rec.identity.resolve('10'),
       'beforeNid miss: insertBefore(node, null) appends (reference parity)'
     );
     assert.equal(counters.staleMisses, 0, 'a missing beforeNid is NOT a stale miss');
@@ -138,22 +196,21 @@ test("an 'add' op with a bare <tr> row INSERTS under a table-shaped parent (temp
     // div-context parsing discarded context-dependent elements; template-
     // context parsing preserves them (03-RESEARCH Pattern 2, verified
     // against jsdom 29) -- the queued Phase-3+ upgrade is now taken.
-    const doc = env.makeDoc(
-      '<table ' + NID_ATTR + '="t1"><tbody ' + NID_ATTR + '="tb1"></tbody></table>'
-    );
-    const rec = recordingHooks();
+    const doc = env.makeDoc('<table><tbody></tbody></table>');
+    const rec = indexedHooks(doc, ['t1', 'tb1']);
     const counters = freshCounters();
     applyMutations(doc, [
       {
         op: DIFF_OP.ADD,
         parentNid: 'tb1',
-        html: '<tr ' + NID_ATTR + '="r1"><td ' + NID_ATTR + '="c1">row</td></tr>',
+        html: '<tr><td>row</td></tr>',
+        nodeIds: ['r1', 'c1'],
       },
     ], counters, rec.hooks);
-    const row = doc.querySelector('[' + NID_ATTR + '="r1"]');
+    const row = rec.identity.resolve('r1');
     assert.ok(row, 'tr inserted (no longer dropped by the parse context)');
     assert.equal(row.tagName, 'TR');
-    assert.equal(row.parentElement.getAttribute(NID_ATTR), 'tb1', 'inserted under the tbody parent');
+    assert.equal(row.parentElement, rec.identity.resolve('tb1'), 'inserted under the tbody parent');
     assert.equal(row.querySelector('td').textContent, 'row', 'td child preserved');
     assert.equal(counters.staleMisses, 0, 'zero stale misses: the parse-drop class is gone');
     assert.equal(counters.applyFailures, 0);
@@ -168,7 +225,7 @@ test("an 'add' whose html parses to no element (empty/whitespace/text-only) stil
   const env = setupEnv();
   try {
     const doc = env.makeDoc(BODY_HTML);
-    const rec = recordingHooks();
+    const rec = indexedHooks(doc, BODY_NODE_IDS);
     const counters = freshCounters();
     applyMutations(doc, [
       { op: DIFF_OP.ADD, parentNid: '1', html: '' },
@@ -203,12 +260,15 @@ test("'rm' removes the nid-addressed element", () => {
   const env = setupEnv();
   try {
     const doc = env.makeDoc(BODY_HTML);
-    const rec = recordingHooks();
+    const rec = indexedHooks(doc, BODY_NODE_IDS);
     const counters = freshCounters();
-    applyMutations(doc, [{ op: DIFF_OP.REMOVE, nid: '2' }], counters, rec.hooks);
-    assert.equal(doc.querySelector('[' + NID_ATTR + '="2"]'), null, 'element removed');
-    assert.ok(doc.querySelector('[' + NID_ATTR + '="3"]'), 'sibling untouched');
-    assert.equal(counters.staleMisses, 0);
+    applyMutations(doc, [
+      { op: DIFF_OP.REMOVE, nid: '2' },
+      { op: DIFF_OP.TEXT, nid: '2', text: 'stale' },
+    ], counters, rec.hooks);
+    assert.equal(rec.identity.resolve('2'), null, 'removed element is also removed from the index');
+    assert.ok(rec.identity.resolve('3'), 'sibling untouched');
+    assert.equal(counters.staleMisses, 1, 'later resolution of the removed nid is stale');
     assert.equal(counters.applyFailures, 0);
   } finally {
     env.teardown();
@@ -219,12 +279,12 @@ test("'attr' with val null removes the attribute; otherwise sets it", () => {
   const env = setupEnv();
   try {
     const doc = env.makeDoc(BODY_HTML);
-    const rec = recordingHooks();
+    const rec = indexedHooks(doc, BODY_NODE_IDS);
     const counters = freshCounters();
     applyMutations(doc, [
       { op: DIFF_OP.ATTR, nid: '2', attr: 'title', val: 'tip' },
     ], counters, rec.hooks);
-    const el = doc.querySelector('[' + NID_ATTR + '="2"]');
+    const el = rec.identity.resolve('2');
     assert.equal(el.getAttribute('title'), 'tip', 'non-null val -> setAttribute');
     applyMutations(doc, [
       { op: DIFF_OP.ATTR, nid: '2', attr: 'title', val: null },
@@ -240,12 +300,12 @@ test("'text' sets textContent on the nid-addressed element", () => {
   const env = setupEnv();
   try {
     const doc = env.makeDoc(BODY_HTML);
-    const rec = recordingHooks();
+    const rec = indexedHooks(doc, BODY_NODE_IDS);
     const counters = freshCounters();
     applyMutations(doc, [
       { op: DIFF_OP.TEXT, nid: '3', text: 'updated' },
     ], counters, rec.hooks);
-    const el = doc.querySelector('[' + NID_ATTR + '="3"]');
+    const el = rec.identity.resolve('3');
     assert.equal(el.textContent, 'updated', 'textContent replaced');
     assert.equal(counters.staleMisses, 0);
   } finally {
@@ -257,7 +317,7 @@ test('a stale miss increments counters.staleMisses, warns through the logger, an
   const env = setupEnv();
   try {
     const doc = env.makeDoc(BODY_HTML);
-    const rec = recordingHooks();
+    const rec = indexedHooks(doc, BODY_NODE_IDS);
     const counters = freshCounters();
     assert.doesNotThrow(() => {
       applyMutations(doc, [
@@ -277,7 +337,7 @@ test("the third stale miss fires requestResync with reason 'stale-mutation-paren
   const env = setupEnv();
   try {
     const doc = env.makeDoc(BODY_HTML);
-    const rec = recordingHooks();
+    const rec = indexedHooks(doc, BODY_NODE_IDS);
     const counters = freshCounters();
     applyMutations(doc, [
       { op: DIFF_OP.ADD, parentNid: 'ghost-a', html: '<p>x</p>' },
@@ -300,7 +360,7 @@ test('an op whose apply throws increments applyFailures and the NEXT op in the b
   const env = setupEnv();
   try {
     const doc = env.makeDoc(BODY_HTML);
-    const rec = recordingHooks();
+    const rec = indexedHooks(doc, BODY_NODE_IDS);
     const counters = freshCounters();
     applyMutations(doc, [
       // 'bad name' is an invalid attribute name -> setAttribute throws
@@ -308,7 +368,7 @@ test('an op whose apply throws increments applyFailures and the NEXT op in the b
       { op: DIFF_OP.TEXT, nid: '3', text: 'after-failure' },
     ], counters, rec.hooks);
     assert.equal(counters.applyFailures, 1, 'throwing op counted as apply failure');
-    const survivor = doc.querySelector('[' + NID_ATTR + '="3"]');
+    const survivor = rec.identity.resolve('3');
     assert.equal(survivor.textContent, 'after-failure', 'next op in the same batch applied');
     assert.equal(rec.resyncs.length, 0, 'one failure is below the threshold of 2');
     assert.ok(rec.warns.length >= 1, 'failure logged through hooks.logger.warn');
@@ -321,7 +381,7 @@ test("the second apply failure fires requestResync with reason 'dom-mutation-app
   const env = setupEnv();
   try {
     const doc = env.makeDoc(BODY_HTML);
-    const rec = recordingHooks();
+    const rec = indexedHooks(doc, BODY_NODE_IDS);
     const counters = freshCounters();
     applyMutations(doc, [
       { op: DIFF_OP.ATTR, nid: '2', attr: 'bad name', val: 'x' },
@@ -373,22 +433,19 @@ test('missing or empty mutations return without error, counters untouched', () =
   }
 });
 
-test('ops address nodes through the NID_ATTR protocol constant', () => {
+test('ops address nodes through the injected identity resolver', () => {
   const env = setupEnv();
   try {
     const doc = env.makeDoc('');
-    // Stamp a fresh element using the constant itself -- if diff.js built its
-    // selector from any other attribute name, this lookup would miss.
     const el = doc.createElement('section');
-    el.setAttribute(NID_ATTR, '42');
     doc.body.appendChild(el);
-    const rec = recordingHooks();
+    const rec = indexedHooks(doc, ['42']);
     const counters = freshCounters();
     applyMutations(doc, [
-      { op: DIFF_OP.TEXT, nid: '42', text: 'found by constant' },
+      { op: DIFF_OP.TEXT, nid: '42', text: 'found by resolver' },
     ], counters, rec.hooks);
-    assert.equal(el.textContent, 'found by constant', 'node stamped via NID_ATTR was found');
-    assert.equal(counters.staleMisses, 0, 'no miss: constant-addressed lookup succeeded');
+    assert.equal(el.textContent, 'found by resolver', 'node resolved without mirror attributes');
+    assert.equal(counters.staleMisses, 0, 'no miss: resolver-addressed lookup succeeded');
   } finally {
     env.teardown();
   }

@@ -27,6 +27,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { createOverlays, mapRectToHost, OVERLAY_CSS } from '../src/renderer/overlays.js';
+import { createViewer } from '../src/renderer/index.js';
+import { STREAM } from '../src/protocol/messages.js';
 
 /**
  * Fresh JSDOM per test; teardown closes the window. No globals are swapped:
@@ -61,6 +63,30 @@ function recordingLogger() {
       error(...args) { errors.push(args); },
     },
   };
+}
+
+function createRecordingTransport() {
+  const api = {
+    handler: null,
+    sent: [],
+    send(type, payload) { api.sent.push({ type, payload }); },
+    onMessage(handler) {
+      api.handler = handler;
+      return function unsubscribe() { api.handler = null; };
+    },
+    emit(type, payload) {
+      if (api.handler) api.handler(type, payload);
+    },
+  };
+  return api;
+}
+
+function writeViewerSrcdoc(env, iframe) {
+  const cd = iframe.contentDocument;
+  cd.open();
+  cd.write(iframe.getAttribute('srcdoc'));
+  cd.close();
+  iframe.dispatchEvent(new env.window.Event('load'));
 }
 
 /**
@@ -178,6 +204,64 @@ test('handleOverlayMessage positions the glow through the coordinate mapping', (
     assert.equal(glow.style.height, '20px', 'glow height scaled');
     assert.notEqual(glow.style.display, 'none', 'active glow is visible');
   } finally {
+    env.teardown();
+  }
+});
+
+test('viewer overlay nid anchors resolve through the nodeIds identity index', () => {
+  const env = setupEnv();
+  let viewer = null;
+  try {
+    const transport = createRecordingTransport();
+    viewer = createViewer({
+      container: env.document.body,
+      transport,
+      logger: recordingLogger().logger,
+    });
+    const payload = {
+      html: '<main><button>Click</button></main>',
+      nodeIds: ['1', '2'],
+      stylesheets: [],
+      inlineStyles: [],
+      htmlAttrs: {},
+      bodyAttrs: {},
+      htmlStyle: '',
+      bodyStyle: '',
+      scrollX: 0,
+      scrollY: 0,
+      viewportWidth: 800,
+      viewportHeight: 600,
+      streamSessionId: 's1',
+      snapshotId: 1,
+    };
+    transport.emit(STREAM.SNAPSHOT, payload);
+    const iframe = env.document.querySelector('iframe');
+    assert.equal(
+      iframe.getAttribute('srcdoc').includes('data-fsb-nid'),
+      false,
+      'snapshot srcdoc remains sidecar-only'
+    );
+
+    writeViewerSrcdoc(env, iframe);
+    const button = iframe.contentDocument.querySelector('button');
+    button.getBoundingClientRect = function () {
+      return { left: 11, top: 22, width: 33, height: 44 };
+    };
+
+    transport.emit(STREAM.OVERLAY, {
+      glow: { state: 'active', nid: '2' },
+      streamSessionId: 's1',
+      snapshotId: 1,
+    });
+
+    const glow = env.document.querySelector('.ps-overlay-glow');
+    assert.equal(glow.style.display, 'block', 'nid-anchored glow rendered');
+    assert.equal(glow.style.top, '22px');
+    assert.equal(glow.style.left, '11px');
+    assert.equal(glow.style.width, '33px');
+    assert.equal(glow.style.height, '44px');
+  } finally {
+    if (viewer) viewer.destroy();
     env.teardown();
   }
 });
