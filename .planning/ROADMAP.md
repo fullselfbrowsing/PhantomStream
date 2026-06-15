@@ -220,7 +220,7 @@ Plans:
 - [x] 08-07-PLAN.md — Bounded on-demand subtree fetch
 
 **Wave 5** *(blocked on 08-07)*
-- [ ] 08-08-PLAN.md — Playwright inject artifact sync and adapter verification
+- [x] 08-08-PLAN.md — Playwright inject artifact sync and adapter verification
 
 **Wave 6** *(blocked on 08-08)*
 - [ ] 08-09-PLAN.md — Docs, differential oracle, and final automated gate
@@ -296,7 +296,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 5. Playwright/CDP Adapter, Remote Control & Agent Demo | 6/6 | Complete    | 2026-06-15 |
 | 6. Extension MV3 + Bookmarklet Adapters | 5/5 | Complete   | 2026-06-15 |
 | 7. WeakMap Node Identity + Semantic Addressing API | 4/4 | Complete   | 2026-06-15 |
-| 8. Shadow DOM, Iframes & Fidelity Completion | 7/9 | In Progress|  |
+| 8. Shadow DOM, Iframes & Fidelity Completion | 8/9 | In Progress|  |
 | 9. CSSOM Capture Mode | 0/TBD | Not started | - |
 | 10. npm Packaging & 0.x Publish | 0/TBD | Not started | - |
 | 11. FSB Swap-In → 1.0 | 0/TBD | Not started | - |
