@@ -160,7 +160,7 @@ Plans:
 - [x] 05-04-PLAN.md — Local-only Playwright demo server, `playwright-demo` CLI command, package wiring, and Playwright dependency
 
 **Wave 3** *(blocked on 05-03 and 05-04)*
-- [ ] 05-05-PLAN.md — Approved Playwright demo viewer UI, transparent control overlay, and deterministic fixture
+- [x] 05-05-PLAN.md — Approved Playwright demo viewer UI, transparent control overlay, and deterministic fixture
 
 **Wave 4** *(blocked on 05-05)*
 - [ ] 05-06-PLAN.md — Full automated gate, browser verification checkpoint, and verification evidence artifact

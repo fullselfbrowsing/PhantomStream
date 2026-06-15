@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-04-PLAN.md
-last_updated: "2026-06-15T09:08:20.403Z"
+stopped_at: Completed 05-05-PLAN.md
+last_updated: "2026-06-15T09:21:27.046Z"
 last_activity: 2026-06-15
 progress:
   total_phases: 13
   completed_phases: 4
   total_plans: 26
-  completed_plans: 24
-  percent: 92
+  completed_plans: 25
+  percent: 96
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-06-14)
 ## Current Position
 
 Phase: 05 (Playwright/CDP Adapter, Remote Control & Agent Demo) — EXECUTING
-Plan: 5 of 6
+Plan: 6 of 6
 Status: Ready to execute
 Last activity: 2026-06-15
 
@@ -65,6 +65,7 @@ Progress: [█████████░] 92%
 | Phase 05 P02 | 9 min | 2 tasks | 6 files |
 | Phase 05 P03 | 4 min | 2 tasks | 4 files |
 | Phase 05 P04 | 9 min | 2 tasks | 5 files |
+| Phase 05 P05 | 9 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -101,6 +102,9 @@ Recent decisions affecting current work:
 - [Phase 05]: The Playwright demo exposes role-specific WebSocket URLs because the Phase 04 relay backend rejects connections without role=source or role=viewer.
 - [Phase 05]: The CLI keeps phantom-stream demo behavior intact and adds phantom-stream playwright-demo as a separate command.
 - [Phase 05]: 05-04 serves minimal no-store fallback content for /playwright/viewer, /playwright/fixture, and /playwright/demo.css; full UI assets remain the scope of 05-05.
+- [Phase 05]: The Playwright demo uses existing static server paths for viewer.js and fixture.js while preserving no-store /playwright routes.
+- [Phase 05]: The exact demo title appears once as the visible H1 so the single-match acceptance grep remains meaningful.
+- [Phase 05]: The viewer marks requesting locally, but active and denied states come only from adapter REMOTE_CONTROL.STATE frames.
 
 ### Pending Todos
 
@@ -123,6 +127,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-15T09:08:20.400Z
-Stopped at: Completed 05-04-PLAN.md
+Last session: 2026-06-15T09:21:27.043Z
+Stopped at: Completed 05-05-PLAN.md
 Resume file: None
