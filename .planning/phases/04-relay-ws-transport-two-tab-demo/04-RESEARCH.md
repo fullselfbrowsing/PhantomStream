@@ -518,17 +518,15 @@ transport.onStatus(function (status) {
 | A2 | `transport.onStatus(handler)` is the cleanest optional hook for giving `createViewer` relay/WebSocket close/reconnect state. | Common Pitfalls / Architecture Patterns | Medium: if the planner chooses synthetic `STREAM.STATE` messages instead, tests and docs must still prove `viewer.on('state')` observes relay death. |
 | A3 | Browser verification will open viewer first, then source, matching the loopback ordering contract. | Common Pitfalls / Validation Architecture | Low: source auto-start plus viewer resync should make either order recover, but the checkpoint should test the canonical order. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Native deflate envelope marker**
    - What we know: Plain JSON and legacy `{ _lz, d }` are locked; native deflate needs a distinct self-identifying marker. [VERIFIED: 04-CONTEXT.md] [VERIFIED: src/protocol/envelope.js]
-   - What's unclear: The exact marker name is not locked. [VERIFIED: 04-CONTEXT.md]
-   - Recommendation: Use `{ _ps: 'deflate-raw', d: base64 }` so legacy `_lz` decoding remains unambiguous. [ASSUMED]
+   - RESOLVED: Use `{ _ps: 'deflate-raw', d: base64 }` as the Phase 04 native deflate envelope marker so legacy `_lz` decoding remains unambiguous. [ASSUMED]
 
 2. **Exact local npx invocation before publish**
    - What we know: `package.json` is scoped as `@fullselfbrowsing/phantom-stream` and currently has no `bin`; Phase 04 locks a `phantom-stream demo` binary path and defers publishing details. [VERIFIED: package.json] [VERIFIED: 04-CONTEXT.md]
-   - What's unclear: Whether pre-publish validation must literally run `npx phantom-stream demo` or can use `node bin/phantom-stream.js demo` plus package bin tests. [ASSUMED]
-   - Recommendation: Implement `bin.phantom-stream`, test the bin script directly in Phase 04, and leave public npm invocation exactness to Phase 10 unless the planner has a cheap local `npm exec` proof. [ASSUMED]
+   - RESOLVED: Phase 04 validates the local equivalent with `node bin/phantom-stream.js demo` plus package `bin.phantom-stream` metadata and CLI tests. Exact public `npx phantom-stream demo` behavior remains a Phase 10 publishing/package-resolution concern. [ASSUMED]
 
 ## Environment Availability
 
