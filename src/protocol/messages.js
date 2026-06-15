@@ -9,6 +9,8 @@ export const CONTROL = {
   STOP: 'dash:dom-stream-stop',
   PAUSE: 'dash:dom-stream-pause',
   RESUME: 'dash:dom-stream-resume',
+  /** Viewer request for a bounded fresh subtree payload. Payload: SubtreeRequestPayload */
+  SUBTREE_REQUEST: 'dash:ps-subtree-request',
 };
 
 /** Capture host -> viewer: stream data and side channels. */
@@ -29,6 +31,8 @@ export const STREAM = {
   REQUEST_SNAPSHOT: 'ext:request-snapshot',
   /** Stream health state. */
   STATE: 'ext:stream-state',
+  /** Capture response to a bounded subtree request. Payload: SubtreeResponsePayload */
+  SUBTREE_RESPONSE: 'ext:ps-subtree-response',
 };
 
 /** Viewer -> adapter remote-control frames, plus adapter -> viewer state. */
@@ -63,6 +67,10 @@ export const DIFF_OP = {
   ATTR: 'attr',
   /** { op:'text', nid, text } — character data change, addressed via parent nid */
   TEXT: 'text',
+  /** { op:'value', nid, value?, checked?, selectedValues? } — live form state change */
+  VALUE: 'value',
+  /** ShadowRootPayload plus op:'shadow-root' — replace/open an observed shadow root */
+  SHADOW_ROOT: 'shadow-root',
 };
 
 /**
@@ -80,12 +88,73 @@ export const NID_ATTR = 'data-fsb-nid';
  * @property {string} html             Serialized subtree HTML, without framework identity attrs
  * @property {string|null} beforeNid   Insert before this sibling nid, or append when null
  * @property {string[]} nodeIds        Preorder ids for every serialized element in html
+ * @property {ShadowRootPayload[]} [shadowRoots] Open shadow root sidecars inside this added subtree
+ * @property {FramePayload[]} [frames] Same-origin/cross-origin frame sidecars inside this added subtree
+ */
+
+/**
+ * @typedef {Object} ShadowRootPayload
+ * @property {string} hostNid           Host element nid that owns this shadow root
+ * @property {'open'} mode              Mirrored roots are open; closed roots are not introspected
+ * @property {string} html              Serialized shadow root child HTML
+ * @property {string[]} nodeIds         Preorder ids for shadow descendant elements
+ * @property {string} slotAssignment    Content-free slot assignment hint/diagnostic
+ */
+
+/**
+ * @typedef {Object} FramePayload
+ * @property {string} frameNid          Iframe element nid
+ * @property {string} kind              Frame policy kind, e.g. 'same-origin' or 'cross-origin'
+ * @property {string} [html]            Serialized frame body HTML for accessible frames
+ * @property {string[]} [nodeIds]       Preorder ids for serialized frame elements
+ * @property {string[]} [stylesheets]   Absolutified stylesheet URLs
+ * @property {string[]} [inlineStyles]  Sanitized inline style blocks
+ * @property {Object} [htmlAttrs]       Sanitized frame <html> attributes
+ * @property {Object} [bodyAttrs]       Sanitized frame <body> attributes
+ * @property {string} [htmlStyle]       Computed shell style for frame <html>
+ * @property {string} [bodyStyle]       Computed shell style for frame <body>
+ * @property {string} [label]           Content-free placeholder label
+ * @property {string} [src]             Frame src URL when safe to disclose
+ * @property {string} [origin]          Frame origin metadata when safe to disclose
+ */
+
+/**
+ * @typedef {Object} ValueDiffOp
+ * @property {'value'} op
+ * @property {string} nid
+ * @property {string} [value]           Textual value for input/textarea/select-like controls
+ * @property {boolean} [checked]        Checked state for checkbox/radio controls
+ * @property {string[]} [selectedValues] Selected option values for multi-select controls
+ */
+
+/**
+ * @typedef {Object} SubtreeRequestPayload
+ * @property {string} requestId
+ * @property {string} nid
+ * @property {string} streamSessionId
+ * @property {number} snapshotId
+ * @property {string} [reason]
+ */
+
+/**
+ * @typedef {Object} SubtreeResponsePayload
+ * @property {string} requestId
+ * @property {string} nid
+ * @property {string} status            'ok' or a content-free miss status
+ * @property {string} [html]            Serialized subtree HTML when status is 'ok'
+ * @property {string[]} [nodeIds]       Preorder ids for serialized subtree elements
+ * @property {ShadowRootPayload[]} [shadowRoots] Open shadow roots inside the subtree
+ * @property {FramePayload[]} [frames]  Frame sidecars inside the subtree
+ * @property {string} streamSessionId
+ * @property {number} snapshotId
  */
 
 /**
  * @typedef {Object} SnapshotPayload
  * @property {string} html              Serialized body innerHTML (style-inlined; framework identity-clean)
  * @property {string[]} nodeIds         Preorder ids for every serialized element in html
+ * @property {ShadowRootPayload[]} [shadowRoots] Open shadow roots keyed by host nid
+ * @property {FramePayload[]} [frames]  Frame sidecars keyed by iframe nid
  * @property {boolean} truncated        True if the size budget forced subtree drops
  * @property {number} missingDescendants Count of dropped subtrees
  * @property {string[]} stylesheets     Absolutified <link rel=stylesheet> URLs

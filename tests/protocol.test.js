@@ -6,6 +6,9 @@ import {
   isCompressedEnvelope,
   isCurrentStream,
   createStreamSessionId,
+  CONTROL,
+  STREAM,
+  DIFF_OP,
   SNAPSHOT_BUDGET_BYTES,
   RELAY_PER_MESSAGE_LIMIT_BYTES,
 } from '../src/protocol/index.js';
@@ -72,4 +75,11 @@ test('session ids are deterministic given entropy', () => {
 test('snapshot budget stays inside the relay cap with headroom', () => {
   assert.ok(SNAPSHOT_BUDGET_BYTES < RELAY_PER_MESSAGE_LIMIT_BYTES);
   assert.equal(SNAPSHOT_BUDGET_BYTES, Math.floor(RELAY_PER_MESSAGE_LIMIT_BYTES * 0.8));
+});
+
+test('Phase 8 protocol constants are exported for fidelity sidecars and recovery', () => {
+  assert.equal(DIFF_OP.VALUE, 'value');
+  assert.equal(DIFF_OP.SHADOW_ROOT, 'shadow-root');
+  assert.equal(CONTROL.SUBTREE_REQUEST, 'dash:ps-subtree-request');
+  assert.equal(STREAM.SUBTREE_RESPONSE, 'ext:ps-subtree-response');
 });
