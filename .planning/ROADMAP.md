@@ -270,7 +270,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 3. Security Pipeline — Sanitization + Privacy Masking | 5/5 | Complete    | 2026-06-14 |
 | 4. Relay, WS Transport & Two-Tab Demo | 0/TBD | Not started | - |
 | 5. Playwright/CDP Adapter, Remote Control & Agent Demo | 6/6 | Complete    | 2026-06-15 |
-| 6. Extension MV3 + Bookmarklet Adapters | 1/5 | In Progress|  |
+| 6. Extension MV3 + Bookmarklet Adapters | 2/5 | In Progress|  |
 | 7. WeakMap Node Identity + Semantic Addressing API | 0/TBD | Not started | - |
 | 8. Shadow DOM, Iframes & Fidelity Completion | 0/TBD | Not started | - |
 | 9. CSSOM Capture Mode | 0/TBD | Not started | - |
