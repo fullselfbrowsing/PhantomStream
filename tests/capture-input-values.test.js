@@ -301,9 +301,7 @@ test('maskInputFn return value is used for event-driven value diffs', async () =
   }
 });
 
-test('Plan 08-06 can attach value listeners to same-origin iframe frame document roots', {
-  todo: 'Plan 08-05 exposes observed frame document roots; Plan 08-06 wires input/change listeners to them.',
-}, async () => {
+test('same-origin iframe input events emit frame-scoped DIFF_OP.VALUE diffs', async () => {
   const env = setupEnv('<main><iframe id="same-frame"></iframe></main>');
   try {
     const frame = env.document.getElementById('same-frame');
@@ -319,11 +317,32 @@ test('Plan 08-06 can attach value listeners to same-origin iframe frame document
 
     assert.equal(typeof env.capture.getObservedFrameDocuments, 'function', 'frame root registry is exposed');
     const roots = env.capture.getObservedFrameDocuments();
+    const frameNid = env.capture.getNodeId(frame);
     assert.ok(roots.some((entry) => (
-      entry.frameNid === env.capture.getNodeId(frame)
+      entry.frameNid === frameNid
       && entry.document === frameDoc
       && entry.root === frameDoc
     )), 'same-origin iframe document root is registered for downstream value listeners');
+
+    const frameInput = frameDoc.getElementById('inside-frame');
+    const inputNid = env.capture.getNodeId(frameInput);
+    frameInput.value = 'typed inside iframe';
+    const EventCtor = frame.contentWindow && frame.contentWindow.Event
+      ? frame.contentWindow.Event
+      : env.window.Event;
+    frameInput.dispatchEvent(new EventCtor('input', { bubbles: true }));
+    await settle(env.window);
+
+    assert.ok(
+      valueOps(transport).some((op) => (
+        op.op === VALUE_OP
+        && op.frameNid === frameNid
+        && op.nid === inputNid
+        && op.value === 'typed inside iframe'
+        && !Object.prototype.hasOwnProperty.call(op, 'html')
+      )),
+      'same-origin iframe input emitted a frame-scoped narrow value op'
+    );
   } finally {
     env.teardown();
   }
