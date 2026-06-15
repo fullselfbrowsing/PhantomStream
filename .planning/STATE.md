@@ -4,13 +4,13 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 7 context gathered
-last_updated: "2026-06-15T15:44:36.398Z"
-last_activity: 2026-06-15 -- Phase 07 execution started
+last_updated: "2026-06-15T16:07:10.010Z"
+last_activity: 2026-06-15
 progress:
   total_phases: 13
   completed_phases: 6
   total_plans: 35
-  completed_plans: 31
+  completed_plans: 32
   percent: 46
 ---
 
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-06-14)
 ## Current Position
 
 Phase: 07 (weakmap-node-identity-semantic-addressing-api) — EXECUTING
-Plan: 1 of 4
-Status: Executing Phase 07
-Last activity: 2026-06-15 -- Phase 07 execution started
+Plan: 2 of 4
+Status: Ready to execute
+Last activity: 2026-06-15
 
-Progress: [████░░░░░░] 46%
+Progress: [█████████░] 91%
 
 ## Performance Metrics
 
@@ -73,6 +73,7 @@ Progress: [████░░░░░░] 46%
 | Phase 06 P04 | 13 min | 2 tasks | 2 files |
 | Phase 06 P03 | 20 min | 3 tasks | 7 files |
 | Phase 06 P05 | 17 min | 3 tasks | 7 files |
+| Phase 07 P01 | 20 min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -112,6 +113,9 @@ Recent decisions affecting current work:
 - [Phase 05]: The Playwright demo uses existing static server paths for viewer.js and fixture.js while preserving no-store /playwright routes.
 - [Phase 05]: The exact demo title appears once as the visible H1 so the single-match acceptance grep remains meaningful.
 - [Phase 05]: The viewer marks requesting locally, but active and denied states come only from adapter REMOTE_CONTROL.STATE frames.
+- [Phase 07]: nodeIds sidecars preserve snapshot/add identity while existing diff fields remain nid-addressed.
+- [Phase 07]: Renderer bridge stamps mirror DOM from sidecars until 07-02 replaces selector lookup with a Map index.
+- [Phase 07]: Capture identity is WeakMap-backed and page-owned data-fsb-nid remains ordinary page data.
 
 ### Pending Todos
 
@@ -135,6 +139,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-15T14:01:36.142Z
+Last session: 2026-06-15T16:05:11.481Z
 Stopped at: Phase 7 context gathered
-Resume file: .planning/phases/07-weakmap-node-identity-semantic-addressing-api/07-CONTEXT.md
+Resume file: None
