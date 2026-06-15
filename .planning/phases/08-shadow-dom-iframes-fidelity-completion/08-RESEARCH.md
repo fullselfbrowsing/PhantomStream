@@ -523,17 +523,19 @@ No `[ASSUMED]` claims are used in this research; recommendations are sourced to 
 |---|-------|---------|---------------|
 | — | None | — | — |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Should manual `slotAssignment: "manual"` be first-class in Phase 08 tests?** [CITED: MDN attachShadow + MDN HTMLSlotElement.assign]
    - What we know: Phase context explicitly requires default slots, named slots, and slot reassignment, and MDN documents manual slot assignment as a separate mode. [VERIFIED: `08-CONTEXT.md`; CITED: MDN attachShadow]
    - What's unclear: The phase does not explicitly require manual `HTMLSlotElement.assign()` parity. [VERIFIED: `08-CONTEXT.md`]
    - Recommendation: Plan default/named/reassignment as required coverage and add one manual-slot smoke test only if it is cheap after the core design supports `slotAssignment`. [CITED: MDN HTMLSlotElement.assign]
+   - RESOLVED: Default slots, named slots, and slot reassignment are required Phase 08 coverage. Manual `slotAssignment: "manual"` / `HTMLSlotElement.assign()` coverage is deferred unless the core implementation makes a cheap smoke test trivial; it is not a Phase 08 blocker.
 
 2. **Should Playwright be bumped from locked `1.60.0` to current `1.61.0`?** [VERIFIED: npm registry + package-lock]
    - What we know: npm shows `1.61.0` current as of 2026-06-15, while the lockfile installs `1.60.0`. [VERIFIED: `npm view playwright version` + `package-lock.json`]
    - What's unclear: Phase 08 does not need a documented Playwright feature newer than `1.60.0`. [VERIFIED: Playwright frames docs + local package]
    - Recommendation: Do not add a package-bump task unless a real-browser test fails because of a Playwright bug fixed in `1.61.0`. [VERIFIED: no current evidence requiring bump]
+   - RESOLVED: Do not bump Playwright from locked `1.60.0` unless an actual Phase 08 browser test proves a Playwright bug. No package bump is planned.
 
 ## Environment Availability
 

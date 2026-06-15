@@ -199,7 +199,31 @@ Plans:
   3. Text typed into form fields appears live in the mirror (explicit input-event capture beyond MutationObserver `value` blindness)
   4. Nodes added after the snapshot render with computed styles consistent with snapshot-era siblings (batched style reads, no per-node reflow)
   5. Viewer can request an on-demand subtree fetch to recover a truncated region without waiting for a new snapshot
-**Plans**: TBD
+**Plans**: 9 plans (7 waves)
+
+Plans:
+**Wave 0**
+- [ ] 08-01-PLAN.md — RED shadow DOM and iframe fidelity tests
+- [ ] 08-02-PLAN.md — RED form value and late-added style tests
+- [ ] 08-03-PLAN.md — RED subtree fetch and Playwright fidelity tests
+
+**Wave 1** *(blocked on Wave 0)*
+- [ ] 08-04-PLAN.md — Protocol contracts and open shadow DOM implementation
+
+**Wave 2** *(blocked on 08-04)*
+- [ ] 08-05-PLAN.md — Same-origin iframe mirroring and cross-origin placeholders
+
+**Wave 3** *(blocked on 08-05)*
+- [ ] 08-06-PLAN.md — Live value diffs and late-added computed styles
+
+**Wave 4** *(blocked on 08-06)*
+- [ ] 08-07-PLAN.md — Bounded on-demand subtree fetch
+
+**Wave 5** *(blocked on 08-07)*
+- [ ] 08-08-PLAN.md — Playwright inject artifact sync and adapter verification
+
+**Wave 6** *(blocked on 08-08)*
+- [ ] 08-09-PLAN.md — Docs, differential oracle, and final automated gate
 
 ### Phase 9: CSSOM Capture Mode
 **Goal**: Stylesheet-centric capture is available behind a config flag — fixing frozen-style drift, shrinking payloads, and powering the paper's ablation arm

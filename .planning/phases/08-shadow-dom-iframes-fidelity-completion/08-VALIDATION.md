@@ -41,9 +41,9 @@ created: 2026-06-15
 | 08-W0-01 | 01 | 0 | CAPT-08 | T-08-01 | Shadow HTML is sanitized before renderer import; slot children are not duplicated | unit | `node --test tests/capture-shadow-dom.test.js tests/renderer-shadow-dom.test.js` | missing | pending |
 | 08-W0-02 | 01 | 0 | CAPT-09 | T-08-02 | Cross-origin iframe content is never read; placeholder metadata is content-free | unit | `node --test tests/capture-iframe.test.js tests/renderer-iframe.test.js` | missing | pending |
 | 08-W0-03 | 02 | 0 | CAPT-05 | T-08-03 | Value diffs preserve password masking and `maskInputs`/`maskInputFn` behavior | unit | `node --test tests/capture-input-values.test.js tests/renderer-value-diff.test.js tests/security-mask.test.js` | missing | pending |
-| 08-W0-04 | 03 | 0 | CAPT-06 | T-08-04 | Added-node style serialization uses curated properties and no all-property enumeration | unit/static | `node --test tests/capture-added-styles.test.js tests/security-sanitize-capture.test.js` | missing | pending |
-| 08-W0-05 | 04 | 0 | CAPT-11 | T-08-05 | Subtree responses reuse sanitization, masking, identity sidecars, and staleness checks | unit/integration | `node --test tests/capture-subtree-fetch.test.js tests/renderer-subtree-fetch.test.js tests/renderer-loopback.test.js` | missing | pending |
-| 08-W0-06 | 04 | 0 | CAPT-08, CAPT-09, CAPT-05 | T-08-01/T-08-02/T-08-03 | Browser smoke proves real shadow slots, iframe origin behavior, and actual input/change events | browser | `node --test tests/playwright-fidelity-phase8.test.js` | missing | pending |
+| 08-W0-04 | 02 | 0 | CAPT-06 | T-08-04 | Added-node style serialization uses curated properties and no all-property enumeration | unit/static | `node --test tests/capture-added-styles.test.js tests/security-sanitize-capture.test.js` | missing | pending |
+| 08-W0-05 | 03 | 0 | CAPT-11 | T-08-05 | Subtree responses reuse sanitization, masking, identity sidecars, and staleness checks | unit/integration | `node --test tests/capture-subtree-fetch.test.js tests/renderer-subtree-fetch.test.js tests/renderer-loopback.test.js` | missing | pending |
+| 08-W0-06 | 03 | 0 | CAPT-08, CAPT-09, CAPT-05 | T-08-01/T-08-02/T-08-03 | Browser smoke proves real shadow slots, iframe origin behavior, and actual input/change events | browser | `node --test tests/playwright-fidelity-phase8.test.js` | missing | pending |
 
 *Status: pending, green, red, flaky*
 
