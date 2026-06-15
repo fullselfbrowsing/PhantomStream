@@ -98,6 +98,10 @@ import { STREAM, CONTROL, isCurrentStream } from '../protocol/messages.js';
  *   Returns false for stale or missing nids.
  * @property {() => void} clearHighlight
  *   Hide the local node highlight. Idempotent.
+ * @property {(nid: string|number, options?: {reason?: string}) => string|null} requestSubtree
+ *   Request a bounded fresh subtree for an indexed truncated marker. Returns
+ *   the generated requestId, or null when the nid is invalid, missing, or
+ *   already in flight.
  * @property {(kind: string, renderFn: (payload: *, anchorRect: ?Object, layer: Element) => void) => void} registerOverlay
  *   Register a custom overlay kind (delegates to the overlays registry --
  *   the host-facing extension seam from D-10).
@@ -307,6 +311,8 @@ export function createViewer(options) {
   var nodeToNid = new WeakMap();
   var frameLoadHandlers = new WeakMap();
   var nodeHighlightEl = null;
+  var pendingSubtreeRequests = new Map();
+  var nextSubtreeRequestId = 1;
 
   function incrementCounter(counter, type) {
     var key = typeof type === 'string' && type ? type : 'unknown';
@@ -500,6 +506,43 @@ export function createViewer(options) {
       trigger: 'preview-resync',
       reason: reason || 'unknown'
     });
+  }
+
+  function clearSubtreeLatch(payload) {
+    var p = payload || {};
+    if (p.nid === undefined || p.nid === null || p.requestId === undefined || p.requestId === null) {
+      return false;
+    }
+    var key = String(p.nid);
+    var requestId = String(p.requestId);
+    var pending = pendingSubtreeRequests.get(key);
+    if (!pending || pending.requestId !== requestId) return false;
+    pendingSubtreeRequests.delete(key);
+    return true;
+  }
+
+  function requestSubtree(nid, options) {
+    if (nid === undefined || nid === null) return null;
+    var key = String(nid);
+    if (!key) return null;
+    var target = resolveIndexedNode(key);
+    if (!target) return null;
+    if (pendingSubtreeRequests.has(key)) return null;
+
+    var opts = options || {};
+    var reason = typeof opts === 'string'
+      ? opts
+      : (opts.reason || 'truncated-region');
+    var requestId = 'subtree_' + Date.now().toString(36) + '_' + nextSubtreeRequestId++;
+    pendingSubtreeRequests.set(key, { requestId: requestId });
+    safeSend(CONTROL.SUBTREE_REQUEST, {
+      requestId: requestId,
+      nid: key,
+      streamSessionId: active.streamSessionId || '',
+      snapshotId: active.snapshotId || 0,
+      reason: reason || 'truncated-region'
+    });
+    return requestId;
   }
 
   function markLive(reason) {
@@ -903,6 +946,7 @@ export function createViewer(options) {
     counters.staleMisses = 0;
     counters.applyFailures = 0;
     resyncPending = false; // the latch's ONLY release site
+    pendingSubtreeRequests.clear();
     lastSnapshotAt = Date.now();
     overlays.resetOverlays();
     clearHighlight();
@@ -948,6 +992,41 @@ export function createViewer(options) {
     try {
       iframe.contentWindow.scrollTo(lastScroll.x, lastScroll.y);
     } catch (e) { /* ignore: scroll maintenance is best-effort */ }
+  }
+
+  function handleSubtreeResponse(payload) {
+    var p = payload || {};
+    if (!isCurrentStream(p, active)) {
+      clearSubtreeLatch(p);
+      return;
+    }
+    if (!clearSubtreeLatch(p)) return;
+    if (p.status !== 'ok') return;
+
+    var target = resolveIndexedNode(p.nid);
+    if (!target || !target.parentNode || typeof target.getAttribute !== 'function') return;
+    if (target.getAttribute('data-phantomstream-truncated') !== 'true') return;
+    var targetDoc = target.ownerDocument || iframe.contentDocument;
+    if (!targetDoc || !targetDoc.createElement) return;
+
+    var tpl = targetDoc.createElement('template');
+    tpl.innerHTML = p.html || '';
+    sanitizeFragment(tpl.content, sanitizeCounters, logger);
+    var newNode = tpl.content.firstElementChild;
+    if (!newNode) {
+      logger.warn('[Renderer] subtree response dropped: html parsed to no element', {
+        nid: p.nid || ''
+      });
+      return;
+    }
+    var imported = targetDoc.importNode(newNode, true);
+    removeIndexedSubtree(target);
+    target.parentNode.replaceChild(imported, target);
+    indexSubtree(imported, p.nodeIds || []);
+    installShadowRoots(targetDoc, p.shadowRoots || []);
+    installFrames(targetDoc, p.frames || []);
+    lastMutationAt = Date.now();
+    markLive('subtree');
   }
 
   /**
@@ -1021,6 +1100,9 @@ export function createViewer(options) {
           break;
         case STREAM.MUTATIONS:
           handleMutations(payload);
+          break;
+        case STREAM.SUBTREE_RESPONSE:
+          handleSubtreeResponse(payload);
           break;
         case STREAM.SCROLL:
           handleScroll(payload);
@@ -1122,6 +1204,7 @@ export function createViewer(options) {
     sanitizeCounters.droppedSubtrees = 0;
     sanitizeCounters.cssScrubs = 0;
     resyncPending = false;
+    pendingSubtreeRequests.clear();
     receivedByType = {};
     sentByType = {};
     lastFrameAt = 0;
@@ -1154,6 +1237,7 @@ export function createViewer(options) {
     highlightNode: highlightNode,
     on: on,
     registerOverlay: registerOverlay,
+    requestSubtree: requestSubtree,
     resolveNode: resolveNode
   };
 }
