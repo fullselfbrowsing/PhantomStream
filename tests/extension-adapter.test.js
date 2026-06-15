@@ -42,13 +42,13 @@ function createFakeChrome(initialSession = {}) {
   const storageData = { ...initialSession };
   const tabMessages = [];
   const runtimeMessages = [];
-  const alarms = [];
+  const alarmCreates = [];
 
   return {
     storageData,
     tabMessages,
     runtimeMessages,
-    alarms,
+    alarmCreates,
     runtime: {
       onMessage: runtimeMessage,
       sendMessage(message) {
@@ -79,7 +79,7 @@ function createFakeChrome(initialSession = {}) {
     alarms: {
       onAlarm: alarmEvent,
       create(name, info) {
-        alarms.push({ name, info: clone(info) });
+        alarmCreates.push({ name, info: clone(info) });
         return Promise.resolve();
       }
     },
@@ -124,7 +124,7 @@ test('factory validates required Chromium MV3 APIs', () => {
   assert.throws(() => createExtensionAdapter({
     chrome: {
       runtime: { onMessage: createEvent() },
-      storage: { session: {} }
+      storage: { session: { get() {}, set() {} } }
     }
   }), /extension-alarms-required/);
 });
@@ -258,7 +258,7 @@ test('watchdog alarm rehydrates active state and requests a fresh snapshot', asy
 
   await chrome.alarms.onAlarm.emit({ name: PHANTOMSTREAM_WATCHDOG_ALARM });
 
-  assert.equal(chrome.alarms[0].name, PHANTOMSTREAM_WATCHDOG_ALARM);
+  assert.equal(chrome.alarmCreates[0].name, PHANTOMSTREAM_WATCHDOG_ALARM);
   assert.deepEqual(chrome.tabMessages.at(-1), {
     tabId: 41,
     message: {
