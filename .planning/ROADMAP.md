@@ -145,8 +145,25 @@ Plans:
   2. Playwright-driven demo runs: a script drives a real page while the viewer mirrors it live
   3. User can click, type, and scroll in the mirror and see the action happen in the real driven page — reverse-mapped from viewer coordinates and replayed via driver-native input, never synthetic DOM events
   4. Remote control cannot activate unless the host-provided consent/authorization hook approves; denial is observable (control stays inert, state event emitted)
-**Plans**: TBD
+**Plans**: 6 plans (5 waves)
 **UI hint**: yes
+
+Plans:
+**Wave 0**
+- [ ] 05-01-PLAN.md — Remote-control protocol constants, validators, privacy redaction, and relay non-execution tests
+
+**Wave 1** *(blocked on 05-01)*
+- [ ] 05-02-PLAN.md — Playwright/CDP adapter, single-file inject artifact, authorization gate, and driver-native replay
+- [ ] 05-03-PLAN.md — Renderer inverse coordinate mapping and viewer mapping getter for host-owned control overlays
+
+**Wave 2** *(blocked on 05-02)*
+- [ ] 05-04-PLAN.md — Local-only Playwright demo server, `playwright-demo` CLI command, package wiring, and Playwright dependency
+
+**Wave 3** *(blocked on 05-03 and 05-04)*
+- [ ] 05-05-PLAN.md — Approved Playwright demo viewer UI, transparent control overlay, and deterministic fixture
+
+**Wave 4** *(blocked on 05-05)*
+- [ ] 05-06-PLAN.md — Full automated gate, browser verification checkpoint, and verification evidence artifact
 
 ### Phase 6: Extension MV3 + Bookmarklet Adapters
 **Goal**: The remaining injection contexts work — the extension content-script path FSB will swap onto, plus the bookmarklet loader
