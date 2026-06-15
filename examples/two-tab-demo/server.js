@@ -138,6 +138,7 @@ async function handleStaticRequest(req, res) {
 
     res.writeHead(200, {
       'content-type': MIME[extname(filePath)] || 'application/octet-stream',
+      'cache-control': 'no-store',
       'x-content-type-options': 'nosniff'
     });
     if (req.method === 'HEAD') {
@@ -155,6 +156,7 @@ async function handleStaticRequest(req, res) {
 function sendText(res, statusCode, text) {
   res.writeHead(statusCode, {
     'content-type': 'text/plain; charset=utf-8',
+    'cache-control': 'no-store',
     'x-content-type-options': 'nosniff'
   });
   res.end(text);

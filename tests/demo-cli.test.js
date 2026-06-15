@@ -83,14 +83,17 @@ test('demo static server serves strict MIME types and rejects unsafe paths', asy
       const html = await get('/examples/loopback-mirror.html', port);
       assert.equal(html.statusCode, 200);
       assert.equal(html.headers['content-type'], 'text/html; charset=utf-8');
+      assert.equal(html.headers['cache-control'], 'no-store');
 
       const js = await get('/examples/loopback-transport.js', port);
       assert.equal(js.statusCode, 200);
       assert.equal(js.headers['content-type'], 'text/javascript; charset=utf-8');
+      assert.equal(js.headers['cache-control'], 'no-store');
 
       const css = await get('/' + tempDir.slice(ROOT.length + 1) + '/style.css', port);
       assert.equal(css.statusCode, 200);
       assert.equal(css.headers['content-type'], 'text/css; charset=utf-8');
+      assert.equal(css.headers['cache-control'], 'no-store');
 
       const malformed = await get('/%E0%A4%A', port);
       assert.equal(malformed.statusCode, 400);
@@ -179,6 +182,7 @@ test('two-tab demo pages expose the required UI shell', async () => {
     assert.equal(source.headers['content-type'], 'text/html; charset=utf-8');
     assert.match(source.body, /<title>PhantomStream — Source Tab<\/title>/);
     assert.match(source.body, /href="\.\/demo\.css"/);
+    assert.match(source.body, /src="\.\/source\.js\?v=04-demo"/);
     assertInOrder(source.body, [
       'Add row',
       'Remove row',
@@ -191,6 +195,7 @@ test('two-tab demo pages expose the required UI shell', async () => {
     assert.equal(viewer.headers['content-type'], 'text/html; charset=utf-8');
     assert.match(viewer.body, /<title>PhantomStream — Viewer Tab<\/title>/);
     assert.match(viewer.body, /href="\.\/demo\.css"/);
+    assert.match(viewer.body, /src="\.\/viewer\.js\?v=04-demo"/);
     [
       'Lifecycle',
       'Room',
@@ -257,7 +262,7 @@ test('two-tab demo browser modules wire capture viewer and WebSocket transport',
     [
       'createViewer',
       'createWebSocketTransport',
-      'disconnectDelayMs',
+      'disconnectDelayMs: 4000',
       "viewer.on('state'",
       "viewer.on('health'",
       'CONTROL.START',

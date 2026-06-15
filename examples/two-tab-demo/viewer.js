@@ -43,7 +43,7 @@ var transport = createWebSocketTransport({
 var viewer = createViewer({
   container: stage,
   transport: transport,
-  disconnectDelayMs: 3000
+  disconnectDelayMs: 4000
 });
 
 function logLine(text) {
