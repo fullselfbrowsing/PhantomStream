@@ -157,3 +157,20 @@ export function buildSnapshotHtml(payload) {
     '<style>body { margin: 0; overflow: hidden; } *::selection { background: transparent; } ::-webkit-scrollbar { display: none; }</style>' +
     '</head><body' + bodyAttrs + '>' + (p.html || '') + '</body></html>';
 }
+
+export function buildFramePlaceholderHtml(frame) {
+  var f = frame || {};
+  var label = escapeAttribute(f.label || 'Cross-origin iframe');
+  var origin = escapeAttribute(f.origin || '');
+  var src = escapeAttribute(f.src || '');
+  var meta = '';
+  if (origin) meta += '<p>Origin: ' + origin + '</p>';
+  if (src) meta += '<p>Source: ' + src + '</p>';
+  return '<!DOCTYPE html><html><head>' + CSP_META + '<meta charset="UTF-8">' +
+    '<style>body{margin:0;font:13px system-ui,sans-serif;color:#30333a;background:#f6f7f9;}' +
+    '.ps-frame-placeholder{box-sizing:border-box;min-height:100vh;display:flex;flex-direction:column;gap:6px;' +
+    'justify-content:center;align-items:center;text-align:center;border:1px dashed #9aa3af;padding:16px;}' +
+    '.ps-frame-placeholder strong{font-size:14px;} .ps-frame-placeholder p{margin:0;color:#5f6673;word-break:break-word;}</style>' +
+    '</head><body><div class="ps-frame-placeholder" role="note"><strong>' + label + '</strong>' +
+    meta + '</div></body></html>';
+}

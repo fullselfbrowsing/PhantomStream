@@ -34,7 +34,7 @@
 // || inline defaulting, function expressions, named exports, explicit .js
 // import extensions, factory-time validation as the ONLY throwing site.
 
-import { buildSnapshotHtml } from './snapshot.js';
+import { buildSnapshotHtml, buildFramePlaceholderHtml } from './snapshot.js';
 import { applyMutations } from './diff.js';
 import { sanitizeFragment } from './sanitize.js';
 import { createOverlays, mapRectToHost, OVERLAY_CSS } from './overlays.js';
@@ -227,6 +227,7 @@ export function createViewer(options) {
         if (lastSnapshotPayload) {
           resetIdentityIndex(scrubDoc, lastSnapshotPayload.nodeIds || []);
           installShadowRoots(scrubDoc, lastSnapshotPayload.shadowRoots || []);
+          installFrames(scrubDoc, lastSnapshotPayload.frames || []);
         }
       }
     } catch (e) {
@@ -304,6 +305,7 @@ export function createViewer(options) {
   var destroyed = false;
   var nidToNode = new Map();
   var nodeToNid = new WeakMap();
+  var frameLoadHandlers = new WeakMap();
   var nodeHighlightEl = null;
 
   function incrementCounter(counter, type) {
@@ -686,6 +688,102 @@ export function createViewer(options) {
     }
   }
 
+  function setFrameLoadHandler(frameEl, handler) {
+    if (!frameEl || typeof frameEl.addEventListener !== 'function') return;
+    var existing = frameLoadHandlers.get(frameEl);
+    if (existing && typeof frameEl.removeEventListener === 'function') {
+      frameEl.removeEventListener('load', existing);
+    }
+    frameEl.addEventListener('load', handler);
+    frameLoadHandlers.set(frameEl, handler);
+  }
+
+  function indexFrameDocument(frameEl, framePayload) {
+    var p = framePayload || {};
+    try {
+      var frameDoc = frameEl && frameEl.contentDocument;
+      if (!frameDoc || !frameDoc.documentElement || !frameDoc.body) return false;
+      removeIndexedSubtree(frameDoc.documentElement);
+      sanitizeFragment(frameDoc.body, sanitizeCounters, logger);
+      if (p.htmlNid) {
+        nidToNode.set(String(p.htmlNid), frameDoc.documentElement);
+        nodeToNid.set(frameDoc.documentElement, String(p.htmlNid));
+      }
+      if (p.bodyNid) {
+        nidToNode.set(String(p.bodyNid), frameDoc.body);
+        nodeToNid.set(frameDoc.body, String(p.bodyNid));
+      }
+      pairIdentityElements(
+        Array.prototype.slice.call(frameDoc.body.querySelectorAll('*')),
+        p.nodeIds || [],
+        'frame'
+      );
+      installFrames(frameDoc, p.frames || []);
+      return true;
+    } catch (err) {
+      logger.warn('[Renderer] frame document index failed', {
+        frameNid: p.frameNid || ''
+      });
+      return false;
+    }
+  }
+
+  function installOneFrame(targetDoc, framePayload) {
+    var p = framePayload || {};
+    if (!targetDoc || !p.frameNid) return false;
+    var frameEl = resolveIndexedNode(p.frameNid);
+    if (!frameEl) {
+      logger.warn('[Renderer] frame host missing', { frameNid: p.frameNid || '' });
+      return false;
+    }
+    if (!frameEl.tagName || String(frameEl.tagName).toLowerCase() !== 'iframe') {
+      logger.warn('[Renderer] frame host is not iframe', { frameNid: p.frameNid || '' });
+      return false;
+    }
+
+    frameEl.removeAttribute('src');
+    frameEl.setAttribute('sandbox', 'allow-same-origin');
+
+    if (p.kind === 'same-origin') {
+      setFrameLoadHandler(frameEl, function() {
+        indexFrameDocument(frameEl, p);
+      });
+      frameEl.setAttribute('srcdoc', buildSnapshotHtml(p));
+      indexFrameDocument(frameEl, p);
+      return true;
+    }
+
+    if (p.kind === 'cross-origin') {
+      setFrameLoadHandler(frameEl, function() {
+        try {
+          var placeholderDoc = frameEl.contentDocument;
+          if (placeholderDoc && placeholderDoc.body) {
+            sanitizeFragment(placeholderDoc.body, sanitizeCounters, logger);
+          }
+        } catch (err) {
+          logger.warn('[Renderer] frame placeholder sanitize failed', {
+            frameNid: p.frameNid || ''
+          });
+        }
+      });
+      frameEl.setAttribute('srcdoc', buildFramePlaceholderHtml(p));
+      return true;
+    }
+
+    logger.warn('[Renderer] frame kind unsupported', {
+      frameNid: p.frameNid || '',
+      kind: p.kind || ''
+    });
+    return false;
+  }
+
+  function installFrames(targetDoc, frames) {
+    if (!Array.isArray(frames)) return;
+    for (var i = 0; i < frames.length; i++) {
+      installOneFrame(targetDoc, frames[i]);
+    }
+  }
+
   function hostRectForElement(el) {
     var rect = el.getBoundingClientRect();
     return mapRectToHost(
@@ -840,6 +938,9 @@ export function createViewer(options) {
         installShadowRoot: function(hostNid, payload) {
           var opPayload = Object.assign({}, payload || {}, { hostNid: hostNid });
           installOneShadowRoot(cd, opPayload);
+        },
+        installFrames: function(frames) {
+          installFrames(cd, frames || []);
         }
       }
     });
@@ -1008,6 +1109,7 @@ export function createViewer(options) {
     clearHighlight();
     nodeHighlightEl = null;
     clearIdentityIndex();
+    frameLoadHandlers = new WeakMap();
     lastSnapshotPayload = null;
     active.streamSessionId = '';
     active.snapshotId = 0;
@@ -1058,6 +1160,6 @@ export function createViewer(options) {
 
 // Barrel re-exports: the renderer's full public surface through one module
 // (package exports map "./renderer" -> this file in plan 02-05).
-export { escapeAttribute, buildShellAttributeString, buildSnapshotHtml } from './snapshot.js';
+export { escapeAttribute, buildShellAttributeString, buildSnapshotHtml, buildFramePlaceholderHtml } from './snapshot.js';
 export { applyMutations } from './diff.js';
 export { createOverlays, mapRectToHost, mapHostPointToViewport, OVERLAY_CSS } from './overlays.js';

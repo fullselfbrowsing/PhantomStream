@@ -126,6 +126,9 @@ export function applyMutations(doc, mutations, counters, hooks) {
   var installShadowRoot = typeof identity.installShadowRoot === 'function'
     ? function (hostNid, payload) { identity.installShadowRoot(hostNid, payload); }
     : null;
+  var installFrames = typeof identity.installFrames === 'function'
+    ? function (frames) { identity.installFrames(frames || []); }
+    : null;
 
   // Shared miss path: count, warn, and escalate at the parity threshold.
   function recordStaleMiss(op, nid) {
@@ -205,6 +208,9 @@ export function applyMutations(doc, mutations, counters, hooks) {
               for (var s = 0; s < m.shadowRoots.length; s++) {
                 applyShadowRoot(m.shadowRoots[s]);
               }
+            }
+            if (installFrames && Array.isArray(m.frames)) {
+              installFrames(m.frames);
             }
             break;
           }
