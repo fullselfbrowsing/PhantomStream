@@ -496,16 +496,16 @@ The transparent overlay belongs to the host/demo, not to `createViewer`, and the
 |---|-------|---------|---------------|
 | — | All material claims in this research were verified against local project files, npm registry data, Context7, or official Playwright/CDP documentation. [VERIFIED: npm registry] [CITED: https://playwright.dev/docs/api/class-page] | All | No user confirmation needed for locked Phase 05 planning inputs. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Should the public CLI spell the demo as `phantom-stream demo --playwright` or `phantom-stream playwright-demo`?** [VERIFIED: bin/phantom-stream.js]
+1. **RESOLVED: The public CLI spells the demo as `phantom-stream playwright-demo`.** [VERIFIED: bin/phantom-stream.js] [VERIFIED: 05-04-PLAN.md]
    - What we know: existing CLI supports `phantom-stream demo` for the two-tab demo. [VERIFIED: bin/phantom-stream.js]
-   - What's unclear: the phase context requires a separate deterministic Playwright demo but does not lock the exact command name. [VERIFIED: 05-CONTEXT.md]
+   - Resolution: Phase 05 plans selected a separate `phantom-stream playwright-demo` command to avoid disrupting Phase 04 `phantom-stream demo` behavior and existing CLI tests. [VERIFIED: 05-04-PLAN.md]
    - Recommendation: prefer `phantom-stream demo --playwright` if keeping one demo command is important, or `phantom-stream playwright-demo` if planner wants low-risk separation from Phase 04 CLI tests. [VERIFIED: tests/demo-cli.test.js]
 
-2. **Should the adapter expose the inject artifact path or only `getInjectSource()`?** [VERIFIED: package.json]
+2. **RESOLVED: The adapter exposes `getPlaywrightInjectSource()` without a separate artifact subpath for this phase.** [VERIFIED: package.json] [VERIFIED: 05-02-PLAN.md]
    - What we know: Node adapter code can read a sibling artifact via `import.meta.url`, and package exports can expose only `./adapters/playwright`. [VERIFIED: package.json]
-   - What's unclear: Phase 10 packaging may prefer an explicit subpath for the artifact. [VERIFIED: ROADMAP.md]
+   - Resolution: Phase 05 plans expose `getPlaywrightInjectSource()` from `./adapters/playwright` and defer a separate inject-artifact export subpath to package-publication hardening. [VERIFIED: 05-02-PLAN.md] [VERIFIED: ROADMAP.md]
    - Recommendation: expose `getPlaywrightInjectSource()` from `./adapters/playwright` now, and defer a separate artifact subpath until package-publication hardening. [VERIFIED: ROADMAP.md]
 
 ## Environment Availability
@@ -538,13 +538,13 @@ The transparent overlay belongs to the host/demo, not to `createViewer`, and the
 ### Phase Requirements -> Test Map
 | Req ID | Behavior | Test Type | Automated Command | File Exists? |
 |--------|----------|-----------|-------------------|--------------|
-| ADPT-02 | Adapter registers binding before init script, uses one inject artifact, ignores child frames, forwards capture messages content-free, and re-snapshots after navigation. [VERIFIED: 05-CONTEXT.md] | unit + fake Playwright integration | `node --test tests/playwright-adapter.test.js -x` | no, Wave 0 |
-| ADPT-02 | CDP fallback sends `Page.addScriptToEvaluateOnNewDocument` and `Input.*` calls through `CDPSession.send`. [CITED: https://playwright.dev/docs/api/class-cdpsession] | unit with fake CDPSession | `node --test tests/playwright-adapter-cdp.test.js -x` | no, Wave 0 |
-| PKG-02 | Playwright demo command starts local relay, prints viewer/driven URLs, room prefix, and `Control: default-deny`. [VERIFIED: 05-UI-SPEC.md] | CLI integration | `node --test tests/playwright-demo-cli.test.js -x` | no, Wave 0 |
-| VIEW-05 | Viewer inverse mapping converts host points to viewport CSS pixels and rejects outside-letterbox clicks. [VERIFIED: src/renderer/overlays.js] | unit | `node --test tests/renderer-remote-control.test.js -x` | no, Wave 0 |
+| ADPT-02 | Adapter registers binding before init script, uses one inject artifact, ignores child frames, forwards capture messages content-free, and re-snapshots after navigation. [VERIFIED: 05-CONTEXT.md] | unit + fake Playwright integration | `node --test tests/playwright-adapter.test.js` | no, Wave 0 |
+| ADPT-02 | CDP fallback sends `Page.addScriptToEvaluateOnNewDocument` and `Input.*` calls through `CDPSession.send`. [CITED: https://playwright.dev/docs/api/class-cdpsession] | unit with fake CDPSession | `node --test tests/playwright-adapter-cdp.test.js` | no, Wave 0 |
+| PKG-02 | Playwright demo command starts local relay, prints viewer/driven URLs, room prefix, and `Control: default-deny`. [VERIFIED: 05-UI-SPEC.md] | CLI integration | `node --test tests/playwright-demo-cli.test.js` | no, Wave 0 |
+| VIEW-05 | Viewer inverse mapping converts host points to viewport CSS pixels and rejects outside-letterbox clicks. [VERIFIED: src/renderer/overlays.js] | unit | `node --test tests/renderer-remote-control.test.js` | no, Wave 0 |
 | VIEW-05 | Approved click/type/scroll dispatch through driver-native APIs and update deterministic fixture state. [VERIFIED: 05-CONTEXT.md] | browser verification | `npm run demo:playwright` plus browser/Playwright checkpoint | no, Wave 0 |
-| SEC-04 | Default-deny and explicit denial emit state while dispatch count remains zero. [VERIFIED: 05-CONTEXT.md] | unit + browser verification | `node --test tests/remote-control-authorization.test.js -x` | no, Wave 0 |
-| SEC-04 | State/health/action logs redact typed text and mirrored payload content. [VERIFIED: docs/SECURITY.md] | unit/static scan | `node --test tests/remote-control-privacy.test.js -x` | no, Wave 0 |
+| SEC-04 | Default-deny and explicit denial emit state while dispatch count remains zero. [VERIFIED: 05-CONTEXT.md] | unit + browser verification | `node --test tests/remote-control-authorization.test.js` | no, Wave 0 |
+| SEC-04 | State/health/action logs redact typed text and mirrored payload content. [VERIFIED: docs/SECURITY.md] | unit/static scan | `node --test tests/remote-control-privacy.test.js` | no, Wave 0 |
 
 ### Sampling Rate
 - **Per task commit:** run the focused command for files touched in that task plus `node --test tests/protocol.test.js` when protocol constants change. [VERIFIED: package.json]
