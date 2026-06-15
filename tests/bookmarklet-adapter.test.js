@@ -47,6 +47,7 @@ test('loader source installs bridge and visible content-free failure path', () =
     browserInjectSource: 'window.__phantomStreamStart=function(){return true;}'
   });
 
+  assert.equal(BOOKMARKLET_ERROR_EVENT, 'phantomstream:bookmarklet-error');
   assert.match(loader, /window\.__phantomStreamBridge/);
   assert.match(loader, /createWebSocketTransport/);
   assert.match(loader, /phantomStreamBrowserInjectSource/);
