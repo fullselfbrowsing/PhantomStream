@@ -4,6 +4,9 @@
   "description": "DOM-native live browser mirroring: snapshot + MutationObserver diff streaming with stable node identity, compressed transport, and bidirectional remote control.",
   "type": "module",
   "main": "src/protocol/index.js",
+  "bin": {
+    "phantom-stream": "./bin/phantom-stream.js"
+  },
   "exports": {
     "./protocol": "./src/protocol/index.js",
     "./capture": "./src/capture/index.js",
@@ -13,6 +16,7 @@
   },
   "scripts": {
     "test": "node --test tests/*.test.js tests/differential/*.test.js",
+    "demo": "node bin/phantom-stream.js demo",
     "example:loopback": "node examples/serve.js"
   },
   "repository": {

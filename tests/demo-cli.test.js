@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -48,8 +48,8 @@ test('startDemoServer binds 127.0.0.1 and returns paired room URLs', async () =>
   await withDemoServer(async function (demo) {
     const address = demo.server.address();
     assert.equal(address.address, '127.0.0.1');
-    assert.equal(address.port, new URL(demo.sourceUrl).port);
-    assert.equal(address.port, new URL(demo.viewerUrl).port);
+    assert.equal(String(address.port), new URL(demo.sourceUrl).port);
+    assert.equal(String(address.port), new URL(demo.viewerUrl).port);
     assert.match(demo.roomKey, /^[a-f0-9]{32}$/);
     assert.equal(demo.roomKeyPrefix, demo.roomKey.slice(0, 8));
 
@@ -165,8 +165,6 @@ test('CLI demo prints deterministic source viewer and room lines', async () => {
 });
 
 test('package metadata exposes the phantom-stream binary', async () => {
-  const pkg = JSON.parse((await import('node:fs/promises')).readFile
-    ? await (await import('node:fs/promises')).readFile(join(ROOT, 'package.json'), 'utf8')
-    : '{}');
+  const pkg = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
   assert.equal(pkg.bin['phantom-stream'], './bin/phantom-stream.js');
 });
