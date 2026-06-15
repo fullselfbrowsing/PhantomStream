@@ -157,7 +157,7 @@ Plans:
 - [x] 05-03-PLAN.md — Renderer inverse coordinate mapping and viewer mapping getter for host-owned control overlays
 
 **Wave 2** *(blocked on 05-02)*
-- [ ] 05-04-PLAN.md — Local-only Playwright demo server, `playwright-demo` CLI command, package wiring, and Playwright dependency
+- [x] 05-04-PLAN.md — Local-only Playwright demo server, `playwright-demo` CLI command, package wiring, and Playwright dependency
 
 **Wave 3** *(blocked on 05-03 and 05-04)*
 - [ ] 05-05-PLAN.md — Approved Playwright demo viewer UI, transparent control overlay, and deterministic fixture

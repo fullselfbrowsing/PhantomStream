@@ -52,7 +52,7 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Demos & Packaging (PKG)
 
 - [x] **PKG-01**: `npx phantom-stream demo` works end-to-end: capture a page in one tab, mirror it live in another through the bundled relay
-- [ ] **PKG-02**: Playwright-driven demo: a script drives a real page while the viewer mirrors it live with working remote control
+- [x] **PKG-02**: Playwright-driven demo: a script drives a real page while the viewer mirrors it live with working remote control
 - [ ] **PKG-03**: npm package published as `@fullselfbrowsing/phantom-stream` — ESM-only subpath exports, JSDoc-generated `.d.ts`, `attw`/`publint` clean, provenance via trusted publishing
 - [ ] **PKG-04**: Quickstart docs cover each adapter with a < 5-minute path to a live mirror
 
@@ -139,7 +139,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ADPT-03 | Phase 6 | Pending |
 | ADPT-04 | Phase 2 | Complete |
 | PKG-01 | Phase 4 | Complete |
-| PKG-02 | Phase 5 | Pending |
+| PKG-02 | Phase 5 | Complete |
 | PKG-03 | Phase 10 | Pending |
 | PKG-04 | Phase 10 | Pending |
 | FSB-01 | Phase 11 | Pending |
