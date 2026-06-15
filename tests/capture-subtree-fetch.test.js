@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { createCapture } from '../src/capture/index.js';
+import { RELAY_PER_MESSAGE_LIMIT_BYTES } from '../src/protocol/constants.js';
 import { CONTROL, STREAM } from '../src/protocol/messages.js';
 
 const AUDITED_GLOBALS = [
@@ -75,6 +76,10 @@ function snapshotPayloadOf(transport) {
 
 function subtreeResponsesOf(transport) {
   return transport.sent.filter((m) => m.type === STREAM.SUBTREE_RESPONSE);
+}
+
+function wireByteLength(value) {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
 function assertPlannedSubtreeConstants() {
@@ -192,6 +197,51 @@ test('D-19/D-21 capture SUBTREE_REQUEST emits an ok sanitized subtree response w
       'descendant identity is included');
     assert.ok(Array.isArray(payload.shadowRoots), 'shadowRoots sidecar is present even when empty');
     assert.ok(Array.isArray(payload.frames), 'frames sidecar is present even when empty');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-21 oversized SUBTREE_REQUEST responses are bounded and explicit', () => {
+  const env = setupEnv(
+    '<main id="root">'
+      + '<section id="target">' + '😀'.repeat(Math.floor(RELAY_PER_MESSAGE_LIMIT_BYTES / 3)) + '</section>'
+      + '</main>'
+  );
+  try {
+    const transport = createRecordingTransport();
+    env.capture = createCapture({
+      transport,
+      logger: silentLogger(),
+    });
+    env.capture.start();
+    const snapshot = snapshotPayloadOf(transport);
+    const target = env.document.getElementById('target');
+    const targetNid = env.capture.getNodeId(target);
+    assert.equal(typeof targetNid, 'string', 'target has a live nid');
+
+    callHandleControl(env.capture, {
+      requestId: 'req-too-large',
+      nid: targetNid,
+      streamSessionId: snapshot.streamSessionId,
+      snapshotId: snapshot.snapshotId,
+      reason: 'truncated-placeholder',
+    });
+
+    const response = subtreeResponsesOf(transport).at(-1);
+    assert.ok(response, 'one subtree response is emitted');
+    assert.equal(response.payload.requestId, 'req-too-large');
+    assert.equal(response.payload.nid, targetNid);
+    assert.equal(response.payload.status, 'too-large');
+    assert.equal(response.payload.html, undefined, 'too-large response is content-free');
+    assert.deepEqual(response.payload.nodeIds || [], [], 'too-large response carries no nodeIds');
+    assert.deepEqual(response.payload.shadowRoots || [], [], 'too-large response carries no shadowRoots');
+    assert.deepEqual(response.payload.frames || [], [], 'too-large response carries no frames');
+    assert.equal(
+      wireByteLength(response.payload) <= RELAY_PER_MESSAGE_LIMIT_BYTES,
+      true,
+      'too-large response stays under the UTF-8 relay budget'
+    );
   } finally {
     env.teardown();
   }

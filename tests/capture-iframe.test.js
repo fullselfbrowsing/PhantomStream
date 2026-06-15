@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { createCapture } from '../src/capture/index.js';
+import { SNAPSHOT_BUDGET_BYTES } from '../src/protocol/constants.js';
 import { STREAM, DIFF_OP } from '../src/protocol/messages.js';
 
 const AUDITED_GLOBALS = [
@@ -85,6 +86,10 @@ function mutationOps(transport) {
   return transport.sent
     .filter((m) => m.type === STREAM.MUTATIONS)
     .flatMap((m) => m.payload.mutations || []);
+}
+
+function wireByteLength(value) {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
 function populateFrame(frame, html) {
@@ -183,6 +188,45 @@ test('D-09 cross-origin iframe emits content-free placeholder and does not leak 
     assert.equal(Object.prototype.hasOwnProperty.call(framePayload, 'text'), false, 'placeholder has no remote text');
     assert.equal(Object.prototype.hasOwnProperty.call(framePayload, 'title'), false, 'placeholder has no remote title');
     assert.equal(JSON.stringify(transport.sent).includes('SECRET_REMOTE_BODY'), false, 'remote body text never reaches the wire');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-19 oversized same-origin frame sidecars become requestable placeholders', async () => {
+  const env = setupEnv('<main id="root"><iframe id="same-frame" src="/frame.html"></iframe></main>');
+  try {
+    const frame = env.document.getElementById('same-frame');
+    populateFrame(frame,
+      '<!DOCTYPE html><html><body><section id="oversized-frame">'
+        + '😀'.repeat(Math.floor(SNAPSHOT_BUDGET_BYTES / 3))
+        + '</section></body></html>'
+    );
+
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const payload = snapshotPayload(transport);
+    const frameNid = env.capture.getNodeId(frame);
+
+    assert.equal(payload.truncated, true, 'oversized frame sidecar marks snapshot truncated');
+    assert.ok(payload.nodeIds.includes(frameNid), 'iframe nid remains requestable');
+    assert.ok(
+      payload.html.includes('data-phantomstream-truncated="true"'),
+      'omitted frame sidecar host is replaced by a requestable truncated marker'
+    );
+    assert.equal(
+      (payload.frames || []).some((entry) => entry.frameNid === frameNid),
+      false,
+      'oversized same-origin frame sidecar is omitted from the bounded snapshot'
+    );
+    assert.equal(
+      wireByteLength(payload) <= SNAPSHOT_BUDGET_BYTES,
+      true,
+      'complete snapshot payload stays under the UTF-8 relay budget'
+    );
   } finally {
     env.teardown();
   }

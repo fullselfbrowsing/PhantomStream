@@ -28,9 +28,9 @@
 //
 // The 5-module split (serializer/differ/side-channels/session) is deliberately
 // deferred beyond Phase 1 (D-10); parity against the reference, proven by the
-// differential oracle, is the exit bar. One reference quirk remains preserved
-// on purpose: the truncation budget compares html.length (UTF-16 code units)
-// against a byte constant (inherited quirk). Phase 3 SEC-01 DIVERGENCE: the
+// differential oracle, is the exit bar. Phase 8 replaces the inherited
+// html.length truncation quirk with UTF-8 wire-byte budgeting for relay
+// safety. Phase 3 SEC-01 DIVERGENCE: the
 // sanitizeForWire chokepoint (a named inner function of createCapture) now
 // strips on* handlers, dangerous URL schemes, srcdoc attributes and
 // object/embed subtrees, and value-scrubs CSS on every serialization path --
@@ -1896,26 +1896,92 @@ export function createCapture(config) {
     return placeholder;
   }
 
-  function jsonWireLength(value) {
+  function utf8ByteLength(text) {
+    var str = String(text || '');
+    var bytes = 0;
+    for (var i = 0; i < str.length; i++) {
+      var code = str.charCodeAt(i);
+      if (code < 0x80) {
+        bytes += 1;
+      } else if (code < 0x800) {
+        bytes += 2;
+      } else if (code >= 0xD800 && code <= 0xDBFF && i + 1 < str.length) {
+        var next = str.charCodeAt(i + 1);
+        if (next >= 0xDC00 && next <= 0xDFFF) {
+          bytes += 4;
+          i++;
+        } else {
+          bytes += 3;
+        }
+      } else {
+        bytes += 3;
+      }
+    }
+    return bytes;
+  }
+
+  function wireByteLength(value) {
     try {
-      return JSON.stringify(value).length;
+      var json = JSON.stringify(value);
+      if (json === undefined) return 0;
+      if (typeof TextEncoder !== 'undefined') {
+        return new TextEncoder().encode(json).byteLength;
+      }
+      if (typeof Buffer !== 'undefined') {
+        return Buffer.byteLength(json, 'utf8');
+      }
+      return utf8ByteLength(json);
     } catch (err) {
       return Infinity;
     }
   }
 
   function sidecarWireLength(value) {
-    return jsonWireLength(value);
+    return wireByteLength(value);
   }
 
-  function pruneSnapshotSidecarsForBudget(basePayload, shadowRoots, frames) {
+  function findCloneElementByNid(root, cloneToNid, nid) {
+    if (!root || !cloneToNid || nid === undefined || nid === null) return null;
+    var key = String(nid);
+    var elements = elementsUnderRoot(root);
+    for (var i = 0; i < elements.length; i++) {
+      if (String(cloneToNid.get(elements[i]) || '') === key) return elements[i];
+    }
+    return null;
+  }
+
+  function markCloneNidTruncated(root, cloneToNid, nid, truncatedNodeIds) {
+    var cloneEl = findCloneElementByNid(root, cloneToNid, nid);
+    if (!cloneEl) return false;
+    var placeholder = replaceWithTruncatedPlaceholder(cloneEl, cloneToNid);
+    if (!placeholder) return false;
+    var placeholderNid = cloneToNid.get(placeholder) || nid;
+    if (placeholderNid && truncatedNodeIds && typeof truncatedNodeIds.add === 'function') {
+      truncatedNodeIds.add(String(placeholderNid));
+    }
+    return true;
+  }
+
+  function truncatedPayloadForNid(doc, nid) {
+    var placeholder = createTruncatedPlaceholder(doc || document);
+    return {
+      html: placeholder.outerHTML || '',
+      nodeIds: nid ? [String(nid)] : [],
+      shadowRoots: [],
+      frames: [],
+      truncated: true,
+      missingDescendants: 1
+    };
+  }
+
+  function pruneSnapshotSidecarsForBudget(basePayload, shadowRoots, frames, clone, cloneToNid, truncatedNodeIds) {
     var base = Object.assign({}, basePayload || {});
     var keptShadowRoots = Array.isArray(shadowRoots) ? shadowRoots.slice() : [];
     var keptFrames = Array.isArray(frames) ? frames.slice() : [];
     var removed = 0;
 
     function currentWireLength() {
-      return jsonWireLength(Object.assign({}, base, {
+      return wireByteLength(Object.assign({}, base, {
         shadowRoots: keptShadowRoots,
         frames: keptFrames
       }));
@@ -1943,19 +2009,27 @@ export function createCapture(config) {
         }
       }
 
+      var ownerNid = '';
       if (largestKind === 'shadow') {
-        keptShadowRoots.splice(largestIndex, 1);
+        var removedShadow = keptShadowRoots.splice(largestIndex, 1)[0];
+        ownerNid = removedShadow && removedShadow.hostNid;
       } else if (largestKind === 'frame') {
-        keptFrames.splice(largestIndex, 1);
+        var removedFrame = keptFrames.splice(largestIndex, 1)[0];
+        ownerNid = removedFrame && removedFrame.frameNid;
       } else {
         break;
       }
+      markCloneNidTruncated(clone, cloneToNid, ownerNid, truncatedNodeIds);
       removed++;
       base.truncated = true;
       base.missingDescendants = (base.missingDescendants || 0) + 1;
+      base.html = clone && clone.innerHTML ? clone.innerHTML : base.html;
+      base.nodeIds = buildNodeIdSidecar(clone, cloneToNid, false);
     }
 
     return {
+      html: base.html,
+      nodeIds: base.nodeIds || [],
       shadowRoots: keptShadowRoots,
       frames: keptFrames,
       truncated: !!base.truncated,
@@ -2670,10 +2744,10 @@ export function createCapture(config) {
       }
     } catch (e) { /* TreeWalker unavailable in this realm; truncation falls back to no-op */ }
 
-    // SNAPSHOT_BUDGET_BYTES is the imported 80%-of-relay-cap budget. The
-    // comparison against html.length (UTF-16 code units, not bytes) is an
-    // inherited reference quirk preserved for parity.
-    if (html.length > SNAPSHOT_BUDGET_BYTES) {
+    // SNAPSHOT_BUDGET_BYTES is the imported 80%-of-relay-cap budget. Compare
+    // UTF-8 wire bytes, not UTF-16 code units, so non-ASCII snapshots respect
+    // the relay's byte cap.
+    if (wireByteLength(html) > SNAPSHOT_BUDGET_BYTES) {
       truncated = true;
       var viewportCutoff = window.innerHeight * TRUNCATION_VIEWPORT_MULTIPLIER;
 
@@ -2700,9 +2774,9 @@ export function createCapture(config) {
       // elements in document order and drops complete subtrees until under
       // cap. Only complete subtrees are removed -- never a mid-element cut.
       html = clone.innerHTML;
-      if (html.length > SNAPSHOT_BUDGET_BYTES) {
+      if (wireByteLength(html) > SNAPSHOT_BUDGET_BYTES) {
         var cloneEls2 = cloneElementsWithNodeIds(clone, cloneToNid);
-        for (var u = cloneEls2.length - 1; u >= 0 && clone.innerHTML.length > SNAPSHOT_BUDGET_BYTES; u--) {
+        for (var u = cloneEls2.length - 1; u >= 0 && wireByteLength(clone.innerHTML) > SNAPSHOT_BUDGET_BYTES; u--) {
           var placeholder2 = replaceWithTruncatedPlaceholder(cloneEls2[u], cloneToNid);
           if (placeholder2) {
             var placeholderNid2 = cloneToNid.get(placeholder2);
@@ -2743,7 +2817,9 @@ export function createCapture(config) {
       title: document.title,
       streamSessionId: streamSessionId || '',
       snapshotId: currentSnapshotId || 0
-    }, shadowRoots, frames);
+    }, shadowRoots, frames, clone, cloneToNid, truncatedNodeIds);
+    html = budgetedSidecars.html;
+    nodeIds = budgetedSidecars.nodeIds;
     shadowRoots = budgetedSidecars.shadowRoots;
     frames = budgetedSidecars.frames;
     truncated = budgetedSidecars.truncated;
@@ -2948,6 +3024,14 @@ export function createCapture(config) {
       streamSessionId: streamSessionId || '',
       snapshotId: currentSnapshotId || 0
     }, result);
+    if (response.status === 'ok' && wireByteLength(response) > RELAY_PER_MESSAGE_LIMIT_BYTES) {
+      response = Object.assign({
+        requestId: request && request.requestId != null ? String(request.requestId) : '',
+        nid: request && request.nid != null ? String(request.nid) : '',
+        streamSessionId: streamSessionId || '',
+        snapshotId: currentSnapshotId || 0
+      }, contentFreeSubtreeStatus('too-large'));
+    }
     safeSend(STREAM.SUBTREE_RESPONSE, response);
   }
 
@@ -3047,7 +3131,7 @@ export function createCapture(config) {
             var nextSib = added.nextElementSibling;
             var beforeNid = getTrackedNodeId(nextSib);
 
-            diffs.push(scopeFrameDiff({
+            var addDiff = scopeFrameDiff({
               op: 'add',
               parentNid: parentNid,
               html: addedPayload.html,
@@ -3055,7 +3139,8 @@ export function createCapture(config) {
               nodeIds: addedPayload.nodeIds,
               shadowRoots: addedPayload.shadowRoots || [],
               frames: addedPayload.frames || []
-            }, frameRecord));
+            }, frameRecord);
+            diffs.push(boundMutationDiffForBudget(addDiff));
           } else if (added.nodeType === Node.TEXT_NODE || added.nodeType === Node.CDATA_SECTION_NODE) {
             sawBareTextNode = true;
           }
@@ -3188,6 +3273,53 @@ export function createCapture(config) {
     return diffs;
   }
 
+  function mutationPayloadForBudget(diffs) {
+    return {
+      mutations: diffs || [],
+      streamSessionId: streamSessionId || '',
+      snapshotId: currentSnapshotId || 0,
+      staleFlushCount: staleFlushCount
+    };
+  }
+
+  function boundMutationDiffForBudget(diff) {
+    if (!diff || diff.op !== DIFF_OP.ADD) return diff;
+    if (wireByteLength(mutationPayloadForBudget([diff])) <= RELAY_PER_MESSAGE_LIMIT_BYTES) return diff;
+    var rootNid = Array.isArray(diff.nodeIds) && diff.nodeIds.length ? diff.nodeIds[0] : '';
+    if (!rootNid) return diff;
+    var bounded = Object.assign({
+      op: DIFF_OP.ADD,
+      parentNid: diff.parentNid || '',
+      beforeNid: diff.beforeNid || ''
+    }, truncatedPayloadForNid(document, rootNid));
+    if (diff.frameNid) bounded.frameNid = diff.frameNid;
+    return bounded;
+  }
+
+  function sendMutationDiffs(diffs) {
+    var chunk = [];
+    for (var i = 0; i < diffs.length; i++) {
+      var diff = diffs[i];
+      var singlePayload = mutationPayloadForBudget([diff]);
+      if (wireByteLength(singlePayload) > RELAY_PER_MESSAGE_LIMIT_BYTES) {
+        logger.warn('[DOM Stream] mutation diff dropped over budget', {
+          op: diff && diff.op ? diff.op : ''
+        });
+        continue;
+      }
+      var nextChunk = chunk.concat([diff]);
+      if (chunk.length && wireByteLength(mutationPayloadForBudget(nextChunk)) > RELAY_PER_MESSAGE_LIMIT_BYTES) {
+        safeSend(STREAM.MUTATIONS, mutationPayloadForBudget(chunk));
+        chunk = [diff];
+      } else {
+        chunk = nextChunk;
+      }
+    }
+    if (chunk.length) {
+      safeSend(STREAM.MUTATIONS, mutationPayloadForBudget(chunk));
+    }
+  }
+
   /**
    * Flush pending mutations: process into diffs and send via the transport.
    */
@@ -3206,12 +3338,7 @@ export function createCapture(config) {
     warnIfSanitizeStrips(sanBefore);
     if (diffs.length === 0) return;
 
-    safeSend(STREAM.MUTATIONS, {
-      mutations: diffs,
-      streamSessionId: streamSessionId || '',
-      snapshotId: currentSnapshotId || 0,
-      staleFlushCount: staleFlushCount
-    });
+    sendMutationDiffs(diffs);
 
     // Phase 211-02 STREAM-02: stale counter resets on successful drain.
     // Reset is flush-based (not ack-based) per D-14 / STREAM-FUTURE-01 deferral.

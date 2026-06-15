@@ -88,6 +88,10 @@ function mutationOps(transport) {
     .flatMap((m) => m.payload.mutations);
 }
 
+function wireByteLength(value) {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
 function shadowFixture(env) {
   const host = env.document.getElementById('card');
   const root = host.attachShadow({ mode: 'open' });
@@ -218,7 +222,9 @@ test('D-19 snapshot budget includes shadow sidecars before sending', async () =>
   try {
     const host = env.document.getElementById('card');
     const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = '<section id="oversized-shadow">' + 'x'.repeat(SNAPSHOT_BUDGET_BYTES + 2000) + '</section>';
+    root.innerHTML = '<section id="oversized-shadow">'
+      + '😀'.repeat(Math.floor(SNAPSHOT_BUDGET_BYTES / 3))
+      + '</section>';
 
     const transport = createRecordingTransport();
     env.capture = createCapture({ transport, logger: silentLogger() });
@@ -231,15 +237,19 @@ test('D-19 snapshot budget includes shadow sidecars before sending', async () =>
     assert.equal(payload.truncated, true, 'sidecar overflow marks the snapshot truncated');
     assert.equal(payload.missingDescendants > 0, true, 'sidecar overflow increments missing descendants');
     assert.ok(payload.nodeIds.includes(hostNid), 'oversized sidecar host remains requestable by nid');
+    assert.ok(
+      payload.html.includes('data-phantomstream-truncated="true"'),
+      'omitted sidecar host is replaced by a requestable truncated marker'
+    );
     assert.equal(
       (payload.shadowRoots || []).some((entry) => entry.hostNid === hostNid),
       false,
       'oversized shadow sidecar is omitted from the bounded snapshot'
     );
     assert.equal(
-      JSON.stringify(payload).length <= SNAPSHOT_BUDGET_BYTES,
+      wireByteLength(payload) <= SNAPSHOT_BUDGET_BYTES,
       true,
-      'complete snapshot payload stays under the relay budget'
+      'complete snapshot payload stays under the UTF-8 relay budget'
     );
   } finally {
     env.teardown();

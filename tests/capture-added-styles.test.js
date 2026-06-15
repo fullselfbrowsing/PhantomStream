@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { createCapture } from '../src/capture/index.js';
+import { RELAY_PER_MESSAGE_LIMIT_BYTES } from '../src/protocol/constants.js';
 import { STREAM, DIFF_OP } from '../src/protocol/messages.js';
 
 const AUDITED_GLOBALS = [
@@ -82,6 +83,10 @@ function addOps(transport) {
     .filter((m) => m.type === STREAM.MUTATIONS)
     .flatMap((m) => m.payload.mutations)
     .filter((op) => op.op === DIFF_OP.ADD);
+}
+
+function wireByteLength(value) {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
 function parseFragment(env, html) {
@@ -293,6 +298,43 @@ test('dangerous computed CSS values on added nodes are scrubbed through the add-
     assert.doesNotMatch(html, /expression\s*\(/i, 'expression() from computed style is scrubbed');
     assert.match(html, /about:blank|https:\/\/safe\.test\/bg\.png/, 'safe or neutralized CSS URL remains');
     assert.match(html, /color:rgb\(20,\s*30,\s*40\)/, 'benign computed CSS survives sanitizer');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('oversized add mutations emit bounded requestable truncated placeholders', async () => {
+  const env = setupEnv();
+  try {
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const late = env.document.createElement('section');
+    late.id = 'late-huge';
+    late.textContent = '😀'.repeat(Math.floor(RELAY_PER_MESSAGE_LIMIT_BYTES / 3));
+    env.document.getElementById('host').appendChild(late);
+    await settle(env.window);
+
+    const mutationPayload = transport.sent.find((m) => m.type === STREAM.MUTATIONS)?.payload;
+    assert.ok(mutationPayload, 'a mutation payload is emitted');
+    assert.equal(
+      wireByteLength(mutationPayload) <= RELAY_PER_MESSAGE_LIMIT_BYTES,
+      true,
+      'mutation payload stays under the UTF-8 relay budget'
+    );
+
+    const add = addOps(transport)[0];
+    const lateNid = env.capture.getNodeId(late);
+    assert.ok(add, 'one add op is emitted');
+    assert.equal(add.html.includes('data-phantomstream-truncated="true"'), true,
+      'oversized add op installs a requestable truncated marker');
+    assert.deepEqual(add.nodeIds, [lateNid], 'placeholder keeps the added root nid requestable');
+    assert.deepEqual(add.shadowRoots, [], 'oversized add op carries no sidecars');
+    assert.deepEqual(add.frames, [], 'oversized add op carries no frame sidecars');
+    assert.equal(add.truncated, true, 'oversized add op is marked truncated');
+    assert.equal(add.missingDescendants > 0, true, 'oversized add op records missing descendants');
   } finally {
     env.teardown();
   }
