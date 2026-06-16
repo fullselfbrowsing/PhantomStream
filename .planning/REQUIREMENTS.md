@@ -53,7 +53,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **PKG-01**: `npx phantom-stream demo` works end-to-end: capture a page in one tab, mirror it live in another through the bundled relay
 - [x] **PKG-02**: Playwright-driven demo: a script drives a real page while the viewer mirrors it live with working remote control
-- [ ] **PKG-03**: npm package published as `@fullselfbrowsing/phantom-stream` — ESM-only subpath exports, JSDoc-generated `.d.ts`, `attw`/`publint` clean, provenance via trusted publishing
+- [ ] **PKG-03**: npm package published as `@full-self-browsing/phantom-stream` — ESM-only subpath exports, JSDoc-generated `.d.ts`, `attw`/`publint` clean, provenance via trusted publishing
 - [ ] **PKG-04**: Quickstart docs cover each adapter with a < 5-minute path to a live mirror
 
 ### FSB Integration (FSB)

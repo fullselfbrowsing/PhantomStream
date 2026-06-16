@@ -1,13 +1,13 @@
 {
   "version": "1.0",
-  "timestamp": "2026-06-16T14:38:14.298Z",
+  "timestamp": "2026-06-16T15:26:18Z",
   "phase": "10",
   "phase_name": "npm Packaging & 0.x Publish",
   "phase_dir": ".planning/phases/10-npm-packaging-0-x-publish",
   "plan": 5,
   "task": 5,
   "total_tasks": 5,
-  "status": "paused",
+  "status": "complete",
   "completed_tasks": [
     {
       "id": "10-01",
@@ -38,34 +38,17 @@
       "name": "Trusted-publishing release workflow, release docs, dry-run, and real publish auth gate",
       "status": "done",
       "commit": "ebb74b4"
-    }
-  ],
-  "remaining_tasks": [
-    {
-      "id": "publish-gate",
-      "name": "Publish @fullselfbrowsing/phantom-stream@0.1.0 to the public npm registry",
-      "status": "blocked"
-    }
-  ],
-  "blockers": [
-    {
-      "description": "Real npm publish was not run. The package is dry-run clean, but @fullselfbrowsing/phantom-stream@0.1.0 is not visible from npm in this environment; npm view returned E404.",
-      "type": "human_action",
-      "workaround": "Configure npm trusted publishing for owner fullselfbrowsing, repository PhantomStream, workflow .github/workflows/publish.yml, environment npm-publish, then publish through the GitHub release/manual workflow; or authenticate npm locally with publish rights and explicitly approve npm publish --access public."
-    }
-  ],
-  "human_actions_pending": [
-    {
-      "action": "Configure npm trusted publishing or provide authenticated npm publish approval.",
-      "context": "Phase 10 intentionally prepared and dry-ran the package but did not mutate the public npm registry without explicit user/auth approval.",
-      "blocking": true
     },
     {
-      "action": "Verify @fullselfbrowsing/phantom-stream@0.1.0 is installable from npm before starting Phase 11.",
-      "context": "Phase 11 depends on the published 0.x package for the FSB swap-in.",
-      "blocking": true
+      "id": "publish-gate",
+      "name": "Publish @full-self-browsing/phantom-stream@0.1.0 to the public npm registry",
+      "status": "done",
+      "commit": "8e0f7cd"
     }
   ],
+  "remaining_tasks": [],
+  "blockers": [],
+  "human_actions_pending": [],
   "decisions": [
     {
       "decision": "Package remains source-first ESM; TypeScript generates .d.ts files from JSDoc only.",
@@ -78,19 +61,19 @@
       "phase": "10"
     },
     {
-      "decision": "Real npm publish remains a human/auth gate.",
-      "rationale": "Publishing mutates the public registry and requires explicit user approval or trusted-publisher setup.",
+      "decision": "Published under the existing @full-self-browsing npm org as @full-self-browsing/phantom-stream; the declared @fullselfbrowsing scope was unregistered.",
+      "rationale": "parzival1213 owns the @full-self-browsing org (lattice, lattice-cli); creating a new @fullselfbrowsing org was declined in favor of the existing one. GitHub URLs (github.com/fullselfbrowsing) are unchanged.",
       "phase": "10"
     },
     {
-      "decision": "Do not start Phase 11 until @fullselfbrowsing/phantom-stream@0.1.0 is installable from npm.",
-      "rationale": "The FSB swap-in phase is explicitly ordered after the 0.x package publication.",
+      "decision": "Real npm publish was performed locally via web login + security-key web 2FA (auth-and-writes), not via the trusted-publishing workflow.",
+      "rationale": "publish.yml is not on the default branch yet, so workflow_dispatch/release triggers are unavailable; local authenticated publish with explicit user approval was used instead.",
       "phase": "10"
     }
   ],
   "blocking_constraints": [],
   "uncommitted_files": [],
   "background_processes": [],
-  "next_action": "Run $gsd-resume-work. First verify whether @fullselfbrowsing/phantom-stream@0.1.0 is now visible with npm view @fullselfbrowsing/phantom-stream version --json. If still E404, stop at the publish gate and either configure trusted publishing or request explicit authenticated publish approval. Do not begin Phase 11 until the package is installable from npm.",
-  "context_notes": "Phase 10 implementation is complete and committed through plan 10-05. The repository has .github/workflows/publish.yml, docs/RELEASE.md, public publishConfig, full package:check validation, typed exports, quickstarts, and a clean npm publish dry-run. Last full validation passed npm run package:check with 405/405 tests plus types, publint, ATTW, dry-run pack, tarball smoke, and npm publish --dry-run --access public. Real npm publish --access public was intentionally not run."
+  "next_action": "Phase 10 complete. @full-self-browsing/phantom-stream@0.1.0 is published to npm (public) and confirmed installable (npm view -> 0.1.0, registry HTTP 200). Proceed to Phase 11 (FSB swap-in), which now targets @full-self-browsing/phantom-stream. Run /gsd-progress or /gsd-discuss-phase 11.",
+  "context_notes": "Phase 10 implementation is complete and committed through plan 10-05. The package was renamed from the unregistered @fullselfbrowsing scope to @full-self-browsing (commit 8e0f7cd) and published 2026-06-16 as @full-self-browsing/phantom-stream@0.1.0 (public). Full package:check passed (405/405 tests, types, publint, ATTW, dry-run pack, tarball smoke) under the new name before publish; dist/types is generated (gitignored). Note: publish.yml still lives only on branch phantomstream-remote-control, not origin/main, so the trusted-publishing workflow is not yet dispatchable."
 }

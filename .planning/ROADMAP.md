@@ -21,7 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 7: WeakMap Node Identity + Semantic Addressing API** - Stop mutating the observed page; expose node identity as public API (completed 2026-06-15)
 - [x] **Phase 8: Shadow DOM, Iframes & Fidelity Completion** - Shadow roots, same-origin iframes, input mirroring, added-node styles, subtree fetch (completed 2026-06-15)
 - [x] **Phase 9: CSSOM Capture Mode** - Flag-enabled stylesheet-centric capture (last limitation fix; the paper's ablation arm) (completed 2026-06-16)
-- [ ] **Phase 10: npm Packaging & 0.x Publish** - `@fullselfbrowsing/phantom-stream` publish-ready with clean types and quickstarts; real npm publish gated on user/auth approval
+- [x] **Phase 10: npm Packaging & 0.x Publish** - `@full-self-browsing/phantom-stream` published to npm (public, 0.1.0) with clean types and quickstarts (completed 2026-06-16)
 - [ ] **Phase 11: FSB Swap-In → 1.0** - FSB runs on the published package; API freezes at 1.0
 - [ ] **Phase 12: Evaluation Corpus & Harness** - Frozen corpus, fair baselines, fidelity metrics; doubles as the regression suite
 - [ ] **Phase 13: Research Paper** - Submission-ready system-track draft (WWW/UIST/CHI tier)
@@ -274,12 +274,12 @@ Plans:
 - [x] 09-08-PLAN.md — CSSOM oracle, docs, and final automated gate
 
 ### Phase 10: npm Packaging & 0.x Publish
-**Goal**: `@fullselfbrowsing/phantom-stream` is installable from npm with clean ESM exports, generated types, and < 5-minute quickstarts
+**Goal**: `@full-self-browsing/phantom-stream` is installable from npm with clean ESM exports, generated types, and < 5-minute quickstarts
 **Mode:** mvp
 **Depends on**: Phase 9 (all six limitation fixes in the package; demos from Phases 4–5 already exercise the API)
 **Requirements**: PKG-03, PKG-04
 **Success Criteria** (what must be TRUE):
-  1. `npm install @fullselfbrowsing/phantom-stream` works from the public registry: ESM-only subpath exports, JSDoc-generated `.d.ts`, provenance via trusted publishing, published as 0.x
+  1. `npm install @full-self-browsing/phantom-stream` works from the public registry: ESM-only subpath exports, JSDoc-generated `.d.ts`, provenance via trusted publishing, published as 0.x
   2. `attw --pack`, `publint`, and a tarball-install smoke test pass as permanent CI jobs
   3. Quickstart docs cover each adapter (extension, Playwright/CDP, bookmarklet, embedded) with a verified < 5-minute path to a live mirror
 **Plans**: 5 plans (5 waves)

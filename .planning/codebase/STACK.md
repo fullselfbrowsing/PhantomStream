@@ -68,7 +68,7 @@
 ## Configuration
 
 **Package:**
-- `package.json` — name `@fullselfbrowsing/phantom-stream`, version `0.1.0`, `"type": "module"`
+- `package.json` — name `@full-self-browsing/phantom-stream`, version `0.1.0`, `"type": "module"`
 - Entry point: `src/protocol/index.js` (via `"main"`). Package exports currently include
   `./protocol`, `./capture`, `./adapters/playwright`, `./renderer`, `./relay`, and
   `./transport/websocket`.

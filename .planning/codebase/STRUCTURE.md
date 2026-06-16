@@ -74,7 +74,7 @@ managua/                          # Repo root
 │   └── todos.md                  # Working task list
 ├── .planning/
 │   └── codebase/                 # GSD codebase map documents
-├── package.json                  # ESM package: @fullselfbrowsing/phantom-stream v0.1.0
+├── package.json                  # ESM package: @full-self-browsing/phantom-stream v0.1.0
 ├── README.md                     # Project overview
 ├── LICENSE                       # MIT
 └── .gitignore

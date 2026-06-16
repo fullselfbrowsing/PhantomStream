@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: blocked
-stopped_at: Phase 10 publish-ready; real npm publish gated on explicit user/auth approval before Phase 11
-last_updated: "2026-06-16T08:55:00Z"
-last_activity: 2026-06-16 -- Phase 10 plan 10-05 publish workflow and dry-run complete; real publish gated
+status: in_progress
+stopped_at: Phase 10 complete — @full-self-browsing/phantom-stream@0.1.0 published to npm (public); ready for Phase 11 (FSB swap-in)
+last_updated: "2026-06-16T15:26:18Z"
+last_activity: 2026-06-16 -- Published @full-self-browsing/phantom-stream@0.1.0 to npm (public); Phase 10 publish gate resolved
 progress:
   total_phases: 13
-  completed_phases: 9
+  completed_phases: 10
   total_plans: 57
   completed_plans: 57
   percent: 100
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-16)
 
 **Core value:** A live, trustworthy, low-bandwidth, semantically addressable mirror of a real browser tab — capture → relay → render → remote-control must work end-to-end as a standalone framework.
-**Current focus:** Phase 10 — npm packaging & 0.x publish gate
+**Current focus:** Phase 11 — FSB swap-in (Phase 10 complete; `@full-self-browsing/phantom-stream@0.1.0` published to npm)
 
 ## Current Position
 
-Phase: 10
-Plan: Publish gate
-Status: Blocked on explicit user/auth approval for real npm publish
-Last activity: 2026-06-16 -- Phase 10 plan 10-05 publish workflow and dry-run complete; real publish gated
+Phase: 10 complete → Phase 11 next
+Plan: —
+Status: Phase 10 complete — package published to npm (public); publish gate resolved
+Last activity: 2026-06-16 -- Published @full-self-browsing/phantom-stream@0.1.0 to npm (public)
 
-Progress: [██████████] 100% of planned Phase 10 work; registry publish remains pending
+Progress: [██████████] Phase 10 complete; `@full-self-browsing/phantom-stream@0.1.0` live on npm
 
 ## Performance Metrics
 
@@ -158,7 +158,7 @@ None yet.
 
 - [Phase 12]: Baseline-fairness protocol details and the semantic-fidelity metric definition need a dedicated research pass before harness implementation
 - [Requirements]: REQUIREMENTS.md previously stated "32 total" v1 requirements; actual count is 39 — corrected during roadmap creation
-- [Phase 10]: Real npm publish is gated on explicit approval plus npm trusted publishing or authenticated write access; Phase 11 should not start until `@fullselfbrowsing/phantom-stream@0.1.0` is installable from npm.
+- [Phase 10]: RESOLVED 2026-06-16 — `@full-self-browsing/phantom-stream@0.1.0` published to npm (public) and confirmed installable; Phase 11 (FSB swap-in) is unblocked. Published under the existing `@full-self-browsing` npm org (the declared `@fullselfbrowsing` scope was unregistered).
 
 ## Deferred Items
 
@@ -171,6 +171,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-16T08:55:00Z
-Stopped at: Phase 10 publish-ready; real npm publish gated on user/auth approval
+Last session: 2026-06-16T15:26:18Z
+Stopped at: Phase 10 complete — @full-self-browsing/phantom-stream@0.1.0 published to npm (public); Phase 11 next
 Resume file: .planning/phases/10-npm-packaging-0-x-publish/10-05-SUMMARY.md

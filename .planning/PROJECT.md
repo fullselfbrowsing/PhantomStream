@@ -50,7 +50,7 @@ standalone framework.
 <!-- Current scope. Building toward these. -->
 
 **Plug-and-play surface:**
-- [ ] npm package published as `@fullselfbrowsing/phantom-stream` with JSDoc-generated `.d.ts`
+- [ ] npm package published as `@full-self-browsing/phantom-stream` with JSDoc-generated `.d.ts`
 
 **FSB integration:**
 - [ ] FSB swap-in verified from this repo — FSB consumes the published package as its streaming layer
