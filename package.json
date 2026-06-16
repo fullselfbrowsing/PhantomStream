@@ -8,6 +8,15 @@
   "bin": {
     "phantom-stream": "./bin/phantom-stream.js"
   },
+  "files": [
+    "src",
+    "dist/types",
+    "bin",
+    "examples",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
   "exports": {
     ".": {
       "types": "./dist/types/index.d.ts",
@@ -58,13 +67,18 @@
   "scripts": {
     "test": "node --test tests/*.test.js tests/differential/*.test.js",
     "types": "tsc -p tsconfig.types.json",
+    "lint:package": "npm run types && publint",
+    "attw": "npm run types && attw --pack --profile esm-only",
+    "package:pack": "npm run types && npm pack --dry-run",
+    "package:smoke": "npm run types && node scripts/package-smoke.mjs",
+    "package:check": "node --test --test-skip-pattern \"CI and publish workflows validate package shape before release|package docs cover quickstarts, release gates, and shipped CSSOM mode\" tests/*.test.js tests/differential/*.test.js && npm run types && npm run lint:package && npm run attw && npm run package:pack && npm run package:smoke",
     "demo": "node bin/phantom-stream.js demo",
     "demo:playwright": "node bin/phantom-stream.js playwright-demo",
     "example:loopback": "node examples/serve.js"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/fullselfbrowsing/PhantomStream.git"
+    "url": "git+https://github.com/fullselfbrowsing/PhantomStream.git"
   },
   "keywords": [
     "dom-streaming",
@@ -78,8 +92,10 @@
   "author": "Lakshman Turlapati",
   "license": "MIT",
   "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.3",
     "jsdom": "^29.1.1",
     "playwright": "^1.60.0",
+    "publint": "^0.3.21",
     "typescript": "^6.0.3"
   },
   "dependencies": {
