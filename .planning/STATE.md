@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Phase 10 plan 10-04 completed; ready to execute 10-05
-last_updated: "2026-06-16T08:35:00Z"
-last_activity: 2026-06-16 -- Phase 10 plan 10-04 package docs complete
+status: blocked
+stopped_at: Phase 10 publish-ready; real npm publish gated on explicit user/auth approval before Phase 11
+last_updated: "2026-06-16T08:55:00Z"
+last_activity: 2026-06-16 -- Phase 10 plan 10-05 publish workflow and dry-run complete; real publish gated
 progress:
   total_phases: 13
   completed_phases: 9
   total_plans: 57
-  completed_plans: 56
-  percent: 98
+  completed_plans: 57
+  percent: 100
 ---
 
 # Project State
@@ -21,22 +21,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-16)
 
 **Core value:** A live, trustworthy, low-bandwidth, semantically addressable mirror of a real browser tab — capture → relay → render → remote-control must work end-to-end as a standalone framework.
-**Current focus:** Phase 10 — npm packaging & 0.x publish
+**Current focus:** Phase 10 — npm packaging & 0.x publish gate
 
 ## Current Position
 
 Phase: 10
-Plan: 10-05
-Status: Ready to execute
-Last activity: 2026-06-16 -- Phase 10 plan 10-04 package docs complete
+Plan: Publish gate
+Status: Blocked on explicit user/auth approval for real npm publish
+Last activity: 2026-06-16 -- Phase 10 plan 10-05 publish workflow and dry-run complete; real publish gated
 
-Progress: [█████████░] 98%
+Progress: [██████████] 100% of planned Phase 10 work; registry publish remains pending
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 56
+- Total plans completed: 57
 - Average duration: -
 - Total execution time: 0 hours
 
@@ -87,6 +87,7 @@ Progress: [█████████░] 98%
 | Phase 10 P02 | 12min | 2 tasks | 8 files |
 | Phase 10 P03 | 20min | 2 tasks | 4 files |
 | Phase 10 P04 | 18min | 2 tasks | 6 files |
+| Phase 10 P05 | 20min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -147,6 +148,7 @@ Recent decisions affecting current work:
 - [Phase 10]: Type declarations are generated for importable `src/**/*.js` modules only; CLI/bin declarations are out of scope for the export map.
 - [Phase 10]: Package validation uses `publint`, ATTW's `esm-only` profile, dry-run pack, and a tarball install smoke against every public export.
 - [Phase 10]: Package quickstarts cover embedded loopback, WebSocket demo, Playwright/CDP, MV3 extension, bookmarklet, CSSOM mode, and security checks without Phase 12 performance claims.
+- [Phase 10]: Real npm publish was not run; the package is dry-run clean and waiting for trusted publisher configuration or authenticated user approval.
 
 ### Pending Todos
 
@@ -156,6 +158,7 @@ None yet.
 
 - [Phase 12]: Baseline-fairness protocol details and the semantic-fidelity metric definition need a dedicated research pass before harness implementation
 - [Requirements]: REQUIREMENTS.md previously stated "32 total" v1 requirements; actual count is 39 — corrected during roadmap creation
+- [Phase 10]: Real npm publish is gated on explicit approval plus npm trusted publishing or authenticated write access; Phase 11 should not start until `@fullselfbrowsing/phantom-stream@0.1.0` is installable from npm.
 
 ## Deferred Items
 
@@ -168,6 +171,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-16T08:35:00Z
-Stopped at: Phase 10 plan 10-04 completed; ready to execute 10-05
-Resume file: .planning/phases/10-npm-packaging-0-x-publish/10-05-PLAN.md
+Last session: 2026-06-16T08:55:00Z
+Stopped at: Phase 10 publish-ready; real npm publish gated on user/auth approval
+Resume file: .planning/phases/10-npm-packaging-0-x-publish/10-05-SUMMARY.md

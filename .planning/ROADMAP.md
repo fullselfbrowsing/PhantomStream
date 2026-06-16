@@ -21,7 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 7: WeakMap Node Identity + Semantic Addressing API** - Stop mutating the observed page; expose node identity as public API (completed 2026-06-15)
 - [x] **Phase 8: Shadow DOM, Iframes & Fidelity Completion** - Shadow roots, same-origin iframes, input mirroring, added-node styles, subtree fetch (completed 2026-06-15)
 - [x] **Phase 9: CSSOM Capture Mode** - Flag-enabled stylesheet-centric capture (last limitation fix; the paper's ablation arm) (completed 2026-06-16)
-- [ ] **Phase 10: npm Packaging & 0.x Publish** - `@fullselfbrowsing/phantom-stream` published with clean types and quickstarts
+- [ ] **Phase 10: npm Packaging & 0.x Publish** - `@fullselfbrowsing/phantom-stream` publish-ready with clean types and quickstarts; real npm publish gated on user/auth approval
 - [ ] **Phase 11: FSB Swap-In → 1.0** - FSB runs on the published package; API freezes at 1.0
 - [ ] **Phase 12: Evaluation Corpus & Harness** - Frozen corpus, fair baselines, fidelity metrics; doubles as the regression suite
 - [ ] **Phase 13: Research Paper** - Submission-ready system-track draft (WWW/UIST/CHI tier)
@@ -190,7 +190,7 @@ Plans:
 - [x] 10-04-PLAN.md — Quickstarts and README/package docs refresh
 
 **Wave 4** *(blocked on 10-04)*
-- [ ] 10-05-PLAN.md — Trusted-publishing release workflow, release docs, dry-run, and real publish auth gate
+- [x] 10-05-PLAN.md — Trusted-publishing release workflow, release docs, dry-run, and real publish auth gate
 
 ### Phase 7: WeakMap Node Identity + Semantic Addressing API
 **Goal**: The observed page is no longer mutated by capture, and hosts can address mirrored elements semantically through a public API
@@ -282,7 +282,8 @@ Plans:
   1. `npm install @fullselfbrowsing/phantom-stream` works from the public registry: ESM-only subpath exports, JSDoc-generated `.d.ts`, provenance via trusted publishing, published as 0.x
   2. `attw --pack`, `publint`, and a tarball-install smoke test pass as permanent CI jobs
   3. Quickstart docs cover each adapter (extension, Playwright/CDP, bookmarklet, embedded) with a verified < 5-minute path to a live mirror
-**Plans**: TBD
+**Plans**: 5 plans (5 waves)
+**Publish gate**: Workflow, validation, and dry-run are complete; the public npm registry publish remains gated on explicit authenticated user approval before Phase 11.
 
 ### Phase 11: FSB Swap-In → 1.0
 **Goal**: FSB runs on the published package as its streaming layer — the demanding consumer that freezes the API at 1.0
@@ -335,7 +336,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 7. WeakMap Node Identity + Semantic Addressing API | 4/4 | Complete   | 2026-06-15 |
 | 8. Shadow DOM, Iframes & Fidelity Completion | 9/9 | Complete   | 2026-06-15 |
 | 9. CSSOM Capture Mode | 8/8 | Complete | 2026-06-16 |
-| 10. npm Packaging & 0.x Publish | 1/5 | In progress | - |
+| 10. npm Packaging & 0.x Publish | 5/5 | Blocked on publish approval | - |
 | 11. FSB Swap-In → 1.0 | 0/TBD | Not started | - |
 | 12. Evaluation Corpus & Harness | 0/TBD | Not started | - |
 | 13. Research Paper | 0/TBD | Not started | - |
