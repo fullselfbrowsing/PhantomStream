@@ -3892,13 +3892,15 @@ function createCapture(config) {
     warn: function () {},
     error: function () {}
   };
+  var phantomStreamBridge = typeof window.__phantomStreamBridge === "function"
+    ? window.__phantomStreamBridge
+    : null;
 
   var phantomStreamTransport = {
     send: function (type, payload) {
       try {
-        var bridge = window.__phantomStreamBridge;
-        if (typeof bridge !== "function") return;
-        var result = bridge({ token: PHANTOM_STREAM_BRIDGE_TOKEN, type: type, payload: payload || {} });
+        if (typeof phantomStreamBridge !== "function") return;
+        var result = phantomStreamBridge({ token: PHANTOM_STREAM_BRIDGE_TOKEN, type: type, payload: payload || {} });
         if (result && typeof result.catch === "function") {
           result.catch(function () {});
         }

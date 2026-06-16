@@ -202,6 +202,58 @@ test('inject source exposes capture handle and getNodeId for tracked page elemen
   }
 });
 
+test('inject source closes over the original bridge so page wrappers cannot observe the token', async () => {
+  const dom = new JSDOM(
+    '<!doctype html><html><body><main><button id="target">Run</button></main></body></html>',
+    {
+      pretendToBeVisual: true,
+      runScripts: 'outside-only',
+      url: 'https://fixture.test/',
+      virtualConsole: new VirtualConsole(),
+    }
+  );
+  const originalMessages = [];
+  const wrappedMessages = [];
+  try {
+    dom.window.__phantomStreamBridge = (message) => {
+      originalMessages.push(message);
+      return { ok: true };
+    };
+
+    const tokenizedSource = getPlaywrightInjectSource().replace(
+      'var PHANTOM_STREAM_BRIDGE_TOKEN = "";',
+      'var PHANTOM_STREAM_BRIDGE_TOKEN = "bridge-secret";'
+    );
+    dom.window.eval(tokenizedSource);
+    await settleWindow(dom.window);
+
+    const originalBridge = dom.window.__phantomStreamBridge;
+    dom.window.__phantomStreamBridge = (message) => {
+      wrappedMessages.push(message);
+      return originalBridge(message);
+    };
+
+    const added = dom.window.document.createElement('section');
+    added.id = 'after-wrapper';
+    added.textContent = 'After wrapper';
+    dom.window.document.querySelector('main').appendChild(added);
+    await settleWindow(dom.window);
+
+    assert.ok(
+      originalMessages.some((entry) => entry.type === STREAM.MUTATIONS),
+      'later capture sends continue through the original bridge'
+    );
+    assert.equal(wrappedMessages.length, 0, 'post-injection page wrapper never observes bridge calls');
+    assert.equal(
+      originalMessages.some((entry) => entry.token === 'bridge-secret'),
+      true,
+      'the original binding receives the closure-scoped token'
+    );
+  } finally {
+    dom.window.close();
+  }
+});
+
 test('binding forwards only main-frame bridge messages to transport', async () => {
   const page = createFakePage();
   const transport = createRecordingTransport();
