@@ -1,35 +1,96 @@
 {
   "version": "1.0",
-  "timestamp": "2026-06-12T00:47:18.785Z",
-  "phase": "3",
-  "phase_name": "Security Pipeline — Sanitization + Privacy Masking",
-  "phase_dir": ".planning/phases/03-security-pipeline-sanitization-privacy-masking",
-  "plan": 3,
-  "task": 2,
-  "total_tasks": 12,
+  "timestamp": "2026-06-16T14:38:14.298Z",
+  "phase": "10",
+  "phase_name": "npm Packaging & 0.x Publish",
+  "phase_dir": ".planning/phases/10-npm-packaging-0-x-publish",
+  "plan": 5,
+  "task": 5,
+  "total_tasks": 5,
   "status": "paused",
   "completed_tasks": [
-    {"id": "03-01", "name": "Capture-side sanitizeForWire chokepoint (SEC-01)", "status": "done", "commit": "e056cb7 (merged)"},
-    {"id": "03-02", "name": "Render-side sanitizeFragment chokepoint + CSP (SEC-02)", "status": "done", "commit": "6b5dc84 (merged)"},
-    {"id": "03-03", "name": "Privacy masking (SEC-03)", "status": "in_progress", "progress": "Task 1 (text masking) complete RED+GREEN; Task 2 RED test committed (blockSelector + maskInputs/password suite); Task 2 implementation interrupted mid-serializer (blocked-pair recording + batched post-walk placeholder swap). ALL WORK IS ON UNMERGED BRANCH worktree-agent-aca4a7e1b632a8c5a (3 commits: 2f46873, 9767182, 62e62cb)"}
+    {
+      "id": "10-01",
+      "name": "RED package validation tests for exports, types, tarball contents, docs, and release workflow",
+      "status": "done",
+      "commit": "93be016"
+    },
+    {
+      "id": "10-02",
+      "name": "JSDoc declaration generation, root export, and typed export map",
+      "status": "done",
+      "commit": "278d9b5"
+    },
+    {
+      "id": "10-03",
+      "name": "Package validation tooling, tarball smoke, and CI package gate",
+      "status": "done",
+      "commit": "5e7b473"
+    },
+    {
+      "id": "10-04",
+      "name": "Quickstarts and README/package docs refresh",
+      "status": "done",
+      "commit": "6b3917f"
+    },
+    {
+      "id": "10-05",
+      "name": "Trusted-publishing release workflow, release docs, dry-run, and real publish auth gate",
+      "status": "done",
+      "commit": "ebb74b4"
+    }
   ],
   "remaining_tasks": [
-    {"id": "03-03 T2", "name": "blockSelector placeholder + maskInputs/password-always (finish GREEN)", "status": "in_progress"},
-    {"id": "03-04", "name": "D7 oracle ledger triple (sanitize-corpus.html + sanitize-divergence.js + ledger entry)", "status": "not_started"},
-    {"id": "03-05", "name": "Chokepoint purity scan + docs/SECURITY.md + demo dogfood checkpoint (human-verify)", "status": "not_started"}
+    {
+      "id": "publish-gate",
+      "name": "Publish @fullselfbrowsing/phantom-stream@0.1.0 to the public npm registry",
+      "status": "blocked"
+    }
   ],
   "blockers": [
-    {"description": "Executor for 03-03 was killed mid-task by user stop; its partial work lives on git branch worktree-agent-aca4a7e1b632a8c5a (worktree at /Users/lakshman/conductor/repos/phantomstream/.claude/worktrees/agent-aca4a7e1b632a8c5a may be reaped — the BRANCH is the source of truth)", "type": "technical", "workaround": "On resume: either merge the 3 commits and spawn a continuation executor for 03-03 Task 2 GREEN, or reset and re-execute 03-03 from scratch"}
+    {
+      "description": "Real npm publish was not run. The package is dry-run clean, but @fullselfbrowsing/phantom-stream@0.1.0 is not visible from npm in this environment; npm view returned E404.",
+      "type": "human_action",
+      "workaround": "Configure npm trusted publishing for owner fullselfbrowsing, repository PhantomStream, workflow .github/workflows/publish.yml, environment npm-publish, then publish through the GitHub release/manual workflow; or authenticate npm locally with publish rights and explicitly approve npm publish --access public."
+    }
   ],
   "human_actions_pending": [
-    {"action": "Dismiss the leftover alert() dialog in the background Chrome tab (127.0.0.1:8642 demo) and close the tab", "context": "Phase 2 dialog-channel verification left a native alert open; automation cannot dismiss it", "blocking": false}
+    {
+      "action": "Configure npm trusted publishing or provide authenticated npm publish approval.",
+      "context": "Phase 10 intentionally prepared and dry-ran the package but did not mutate the public npm registry without explicit user/auth approval.",
+      "blocking": true
+    },
+    {
+      "action": "Verify @fullselfbrowsing/phantom-stream@0.1.0 is installable from npm before starting Phase 11.",
+      "context": "Phase 11 depends on the published 0.x package for the FSB swap-in.",
+      "blocking": true
+    }
   ],
   "decisions": [
-    {"decision": "Sanitization: blocklist policy, targeted CSS scrub, counted+logged strips, always-on no opt-out", "rationale": "Fidelity-first per user; constraint says non-negotiable", "phase": "3"},
-    {"decision": "CSP style-src adjusted to 'http: https: unsafe-inline' via the CONTEXT adjustment clause", "rationale": "Capture deliberately emits external stylesheet links; script-blocking untouched", "phase": "3"},
-    {"decision": "Masking rrweb-compatible: password always masked, star-per-char, placeholder boxes, factory-throw on invalid selectors", "rationale": "User accepted Area 2 recommendations; fail-loud beats silent privacy leak", "phase": "3"}
+    {
+      "decision": "Package remains source-first ESM; TypeScript generates .d.ts files from JSDoc only.",
+      "rationale": "Provides typed package exports without converting the source tree to TypeScript.",
+      "phase": "10"
+    },
+    {
+      "decision": "Trusted publishing uses GitHub Actions OIDC with id-token: write and no long-lived NPM_TOKEN.",
+      "rationale": "Matches the release docs and avoids committing or configuring a persistent npm secret.",
+      "phase": "10"
+    },
+    {
+      "decision": "Real npm publish remains a human/auth gate.",
+      "rationale": "Publishing mutates the public registry and requires explicit user approval or trusted-publisher setup.",
+      "phase": "10"
+    },
+    {
+      "decision": "Do not start Phase 11 until @fullselfbrowsing/phantom-stream@0.1.0 is installable from npm.",
+      "rationale": "The FSB swap-in phase is explicitly ordered after the 0.x package publication.",
+      "phase": "10"
+    }
   ],
+  "blocking_constraints": [],
   "uncommitted_files": [],
-  "next_action": "Run /gsd-resume-work. First: recover plan 03-03 — merge branch worktree-agent-aca4a7e1b632a8c5a (Task 1 + Task 2 RED are sound, suite was green at Task 1), then spawn a continuation executor for 03-03 Task 2 GREEN (blockSelector placeholder swap in serializer + differ suppression + maskInputs), then waves 3-4 (03-04, 03-05), then code review chain + verifier per autonomous mode.",
-  "context_notes": "Autonomous run /gsd-autonomous through phases 1-13. Phases 1-2 COMPLETE (verified, reviewed clean, CI green on Node 20/22/24, branch pushed to origin). Phase 3 wave 1 merged (03-01+03-02, suite 168/168 at f7d3980). Mode: smart-discuss with AskUserQuestion per area; plan->check revision loops; executors in isolated worktrees merged per wave; post-merge npm test gate; code review --fix --auto chain after execution; real-browser verification via FSB MCP tools (open_tab/execute_js with client label 'Claude') proved invaluable in Phase 2 (caught the D6 text-drop bug)."
+  "background_processes": [],
+  "next_action": "Run $gsd-resume-work. First verify whether @fullselfbrowsing/phantom-stream@0.1.0 is now visible with npm view @fullselfbrowsing/phantom-stream version --json. If still E404, stop at the publish gate and either configure trusted publishing or request explicit authenticated publish approval. Do not begin Phase 11 until the package is installable from npm.",
+  "context_notes": "Phase 10 implementation is complete and committed through plan 10-05. The repository has .github/workflows/publish.yml, docs/RELEASE.md, public publishConfig, full package:check validation, typed exports, quickstarts, and a clean npm publish dry-run. Last full validation passed npm run package:check with 405/405 tests plus types, publint, ATTW, dry-run pack, tarball smoke, and npm publish --dry-run --access public. Real npm publish --access public was intentionally not run."
 }
