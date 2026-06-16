@@ -184,7 +184,7 @@ Plans:
 - [x] 10-02-PLAN.md — JSDoc declaration generation, root export, and typed export map
 
 **Wave 2** *(blocked on 10-02)*
-- [ ] 10-03-PLAN.md — Package validation tooling, tarball smoke, and CI package gate
+- [x] 10-03-PLAN.md — Package validation tooling, tarball smoke, and CI package gate
 
 **Wave 3** *(blocked on 10-03)*
 - [ ] 10-04-PLAN.md — Quickstarts and README/package docs refresh
