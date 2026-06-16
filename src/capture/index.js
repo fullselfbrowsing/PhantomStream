@@ -2510,12 +2510,25 @@ export function createCapture(config) {
       bodyAttrs: Object.assign({}, payload && payload.bodyAttrs ? payload.bodyAttrs : {})
     });
 
+    // CSSOM mode carries full stylesheet text in styleSources; copy the array
+    // so the budget passes below can prune it without mutating the caller's
+    // sources. Only present in cssom mode -- computed mode omits the field.
+    if (Array.isArray(next.styleSources)) {
+      next.styleSources = next.styleSources.slice();
+    }
+
     while (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.inlineStyles.length) {
       next.inlineStyles.pop();
       markSnapshotPayloadTruncated(next);
     }
     while (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.stylesheets.length) {
       next.stylesheets.pop();
+      markSnapshotPayloadTruncated(next);
+    }
+    // A single large CSSOM source can dominate the payload; shed sources before
+    // dropping DOM structure so an oversized stylesheet cannot blow the cap.
+    while (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && Array.isArray(next.styleSources) && next.styleSources.length) {
+      next.styleSources.pop();
       markSnapshotPayloadTruncated(next);
     }
 
@@ -2566,6 +2579,7 @@ export function createCapture(config) {
       next.frames = [];
       next.inlineStyles = [];
       next.stylesheets = [];
+      if (Array.isArray(next.styleSources)) next.styleSources = [];
       next.htmlAttrs = {};
       next.bodyAttrs = {};
       next.htmlStyle = '';

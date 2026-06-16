@@ -737,6 +737,12 @@ export function createViewer(options) {
     if (s.media) el.setAttribute('media', String(s.media));
     if (s.disabled) el.setAttribute('data-ps-style-disabled', 'true');
     rootNode.appendChild(el);
+    // A disabled source must not apply in the mirror -- the diagnostic
+    // attribute above is not enough. Disable the sheet itself, set after
+    // insertion so the StyleSheet object exists to be disabled.
+    if (s.disabled) {
+      try { el.disabled = true; } catch (err) { /* CSSOM disabled unsupported */ }
+    }
     return true;
   }
 

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { createCapture } from '../src/capture/index.js';
 import { STREAM, DIFF_OP } from '../src/protocol/messages.js';
+import { RELAY_PER_MESSAGE_LIMIT_BYTES } from '../src/protocol/constants.js';
 
 const AUDITED_GLOBALS = [
   'window', 'document', 'Node', 'NodeFilter', 'MutationObserver',
@@ -153,6 +154,30 @@ test('CSSOM mode does not call hidden fetch and emits dynamic style-source ops',
     assert.ok(styleOps.length >= 1, 'style-source mutation emitted');
     assert.ok(styleOps.some((op) => op.action === 'replace' && /color:\s*blue/.test(op.source.cssText)));
     assert.equal(styleOps.every((op) => op.scope.kind === 'document'), true);
+  } finally {
+    env.teardown();
+  }
+});
+
+test('CSSOM snapshot is pruned under the relay cap when a style source is oversized', async () => {
+  // One custom-property rule whose value alone exceeds the 1 MiB relay cap, so
+  // the budgeter must shed styleSources (regression: it previously skipped them
+  // and the over-cap snapshot got dropped by the relay).
+  const oversized = ':root{--ps-oversized:' + 'A'.repeat(1200000) + '}';
+  const env = setupEnv('<!doctype html><html><head><style>' + oversized + '</style></head><body><div class="x">hi</div></body></html>');
+  try {
+    const t = transport();
+    env.capture = createCapture({ transport: t, logger: logger(), styleMode: 'cssom' });
+    env.capture.start();
+    await settle(env.window);
+    const payload = snapshot(t);
+    const wireBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
+    assert.ok(
+      wireBytes <= RELAY_PER_MESSAGE_LIMIT_BYTES,
+      'snapshot wire size ' + wireBytes + ' must not exceed relay cap ' + RELAY_PER_MESSAGE_LIMIT_BYTES
+    );
+    assert.equal(payload.truncated, true, 'oversized CSSOM sources mark the snapshot truncated');
+    assert.equal((payload.styleSources || []).length, 0, 'the oversized CSSOM source is pruned from the budgeted snapshot');
   } finally {
     env.teardown();
   }

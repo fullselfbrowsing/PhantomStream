@@ -225,3 +225,36 @@ test('viewer applies dynamic style-source replace and remove ops', () => {
     env.teardown();
   }
 });
+
+test('viewer disables a disabled CSSOM source instead of only tagging it', () => {
+  const env = setupEnv();
+  try {
+    const wire = manualTransport();
+    env.viewer = createViewer({
+      container: env.document.getElementById('viewer'),
+      transport: wire.transport,
+      logger: logger(),
+    });
+    wire.emit(STREAM.SNAPSHOT, baseSnapshot({
+      styleSources: [{
+        sourceId: 'document:0:style',
+        scope: { kind: 'document' },
+        ownerKind: 'style',
+        order: 0,
+        href: null,
+        media: '',
+        disabled: true,
+        cssText: '.root{color:red}',
+        fallback: null,
+        approxBytes: 16,
+      }],
+    }));
+    const doc = glue(iframe(env));
+    const el = doc.querySelector('[data-ps-style-source-id="document:0:style"]');
+    assert.ok(el, 'disabled style source element is still installed');
+    assert.equal(el.getAttribute('data-ps-style-disabled'), 'true');
+    assert.equal(el.disabled, true, 'recreated stylesheet is actually disabled, not just tagged');
+  } finally {
+    env.teardown();
+  }
+});
