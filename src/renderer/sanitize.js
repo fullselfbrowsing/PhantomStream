@@ -154,7 +154,7 @@ function neutralizeSrcset(value) {
  *     values pass unchanged
  *   - expression() and -moz-binding (legacy script-execution vectors) are
  *     neutralized
- *   - non-http(s) @import targets are neutralized (string and url() forms)
+ *   - non-http(s) CSS import targets are neutralized (string and url() forms)
  *   - a literal </style sequence is rewritten so captured CSS can never
  *     break out of the style tag it is emitted into at the string-assembly
  *     layer (src/renderer/snapshot.js)

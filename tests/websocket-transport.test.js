@@ -102,7 +102,11 @@ function createFakeWebSocketClass() {
 
 test('package exports the WebSocket transport subpath', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.equal(pkg.exports['./transport/websocket'], './src/transport/websocket.js');
+  assert.deepEqual(pkg.exports['./transport/websocket'], {
+    types: './dist/types/transport/websocket.d.ts',
+    import: './src/transport/websocket.js',
+    default: './src/transport/websocket.js',
+  });
 });
 
 test('plain JSON frames decode without any codec object', async () => {

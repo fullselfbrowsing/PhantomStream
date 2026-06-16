@@ -3,22 +3,61 @@
   "version": "0.1.0",
   "description": "DOM-native live browser mirroring: snapshot + MutationObserver diff streaming with stable node identity, compressed transport, and bidirectional remote control.",
   "type": "module",
-  "main": "src/protocol/index.js",
+  "main": "src/index.js",
+  "types": "./dist/types/index.d.ts",
   "bin": {
     "phantom-stream": "./bin/phantom-stream.js"
   },
   "exports": {
-    "./protocol": "./src/protocol/index.js",
-    "./capture": "./src/capture/index.js",
-    "./adapters/extension": "./src/adapters/extension.js",
-    "./adapters/bookmarklet": "./src/adapters/bookmarklet.js",
-    "./adapters/playwright": "./src/adapters/playwright.js",
-    "./renderer": "./src/renderer/index.js",
-    "./relay": "./src/relay/index.js",
-    "./transport/websocket": "./src/transport/websocket.js"
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./src/index.js",
+      "default": "./src/index.js"
+    },
+    "./protocol": {
+      "types": "./dist/types/protocol/index.d.ts",
+      "import": "./src/protocol/index.js",
+      "default": "./src/protocol/index.js"
+    },
+    "./capture": {
+      "types": "./dist/types/capture/index.d.ts",
+      "import": "./src/capture/index.js",
+      "default": "./src/capture/index.js"
+    },
+    "./adapters/extension": {
+      "types": "./dist/types/adapters/extension.d.ts",
+      "import": "./src/adapters/extension.js",
+      "default": "./src/adapters/extension.js"
+    },
+    "./adapters/bookmarklet": {
+      "types": "./dist/types/adapters/bookmarklet.d.ts",
+      "import": "./src/adapters/bookmarklet.js",
+      "default": "./src/adapters/bookmarklet.js"
+    },
+    "./adapters/playwright": {
+      "types": "./dist/types/adapters/playwright.d.ts",
+      "import": "./src/adapters/playwright.js",
+      "default": "./src/adapters/playwright.js"
+    },
+    "./renderer": {
+      "types": "./dist/types/renderer/index.d.ts",
+      "import": "./src/renderer/index.js",
+      "default": "./src/renderer/index.js"
+    },
+    "./relay": {
+      "types": "./dist/types/relay/index.d.ts",
+      "import": "./src/relay/index.js",
+      "default": "./src/relay/index.js"
+    },
+    "./transport/websocket": {
+      "types": "./dist/types/transport/websocket.d.ts",
+      "import": "./src/transport/websocket.js",
+      "default": "./src/transport/websocket.js"
+    }
   },
   "scripts": {
     "test": "node --test tests/*.test.js tests/differential/*.test.js",
+    "types": "tsc -p tsconfig.types.json",
     "demo": "node bin/phantom-stream.js demo",
     "demo:playwright": "node bin/phantom-stream.js playwright-demo",
     "example:loopback": "node examples/serve.js"
@@ -40,7 +79,8 @@
   "license": "MIT",
   "devDependencies": {
     "jsdom": "^29.1.1",
-    "playwright": "^1.60.0"
+    "playwright": "^1.60.0",
+    "typescript": "^6.0.3"
   },
   "dependencies": {
     "ws": "8.21.0"

@@ -263,8 +263,8 @@ function scrubSrcset(srcset) {
  *      fidelity-first decision).
  *   2. expression( occurrences are removed (legacy IE script-in-CSS).
  *   3. -moz-binding declarations are removed (legacy XBL script binding).
- *   4. @import statements survive ONLY with an explicit http(s) target
- *      (an @import pulls a whole stylesheet -- script-equivalent blast
+ *   4. CSS import statements survive ONLY with an explicit http(s) target
+ *      (an import pulls a whole stylesheet -- script-equivalent blast
  *      radius -- so the conservative rule wins over relative fidelity);
  *      and the literal sequence "</style" is rewritten to "<\/style"
  *      (CSS string-escape, preserving evaluated string values) so captured

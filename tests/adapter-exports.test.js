@@ -9,8 +9,16 @@ import { createBookmarkletSource } from '../src/adapters/bookmarklet.js';
 test('package exports extension and bookmarklet adapter subpaths', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 
-  assert.equal(pkg.exports['./adapters/extension'], './src/adapters/extension.js');
-  assert.equal(pkg.exports['./adapters/bookmarklet'], './src/adapters/bookmarklet.js');
+  assert.deepEqual(pkg.exports['./adapters/extension'], {
+    types: './dist/types/adapters/extension.d.ts',
+    import: './src/adapters/extension.js',
+    default: './src/adapters/extension.js',
+  });
+  assert.deepEqual(pkg.exports['./adapters/bookmarklet'], {
+    types: './dist/types/adapters/bookmarklet.d.ts',
+    import: './src/adapters/bookmarklet.js',
+    default: './src/adapters/bookmarklet.js',
+  });
 });
 
 test('browser inject source is a checked-in classic script with capture bridge hooks', () => {
