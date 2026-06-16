@@ -25,7 +25,7 @@ Configure the npm package trusted publisher with these fields:
 
 | Field | Value |
 |---|---|
-| Package | `@fullselfbrowsing/phantom-stream` |
+| Package | `@full-self-browsing/phantom-stream` |
 | Owner | `fullselfbrowsing` |
 | Repository | `PhantomStream` |
 | Workflow filename | `publish.yml` |

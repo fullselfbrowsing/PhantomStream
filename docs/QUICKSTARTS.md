@@ -12,17 +12,17 @@ Prerequisites:
 - Playwright installed only when using the Playwright/CDP path.
 
 ```bash
-npm install @fullselfbrowsing/phantom-stream
+npm install @full-self-browsing/phantom-stream
 ```
 
 Expected success signal: your project can import
-`@fullselfbrowsing/phantom-stream/capture`,
-`@fullselfbrowsing/phantom-stream/renderer`, and the other public subpaths.
+`@full-self-browsing/phantom-stream/capture`,
+`@full-self-browsing/phantom-stream/renderer`, and the other public subpaths.
 
 Fast check:
 
 ```bash
-node --input-type=module -e "await import('@fullselfbrowsing/phantom-stream/capture')"
+node --input-type=module -e "await import('@full-self-browsing/phantom-stream/capture')"
 ```
 
 ## Embedded Loopback
@@ -38,9 +38,9 @@ Prerequisites:
 Minimal wiring:
 
 ```js
-import { CONTROL } from '@fullselfbrowsing/phantom-stream/protocol';
-import { createCapture } from '@fullselfbrowsing/phantom-stream/capture';
-import { createViewer } from '@fullselfbrowsing/phantom-stream/renderer';
+import { CONTROL } from '@full-self-browsing/phantom-stream/protocol';
+import { createCapture } from '@full-self-browsing/phantom-stream/capture';
+import { createViewer } from '@full-self-browsing/phantom-stream/renderer';
 
 function createLoopbackTransport() {
   const toViewer = new Set();
@@ -99,7 +99,7 @@ Prerequisites:
 Command:
 
 ```bash
-npx @fullselfbrowsing/phantom-stream demo --no-open
+npx @full-self-browsing/phantom-stream demo --no-open
 # or, after local install:
 phantom-stream demo --no-open
 ```
@@ -131,8 +131,8 @@ Minimal adapter wiring:
 
 ```js
 import { chromium } from 'playwright';
-import { createPlaywrightAdapter } from '@fullselfbrowsing/phantom-stream/adapters/playwright';
-import { createWebSocketTransport } from '@fullselfbrowsing/phantom-stream/transport/websocket';
+import { createPlaywrightAdapter } from '@full-self-browsing/phantom-stream/adapters/playwright';
+import { createWebSocketTransport } from '@full-self-browsing/phantom-stream/transport/websocket';
 
 const browser = await chromium.launch();
 const page = await browser.newPage();
@@ -179,9 +179,9 @@ phantom-stream extension-demo --no-open
 Service-worker sketch:
 
 ```js
-import { CONTROL } from '@fullselfbrowsing/phantom-stream/protocol';
-import { createExtensionAdapter } from '@fullselfbrowsing/phantom-stream/adapters/extension';
-import { createWebSocketTransport } from '@fullselfbrowsing/phantom-stream/transport/websocket';
+import { CONTROL } from '@full-self-browsing/phantom-stream/protocol';
+import { createExtensionAdapter } from '@full-self-browsing/phantom-stream/adapters/extension';
+import { createWebSocketTransport } from '@full-self-browsing/phantom-stream/transport/websocket';
 
 const transport = createWebSocketTransport({
   url: 'ws://127.0.0.1:8787/ws?room=demo&role=source',
@@ -223,7 +223,7 @@ phantom-stream bookmarklet-demo --no-open
 Generate a bookmarklet string:
 
 ```js
-import { createBookmarkletSource } from '@fullselfbrowsing/phantom-stream/adapters/bookmarklet';
+import { createBookmarkletSource } from '@full-self-browsing/phantom-stream/adapters/bookmarklet';
 
 const source = createBookmarkletSource({
   scriptUrl: 'http://127.0.0.1:8787/bookmarklet/loader.js',
@@ -244,7 +244,7 @@ Use CSSOM mode when stylesheet drift matters more than computed-inline
 backward compatibility.
 
 ```js
-import { createCapture } from '@fullselfbrowsing/phantom-stream/capture';
+import { createCapture } from '@full-self-browsing/phantom-stream/capture';
 
 const capture = createCapture({
   transport,

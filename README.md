@@ -127,17 +127,17 @@ Core mechanisms (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full t
 
 ## Getting Started
 
-PhantomStream is published as `@fullselfbrowsing/phantom-stream` and exposes one subpath per stage. For adapter-specific setup paths, see [docs/QUICKSTARTS.md](docs/QUICKSTARTS.md).
+PhantomStream is published as `@full-self-browsing/phantom-stream` and exposes one subpath per stage. For adapter-specific setup paths, see [docs/QUICKSTARTS.md](docs/QUICKSTARTS.md).
 
 ```bash
-npm install @fullselfbrowsing/phantom-stream
+npm install @full-self-browsing/phantom-stream
 ```
 
 **Capture a page** (runs in the page context):
 
 ```js
-import { createCapture } from '@fullselfbrowsing/phantom-stream/capture';
-import { createWebSocketTransport } from '@fullselfbrowsing/phantom-stream/transport/websocket';
+import { createCapture } from '@full-self-browsing/phantom-stream/capture';
+import { createWebSocketTransport } from '@full-self-browsing/phantom-stream/transport/websocket';
 
 const transport = createWebSocketTransport({
   url: 'wss://relay.example.com/ws?room=ROOM_KEY&role=source',
@@ -158,8 +158,8 @@ generated computed inline styles.
 **Mirror it in a viewer** (runs in the remote context):
 
 ```js
-import { createViewer } from '@fullselfbrowsing/phantom-stream/renderer';
-import { createWebSocketTransport } from '@fullselfbrowsing/phantom-stream/transport/websocket';
+import { createViewer } from '@full-self-browsing/phantom-stream/renderer';
+import { createWebSocketTransport } from '@full-self-browsing/phantom-stream/transport/websocket';
 
 const transport = createWebSocketTransport({
   url: 'wss://relay.example.com/ws?room=ROOM_KEY&role=viewer',
@@ -178,7 +178,7 @@ viewer.on('state', (e) => console.log('viewer is', e.state)); // connecting | li
 
 ```js
 import http from 'node:http';
-import { createRelay, createWebSocketRelayBackend } from '@fullselfbrowsing/phantom-stream/relay';
+import { createRelay, createWebSocketRelayBackend } from '@full-self-browsing/phantom-stream/relay';
 
 const relay = createRelay();                 // routing core: 1 MiB per-message cap, backpressure drop
 const server = http.createServer();

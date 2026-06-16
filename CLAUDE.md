@@ -60,7 +60,7 @@ standalone framework.
 - `lz-string` — LZ-string compression library, vendored as `reference/extension/lz-string.min.js` (4.8 KB minified). Used for wire-transport compression. NOT imported via npm — loaded via browser script tag or `importScripts()` in the extension Service Worker (background.js). The `src/protocol/envelope.js` accepts an injected codec rather than importing lz-string directly, keeping the protocol module dependency-free.
 - `ws` — WebSocket server library used in `reference/server/ws-handler.js`. This is a dependency of the parent FSB project, not listed in this repo's `package.json`.
 ## Configuration
-- `package.json` — name `@fullselfbrowsing/phantom-stream`, version `0.1.0`, `"type": "module"`
+- `package.json` — name `@full-self-browsing/phantom-stream`, version `0.1.0`, `"type": "module"`
 - Entry point: `src/protocol/index.js` (via `"main"` and `"exports": { "./protocol": ... }`)
 - No `.env` files present
 - No environment variables required for `src/` — protocol layer is pure logic

@@ -22,7 +22,7 @@ index.js      createViewer factory + barrel re-exports of all of the above
 ## Factory
 
 ```js
-import { createViewer } from '@fullselfbrowsing/phantom-stream/renderer';
+import { createViewer } from '@full-self-browsing/phantom-stream/renderer';
 
 const viewer = createViewer({ container, transport, logger });
 // -> { detach, destroy, registerOverlay, on, resolveNode, highlightNode, clearHighlight, requestSubtree }

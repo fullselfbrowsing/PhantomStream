@@ -15,7 +15,7 @@ is side-effect free.
 ## Factory
 
 ```js
-import { createCapture } from '@fullselfbrowsing/phantom-stream/capture';
+import { createCapture } from '@full-self-browsing/phantom-stream/capture';
 
 const capture = createCapture({
   transport,
