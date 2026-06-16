@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhantomStream — Viewer Tab</title>
+<link rel="stylesheet" href="./demo.css">
+</head>
+<body>
+
+<header>
+  <div class="header-row">
+    <div>
+      <h1>PhantomStream — Viewer Tab</h1>
+      <p class="subtitle">Live mirror from the source tab through the local relay.</p>
+    </div>
+    <span class="badge state-connecting" id="lifecycle-badge" role="status" aria-live="polite">
+      <span class="badge-dot" aria-hidden="true"></span>
+      <span id="lifecycle-label">Connecting</span>
+    </span>
+  </div>
+</header>
+
+<section class="status-strip" aria-label="Viewer stream status">
+  <div class="metric">
+    <span class="metric-label">Lifecycle</span>
+    <span class="metric-value" id="viewer-lifecycle">Connecting</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Room</span>
+    <span class="metric-value selectable" id="viewer-room">unknown</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Last frame</span>
+    <span class="metric-value" id="viewer-last-frame">never</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Relay</span>
+    <span class="metric-value" id="viewer-relay">connecting</span>
+  </div>
+</section>
+
+<section class="health-row" aria-label="Viewer health counters">
+  <div class="metric"><span class="metric-label">frames</span><span class="metric-value" id="health-frames">0</span></div>
+  <div class="metric"><span class="metric-label">snapshots</span><span class="metric-value" id="health-snapshots">0</span></div>
+  <div class="metric"><span class="metric-label">mutations</span><span class="metric-value" id="health-mutations">0</span></div>
+  <div class="metric"><span class="metric-label">misses</span><span class="metric-value" id="health-misses">0</span></div>
+  <div class="metric"><span class="metric-label">apply failures</span><span class="metric-value" id="health-apply-failures">0</span></div>
+  <div class="metric"><span class="metric-label">drops</span><span class="metric-value" id="health-drops">0</span></div>
+  <div class="metric"><span class="metric-label">errors</span><span class="metric-value" id="health-errors">0</span></div>
+</section>
+
+<main>
+  <section class="pane mirror-pane">
+    <div class="pane-header">MIRROR</div>
+    <div class="stage" id="mirror-stage">
+      <div class="empty-state" id="viewer-empty">
+        <h2>Waiting for source tab</h2>
+        <p>Open the source URL and keep the relay running.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div>Viewer tab transport log</div>
+  <div class="log" id="viewer-log"></div>
+</footer>
+
+<script type="module" src="./viewer.js?v=04-demo"></script>
+</body>
+</html>

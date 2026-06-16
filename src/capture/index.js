@@ -28,9 +28,9 @@
 //
 // The 5-module split (serializer/differ/side-channels/session) is deliberately
 // deferred beyond Phase 1 (D-10); parity against the reference, proven by the
-// differential oracle, is the exit bar. One reference quirk remains preserved
-// on purpose: the truncation budget compares html.length (UTF-16 code units)
-// against a byte constant (inherited quirk). Phase 3 SEC-01 DIVERGENCE: the
+// differential oracle, is the exit bar. Phase 8 replaces the inherited
+// html.length truncation quirk with UTF-8 wire-byte budgeting for relay
+// safety. Phase 3 SEC-01 DIVERGENCE: the
 // sanitizeForWire chokepoint (a named inner function of createCapture) now
 // strips on* handlers, dangerous URL schemes, srcdoc attributes and
 // object/embed subtrees, and value-scrubs CSS on every serialization path --
@@ -49,7 +49,7 @@ import {
   WATCHDOG_TICK_MS,
   INLINE_STYLE_MAX_BYTES,
 } from '../protocol/constants.js';
-import { STREAM, NID_ATTR, createStreamSessionId } from '../protocol/messages.js';
+import { STREAM, CONTROL, DIFF_OP, createStreamSessionId } from '../protocol/messages.js';
 
 // RELAY_PER_MESSAGE_LIMIT_BYTES is the relay's hard per-message cap;
 // SNAPSHOT_BUDGET_BYTES is the 80% truncation budget derived from it
@@ -187,6 +187,42 @@ function hasDangerousScheme(value) {
 }
 
 /**
+ * Minimal srcset candidate parser for the URL+descriptor forms this project
+ * emits. Unlike split(','), it keeps commas inside data:image URLs attached
+ * to the URL token, so a benign data candidate cannot turn into a bogus
+ * relative fetch candidate when one hostile sibling forces a rebuild.
+ * @param {string} srcset
+ * @returns {{url: string, descriptor: string}[]}
+ */
+function parseSrcsetCandidates(srcset) {
+  var raw = String(srcset == null ? '' : srcset);
+  var out = [];
+  var i = 0;
+  while (i < raw.length) {
+    while (i < raw.length && /[\s,]/.test(raw.charAt(i))) i++;
+    var urlStart = i;
+    var isData = raw.slice(i, i + 5).toLowerCase() === 'data:';
+    while (i < raw.length
+        && !/\s/.test(raw.charAt(i))
+        && (isData || raw.charAt(i) !== ',')) {
+      i++;
+    }
+    var url = raw.slice(urlStart, i);
+    while (i < raw.length && /\s/.test(raw.charAt(i))) i++;
+    var descriptorStart = i;
+    while (i < raw.length && raw.charAt(i) !== ',') i++;
+    var descriptor = raw.slice(descriptorStart, i).trim();
+    if (url) out.push({ url: url, descriptor: descriptor });
+    if (raw.charAt(i) === ',') i++;
+  }
+  return out;
+}
+
+function formatSrcsetCandidate(candidate) {
+  return candidate.descriptor ? candidate.url + ' ' + candidate.descriptor : candidate.url;
+}
+
+/**
  * Neutralize dangerous-scheme candidate URLs inside a srcset value
  * (comma-separated URL + descriptor entries). Returns the ORIGINAL string
  * untouched when no candidate is dangerous, so benign srcset values stay
@@ -197,17 +233,17 @@ function hasDangerousScheme(value) {
 function scrubSrcset(srcset) {
   if (!srcset) return srcset;
   try {
-    var entries = srcset.split(',');
+    var entries = parseSrcsetCandidates(srcset);
+    var kept = [];
     var changed = false;
     for (var i = 0; i < entries.length; i++) {
-      var parts = entries[i].trim().split(/\s+/);
-      if (parts[0] && hasDangerousScheme(parts[0])) {
-        parts[0] = '';
-        entries[i] = parts.join(' ');
+      if (entries[i].url && hasDangerousScheme(entries[i].url)) {
         changed = true;
+        continue;
       }
+      kept.push(formatSrcsetCandidate(entries[i]));
     }
-    return changed ? entries.join(', ') : srcset;
+    return changed ? kept.join(', ') : srcset;
   } catch (e) {
     return srcset;
   }
@@ -227,8 +263,8 @@ function scrubSrcset(srcset) {
  *      fidelity-first decision).
  *   2. expression( occurrences are removed (legacy IE script-in-CSS).
  *   3. -moz-binding declarations are removed (legacy XBL script binding).
- *   4. @import statements survive ONLY with an explicit http(s) target
- *      (an @import pulls a whole stylesheet -- script-equivalent blast
+ *   4. CSS import statements survive ONLY with an explicit http(s) target
+ *      (an import pulls a whole stylesheet -- script-equivalent blast
  *      radius -- so the conservative rule wins over relative fidelity);
  *      and the literal sequence "</style" is rewritten to "<\/style"
  *      (CSS string-escape, preserving evaluated string values) so captured
@@ -288,6 +324,19 @@ function scrubCssText(css) {
   } catch (e) {
     return css;
   }
+}
+
+/**
+ * rrweb-compatible default text mask (SEC-03, 03-RESEARCH Pattern 5 / Code
+ * Examples; cited from rrweb-snapshot snapshot.ts:
+ * textContent.replace(/[\S]/g, '*')). Every non-whitespace character becomes
+ * '*'; whitespace and string length are preserved so masked text keeps its
+ * layout shape. Idempotent: masking masked output is a no-op.
+ * @param {string} text
+ * @returns {string}
+ */
+function defaultMaskText(text) {
+  return String(text).replace(/[\S]/g, '*');
 }
 
 /**
@@ -352,6 +401,29 @@ function scrubCssText(css) {
  *   ancestors, and skipped subtrees receive NO node-id assignment during
  *   serialization -- a root-only predicate (e.g. el.id === 'my-overlay')
  *   therefore excludes its whole subtree from both snapshots and diffs.
+ * @property {string} [blockSelector]
+ *   Optional (SEC-03). CSS selector: matching elements are replaced on the
+ *   wire by a dimension-preserving placeholder carrying ONLY rr_width /
+ *   rr_height (px, from the live rect) and the nid -- no attributes, no
+ *   children, no text; mutations anywhere inside a blocked subtree emit
+ *   nothing. Invalid selectors THROW Error('invalid-mask-selector') at
+ *   factory time (fail closed and loud -- a silently dropped mask selector
+ *   would be a privacy leak).
+ * @property {string} [maskTextSelector]
+ *   Optional (SEC-03). CSS selector: text of matching elements AND their
+ *   descendants is masked (default mask: '*' per non-whitespace character,
+ *   whitespace and length preserved -- rrweb-compatible). Same factory-time
+ *   validation as blockSelector.
+ * @property {boolean} [maskInputs]
+ *   Optional (SEC-03), default false. When true, ALL input/textarea/select
+ *   values are masked. Independent of this option, input[type=password]
+ *   values are ALWAYS masked (non-configurable rrweb-parity default).
+ * @property {(text: string, element: Element) => string} [maskTextFn]
+ *   Optional (SEC-03). Custom text mask (rrweb signature). A THROWING fn
+ *   falls back to the default asterisk mask -- raw text never leaks.
+ * @property {(text: string, element: Element) => string} [maskInputFn]
+ *   Optional (SEC-03). Custom input-value mask (rrweb signature). Same
+ *   fail-closed containment as maskTextFn.
  */
 
 /**
@@ -360,6 +432,10 @@ function scrubCssText(css) {
  * @property {() => void} stop    Stop observers (final flush included).
  * @property {() => void} pause   Stop observers, keep the session alive.
  * @property {() => void} resume  Re-arm observers; same session, no snapshot.
+ * @property {(element: Element) => string|null} getNodeId
+ *   getNodeId(element) -> string|null
+ *   Return the active PhantomStream nid for a tracked live element, or null
+ *   for untracked, skipped, disconnected, or inactive-session nodes.
  */
 
 /**
@@ -391,6 +467,27 @@ export function createCapture(config) {
     ? cfg.skipElement
     : null;
   var skipElement = hostSkipElement || function () { return false; };
+  var styleMode = cfg.styleMode === 'cssom' ? 'cssom' : 'computed';
+  var fetchStylesheet = typeof cfg.fetchStylesheet === 'function'
+    ? cfg.fetchStylesheet
+    : null;
+
+  // SEC-03 privacy-masking config (plan 03-03, rrweb-compatible vocabulary
+  // per 03-RESEARCH Pattern 5). Every option defaults OFF: with no masking
+  // config the wire is byte-identical to the unmasked output. The one
+  // non-configurable rule: input[type=password] values are ALWAYS masked
+  // regardless of these options. Selectors are compiled (validated) ONCE here
+  // at factory time -- an invalid selector THROWS Error('invalid-mask-
+  // selector') from compileMaskSelector (factory-time validation is the one
+  // allowed throwing site, the transport-send-required precedent above;
+  // silent masking failure would be a privacy leak, so misconfiguration
+  // fails closed and LOUD). Runtime matcher errors are contained
+  // per-element instead (Pitfall 6: capture never wedges).
+  var maskInputs = cfg.maskInputs === true;
+  var maskTextFn = (typeof cfg.maskTextFn === 'function') ? cfg.maskTextFn : null;
+  var maskInputFn = (typeof cfg.maskInputFn === 'function') ? cfg.maskInputFn : null;
+  var blockSelector = compileMaskSelector(cfg.blockSelector);
+  var maskTextSelector = compileMaskSelector(cfg.maskTextSelector);
 
   /**
    * Ancestor-inclusive form of the skipElement seam (reference parity:
@@ -472,7 +569,12 @@ export function createCapture(config) {
   function safeFlush() {
     try {
       if (typeof transport.flush === 'function') {
-        transport.flush();
+        var result = transport.flush();
+        if (result && typeof result.catch === 'function') {
+          result.catch(function (err) {
+            logger.error('[DOM Stream] transport flush failed', err);
+          });
+        }
       }
     } catch (err) {
       logger.error('[DOM Stream] transport flush failed', err);
@@ -485,6 +587,8 @@ export function createCapture(config) {
   var batchTimer = null;
   var pendingMutations = [];
   var nextNodeId = 1;
+  var elementToNid = new WeakMap();
+  var nidToElement = new Map();
   var scrollHandler = null;
   var lastScrollSend = 0;
   var dialogRelayActive = false;
@@ -494,13 +598,28 @@ export function createCapture(config) {
   var lastDrainTs = 0;
   var staleFlushCount = 0;
   var watchdogTimer = null;
+  var observedShadowRoots = new WeakSet();
+  var observedFrameDocuments = new Map();
+  var frameDocumentToNid = new WeakMap();
+  var frameLoadListeners = new Map();
+  var valueCaptureActive = false;
+  var valueListenerRoots = new WeakSet();
+  var valueListenerRecords = [];
+  var nativeAttachShadow = null;
+  var attachShadowProto = null;
+  var pendingStyleSourceChanges = new Map();
+  var styleSourceRegistry = new Map();
+  var styleOwnerToSourceKey = typeof WeakMap === 'function' ? new WeakMap() : null;
+  var styleScopeRoots = new Map();
+  var nativeCssStyleSheetMethods = null;
+  var flushingMutations = false;
 
   // SEC-01 sanitization strip counters (closure state, staleFlushCount
   // pattern). Lifecycle is PER-SESSION (03-RESEARCH.md Pitfall 3): reset in
   // beginStreamSession only, never per snapshot or per flush, so strip
   // totals accumulate across one whole stream session. The masked* pair is
-  // declared here but incremented by the SEC-03 masking pass (plan 03-03)
-  // through the same chokepoint.
+  // incremented by the SEC-03 masking pass (plan 03-03) through the same
+  // chokepoint.
   var sanitizeCounters = {
     strippedHandlers: 0,  // on* handler attributes removed
     blockedUrlSchemes: 0, // javascript:/vbscript:/data:text/html values neutralized
@@ -526,6 +645,10 @@ export function createCapture(config) {
     sanitizeCounters.cssScrubs = 0;
     sanitizeCounters.maskedTextNodes = 0;
     sanitizeCounters.maskedInputs = 0;
+    pendingStyleSourceChanges.clear();
+    styleSourceRegistry.clear();
+    styleScopeRoots.clear();
+    styleOwnerToSourceKey = typeof WeakMap === 'function' ? new WeakMap() : null;
   }
 
   function getCurrentStreamMetadata() {
@@ -539,15 +662,1254 @@ export function createCapture(config) {
     return Object.assign({}, payload || {}, getCurrentStreamMetadata());
   }
 
-  function assignNodeId(original, clone) {
+  function ensureNodeId(element) {
+    if (!element || element.nodeType !== Node.ELEMENT_NODE) return null;
+    var existing = elementToNid.get(element);
+    if (existing) return existing;
     var nid = String(nextNodeId++);
-    if (original && original.nodeType === Node.ELEMENT_NODE) {
-      original.setAttribute(NID_ATTR, nid);
+    elementToNid.set(element, nid);
+    nidToElement.set(nid, element);
+    return nid;
+  }
+
+  function reserveNodeId() {
+    nextNodeId++;
+  }
+
+  function getTrackedNodeId(element) {
+    if (!element || element.nodeType !== Node.ELEMENT_NODE) return null;
+    var nid = elementToNid.get(element);
+    if (!nid) return null;
+    if (nidToElement.get(nid) !== element) return null;
+    return nid;
+  }
+
+  function clearNodeMirror() {
+    elementToNid = new WeakMap();
+    nidToElement.clear();
+  }
+
+  function forgetSubtreeIdentity(root) {
+    if (!root || root.nodeType !== Node.ELEMENT_NODE) return;
+    var nodes = [root];
+    if (root.querySelectorAll) {
+      var descendants = root.querySelectorAll('*');
+      for (var i = 0; i < descendants.length; i++) nodes.push(descendants[i]);
     }
-    if (clone && clone.nodeType === Node.ELEMENT_NODE) {
-      clone.setAttribute(NID_ATTR, nid);
+    for (var n = 0; n < nodes.length; n++) {
+      var nid = elementToNid.get(nodes[n]);
+      if (nid) {
+        elementToNid.delete(nodes[n]);
+        if (nidToElement.get(nid) === nodes[n]) nidToElement.delete(nid);
+      }
+    }
+  }
+
+  function assignNodeId(original, clone, cloneToNid) {
+    var nid = ensureNodeId(original);
+    if (nid && clone && clone.nodeType === Node.ELEMENT_NODE && cloneToNid) {
+      cloneToNid.set(clone, nid);
     }
     return nid;
+  }
+
+  function cloneElementsWithNodeIds(root, cloneToNid) {
+    var out = [];
+    if (!root || !cloneToNid) return out;
+    var walker = root.ownerDocument.createTreeWalker(
+      root,
+      NodeFilter.SHOW_ELEMENT,
+      null
+    );
+    var el;
+    while ((el = walker.nextNode())) {
+      if (cloneToNid.has(el)) out.push(el);
+    }
+    return out;
+  }
+
+  function buildNodeIdSidecar(root, cloneToNid, includeRoot) {
+    var nodeIds = [];
+    if (!root || !cloneToNid) return nodeIds;
+    if (includeRoot && root.nodeType === Node.ELEMENT_NODE && cloneToNid.has(root)) {
+      nodeIds.push(cloneToNid.get(root));
+    }
+    var walker = root.ownerDocument.createTreeWalker(
+      root,
+      NodeFilter.SHOW_ELEMENT,
+      null
+    );
+    var el;
+    while ((el = walker.nextNode())) {
+      if (cloneToNid.has(el)) nodeIds.push(cloneToNid.get(el));
+    }
+    return nodeIds;
+  }
+
+  function mutationObserverOptions() {
+    return {
+      childList: true,
+      attributes: true,
+      characterData: true,
+      subtree: true,
+      attributeOldValue: true
+    };
+  }
+
+  function isOpenShadowRoot(root) {
+    return !!(root
+      && root.nodeType === Node.DOCUMENT_FRAGMENT_NODE
+      && root.host
+      && root.mode === 'open');
+  }
+
+  function elementsUnderRoot(root) {
+    var elements = [];
+    if (!root) return elements;
+    if (root.nodeType === Node.ELEMENT_NODE) elements.push(root);
+    if (root.querySelectorAll) {
+      var descendants = root.querySelectorAll('*');
+      for (var i = 0; i < descendants.length; i++) elements.push(descendants[i]);
+    }
+    return elements;
+  }
+
+  function getMutationShadowHost(target) {
+    if (!target || typeof target.getRootNode !== 'function') return null;
+    var root = target.getRootNode();
+    if (!isOpenShadowRoot(root)) return null;
+    return root.host || null;
+  }
+
+  function shadowSlotAssignment(root) {
+    if (!root || !root.querySelectorAll) return 'none';
+    var slots = root.querySelectorAll('slot');
+    var hasDefault = false;
+    var hasNamed = false;
+    for (var i = 0; i < slots.length; i++) {
+      if (slots[i].getAttribute('name')) hasNamed = true;
+      else hasDefault = true;
+    }
+    if (hasNamed) return 'named';
+    if (hasDefault) return 'default';
+    return 'none';
+  }
+
+  function prepareShadowClone(root, container, cloneToNid) {
+    var liveDescendants = root && root.querySelectorAll ? root.querySelectorAll('*') : [];
+    var cloneDescendants = container.querySelectorAll('*');
+    var baseDoc = root && root.ownerDocument ? root.ownerDocument : document;
+    for (var i = 0; i < liveDescendants.length; i++) {
+      var live = liveDescendants[i];
+      var clone = cloneDescendants[i];
+      if (!clone) continue;
+      if (wireDroppedWithAncestors(live) || skipElementWithAncestors(live)) {
+        if (clone.parentNode) clone.parentNode.removeChild(clone);
+        continue;
+      }
+      if (blockedWithAncestors(live.parentElement)) continue;
+      var nid = ensureNodeId(live);
+      if (nid) cloneToNid.set(clone, nid);
+      for (var a = 0; a < URL_ATTRS.length; a++) {
+        var val = clone.getAttribute(URL_ATTRS[a]);
+        if (val) clone.setAttribute(URL_ATTRS[a], absolutifyUrl(val, baseDoc));
+      }
+      var srcset = clone.getAttribute('srcset');
+      if (srcset) clone.setAttribute('srcset', absolutifySrcset(srcset, baseDoc));
+      if (styleMode !== 'cssom') captureComputedStyles(live, clone);
+    }
+  }
+
+  function serializeOpenShadowRoot(host, hostNid) {
+    if (!host || !host.shadowRoot || !hostNid) return null;
+    var root = host.shadowRoot;
+    if (!isOpenShadowRoot(root)) return null;
+
+    var ownerDoc = host.ownerDocument || document;
+    var container = ownerDoc.createElement('div');
+    for (var child = root.firstChild; child; child = child.nextSibling) {
+      container.appendChild(child.cloneNode(true));
+    }
+
+    var cloneToNid = new Map();
+    prepareShadowClone(root, container, cloneToNid);
+    var subtreeResult = sanitizeForWire('subtree', {
+      root: container,
+      liveRoot: root,
+      cloneToNid: cloneToNid
+    });
+    if (subtreeResult && subtreeResult.drop) return null;
+
+    var shadowPayload = {
+      hostNid: String(hostNid),
+      mode: 'open',
+      html: container.innerHTML || '',
+      nodeIds: buildNodeIdSidecar(container, cloneToNid, false),
+      slotAssignment: shadowSlotAssignment(root)
+    };
+    if (styleMode === 'cssom') {
+      var shadowCssom = collectCssomStyleSourcesForScope(
+        ownerDoc,
+        { kind: 'shadow', hostNid: String(hostNid) },
+        { root: root }
+      );
+      shadowPayload.styleSources = shadowCssom.sources;
+      shadowPayload.styleStrategy = shadowCssom.strategy;
+    }
+    return shadowPayload;
+  }
+
+  function collectShadowRootPayloads(root, hostNodeIds, excludedHostNodeIds) {
+    var payloads = [];
+    var allowed = null;
+    if (Array.isArray(hostNodeIds)) {
+      allowed = new Set();
+      for (var h = 0; h < hostNodeIds.length; h++) allowed.add(String(hostNodeIds[h]));
+    }
+    var excluded = null;
+    if (excludedHostNodeIds && typeof excludedHostNodeIds.has === 'function') {
+      excluded = excludedHostNodeIds;
+    }
+
+    function visit(treeRoot) {
+      var elements = elementsUnderRoot(treeRoot);
+      for (var i = 0; i < elements.length; i++) {
+        var el = elements[i];
+        if (!el || !el.shadowRoot || !isOpenShadowRoot(el.shadowRoot)) continue;
+        var hostNid = getTrackedNodeId(el) || ensureNodeId(el);
+        if (!hostNid) continue;
+        if (allowed && !allowed.has(String(hostNid))) continue;
+        if (excluded && excluded.has(String(hostNid))) continue;
+        var payload = serializeOpenShadowRoot(el, hostNid);
+        if (payload) payloads.push(payload);
+        if (allowed && payload && Array.isArray(payload.nodeIds)) {
+          for (var n = 0; n < payload.nodeIds.length; n++) {
+            allowed.add(String(payload.nodeIds[n]));
+          }
+        }
+        visit(el.shadowRoot);
+      }
+    }
+
+    visit(root);
+    return payloads;
+  }
+
+  function observeOpenShadowRoot(root) {
+    if (!mutationObserver || !isOpenShadowRoot(root)) return;
+    if (observedShadowRoots.has(root)) return;
+    try {
+      mutationObserver.observe(root, mutationObserverOptions());
+      observedShadowRoots.add(root);
+      addValueListenerRoot(root);
+    } catch (err) {
+      logger.error('[DOM Stream] shadow root observe failed', err);
+      return;
+    }
+    observeOpenShadowRoots(root);
+  }
+
+  function observeOpenShadowRoots(root) {
+    var elements = elementsUnderRoot(root);
+    for (var i = 0; i < elements.length; i++) {
+      if (elements[i].shadowRoot && isOpenShadowRoot(elements[i].shadowRoot)) {
+        observeOpenShadowRoot(elements[i].shadowRoot);
+      }
+    }
+  }
+
+  function safeFrameSrc(src, baseDoc) {
+    if (!src) return '';
+    try {
+      var baseHref = baseDoc && baseDoc.location ? baseDoc.location.href : location.href;
+      return new URL(src, baseHref).href;
+    } catch (err) {
+      return '';
+    }
+  }
+
+  function safeFrameOrigin(src, baseDoc) {
+    if (!src) return '';
+    try {
+      var baseHref = baseDoc && baseDoc.location ? baseDoc.location.href : location.href;
+      return new URL(src, baseHref).origin;
+    } catch (err) {
+      return '';
+    }
+  }
+
+  function classifyFrame(iframe) {
+    var doc = null;
+    try {
+      doc = iframe && iframe.contentDocument;
+    } catch (err) {
+      logger.warn('[DOM Stream] iframe contentDocument unavailable', {
+        reason: 'cross-origin-or-inaccessible'
+      });
+    }
+    if (doc && doc.documentElement && doc.body) {
+      return { kind: 'same-origin', document: doc };
+    }
+    var src = iframe && iframe.getAttribute ? iframe.getAttribute('src') || '' : '';
+    var baseDoc = iframe && iframe.ownerDocument ? iframe.ownerDocument : document;
+    return {
+      kind: 'cross-origin',
+      label: 'Cross-origin iframe',
+      src: safeFrameSrc(src, baseDoc),
+      origin: safeFrameOrigin(src, baseDoc)
+    };
+  }
+
+  function appendStyleDeclaration(clone, declaration) {
+    if (!clone || !declaration) return;
+    var existing = clone.getAttribute('style') || '';
+    var suffix = declaration.charAt(declaration.length - 1) === ';'
+      ? declaration
+      : declaration + ';';
+    clone.setAttribute('style', existing ? existing + ';' + suffix : suffix);
+  }
+
+  function prepareIframeWireShell(live, clone) {
+    if (!clone || clone.nodeType !== Node.ELEMENT_NODE) return;
+    clone.removeAttribute('src');
+    clone.removeAttribute('srcdoc');
+    captureComputedStyles(live, clone);
+    appendStyleDeclaration(clone, 'pointer-events:none');
+    sanitizeForWire('element', { orig: live, clone: clone });
+  }
+
+  function prepareIframeWireShellsForClone(liveRoot, wireRoot) {
+    var liveElements = elementsUnderRoot(liveRoot);
+    var cloneElements = elementsUnderRoot(wireRoot);
+    for (var i = 0; i < liveElements.length && i < cloneElements.length; i++) {
+      var live = liveElements[i];
+      var clone = cloneElements[i];
+      var tag = clone && clone.tagName ? String(clone.tagName).toLowerCase() : '';
+      if (tag === 'iframe') prepareIframeWireShell(live, clone);
+    }
+  }
+
+  function collectStylesheetsFrom(doc) {
+    var stylesheets = [];
+    if (!doc || !doc.querySelectorAll) return stylesheets;
+    var links = doc.querySelectorAll('head link[rel="stylesheet"]');
+    for (var s = 0; s < links.length; s++) {
+      var href = links[s].getAttribute('href');
+      if (!href) continue;
+      var sheetHref = absolutifyUrl(href, doc);
+      if (hasDangerousScheme(sheetHref)) {
+        sanitizeCounters.blockedUrlSchemes++;
+      } else {
+        stylesheets.push(sheetHref);
+      }
+    }
+    return stylesheets;
+  }
+
+  function collectInlineStylesFrom(doc) {
+    var inlineStyles = [];
+    if (!doc || !doc.querySelectorAll) return inlineStyles;
+    var styleTags = doc.querySelectorAll('head style');
+    for (var st = 0; st < styleTags.length; st++) {
+      var cssText = styleTags[st].textContent;
+      if (cssText && cssText.length < INLINE_STYLE_MAX_BYTES) {
+        inlineStyles.push(sanitizeForWire('css', { css: cssText }).css);
+      }
+    }
+    return inlineStyles;
+  }
+
+  function cloneStyleScope(scope) {
+    var s = scope || {};
+    var out = { kind: s.kind || 'document' };
+    if (s.hostNid !== undefined && s.hostNid !== null) out.hostNid = String(s.hostNid);
+    if (s.frameNid !== undefined && s.frameNid !== null) out.frameNid = String(s.frameNid);
+    return out;
+  }
+
+  function styleScopeKey(scope) {
+    var s = scope || {};
+    if (s.kind === 'shadow') return 'shadow:' + String(s.hostNid || '');
+    if (s.kind === 'frame') return 'frame:' + String(s.frameNid || '');
+    return 'document';
+  }
+
+  function makeStyleSourceId(scope, order, ownerKind, ownerNid) {
+    var prefix = styleScopeKey(scope);
+    var suffix = ownerNid !== undefined && ownerNid !== null && String(ownerNid) !== ''
+      ? ':' + String(ownerNid)
+      : '';
+    return prefix + ':' + String(order || 0) + ':' + String(ownerKind || 'style') + suffix;
+  }
+
+  function cssRulesToText(ruleList) {
+    var rules = [];
+    if (!ruleList) return '';
+    for (var i = 0; i < ruleList.length; i++) {
+      if (ruleList[i] && ruleList[i].cssText) rules.push(String(ruleList[i].cssText));
+    }
+    return rules.join('\n');
+  }
+
+  function sanitizeCssTextForSource(cssText) {
+    return sanitizeForWire('css', { css: String(cssText || '') }).css;
+  }
+
+  function buildStyleStrategy(mode, sources) {
+    var list = Array.isArray(sources) ? sources : [];
+    var fallbackCount = 0;
+    var computedFallbackCount = 0;
+    var approxCssBytes = 0;
+    for (var i = 0; i < list.length; i++) {
+      var source = list[i] || {};
+      if (source.fallback) fallbackCount++;
+      if (source.fallback && source.fallback.reason === 'computed-fallback') {
+        computedFallbackCount++;
+      }
+      approxCssBytes += source.approxBytes || wireByteLength(source.cssText || '');
+    }
+    return {
+      mode: mode || 'computed',
+      sourceCount: list.length,
+      fallbackCount: fallbackCount,
+      computedFallbackCount: computedFallbackCount,
+      approxCssBytes: approxCssBytes
+    };
+  }
+
+  function safeStylesheetHref(href, doc) {
+    if (!href) return '';
+    var resolved = absolutifyUrl(String(href), doc);
+    if (!resolved || hasDangerousScheme(resolved)) {
+      if (resolved) sanitizeCounters.blockedUrlSchemes++;
+      return '';
+    }
+    return resolved;
+  }
+
+  function ownerKindForStyleNode(node, adopted) {
+    if (adopted) return 'adopted';
+    var tag = node && node.tagName ? String(node.tagName).toLowerCase() : '';
+    if (tag === 'link') return 'link';
+    if (tag === 'style') return 'style';
+    return adopted ? 'adopted' : 'constructable';
+  }
+
+  function styleOwnerHref(ownerNode, sheet, doc) {
+    var href = '';
+    if (ownerNode && typeof ownerNode.getAttribute === 'function') {
+      href = ownerNode.getAttribute('href') || '';
+    }
+    if (!href && sheet && sheet.href) href = sheet.href;
+    return safeStylesheetHref(href, doc);
+  }
+
+  function styleOwnerMedia(ownerNode, sheet) {
+    if (ownerNode && typeof ownerNode.getAttribute === 'function') {
+      return String(ownerNode.getAttribute('media') || '');
+    }
+    try {
+      if (sheet && sheet.media && sheet.media.mediaText) return String(sheet.media.mediaText || '');
+    } catch (err) { /* media is best-effort metadata */ }
+    return '';
+  }
+
+  function styleOwnerDisabled(ownerNode, sheet) {
+    if (ownerNode && typeof ownerNode.disabled === 'boolean') return ownerNode.disabled;
+    if (sheet && typeof sheet.disabled === 'boolean') return sheet.disabled;
+    return false;
+  }
+
+  function fallbackCssForScope(root) {
+    var css = [];
+    var elements = elementsUnderRoot(root && root.body ? root.body : root);
+    for (var i = 0; i < elements.length; i++) {
+      var styleText = collectComputedStyleText(elements[i], CURATED_PROPS);
+      if (!styleText) continue;
+      css.push('*{');
+      css.push(styleText);
+      css.push('}');
+      break;
+    }
+    return css.join('');
+  }
+
+  function styleSheetEntriesForScope(doc, root) {
+    var entries = [];
+    var seen = typeof WeakSet === 'function' ? new WeakSet() : null;
+    var queryRoot = root && root.querySelectorAll ? root : doc;
+    var nodes = [];
+    if (queryRoot && queryRoot.querySelectorAll) {
+      nodes = queryRoot.querySelectorAll('link[rel="stylesheet"], style');
+    }
+    for (var n = 0; n < nodes.length; n++) {
+      var node = nodes[n];
+      var sheet = node.sheet || null;
+      if (sheet && seen) seen.add(sheet);
+      entries.push({ sheet: sheet, ownerNode: node, adopted: false });
+    }
+    var adopted = [];
+    try {
+      adopted = root && root.adoptedStyleSheets ? root.adoptedStyleSheets : [];
+    } catch (err) {
+      adopted = [];
+    }
+    for (var a = 0; a < adopted.length; a++) {
+      var adoptedSheet = adopted[a];
+      if (!adoptedSheet) continue;
+      if (seen && seen.has(adoptedSheet)) continue;
+      if (seen) seen.add(adoptedSheet);
+      entries.push({ sheet: adoptedSheet, ownerNode: null, adopted: true });
+    }
+    return entries;
+  }
+
+  function sourceFromStyleSheetEntry(entry, scope, order, doc, root) {
+    var e = entry || {};
+    var ownerKind = ownerKindForStyleNode(e.ownerNode, e.adopted);
+    var href = styleOwnerHref(e.ownerNode, e.sheet, doc);
+    var cssText = '';
+    var fallback = null;
+    var sourceId = makeStyleSourceId(scope, order, ownerKind, '');
+    var media = styleOwnerMedia(e.ownerNode, e.sheet);
+    var disabled = styleOwnerDisabled(e.ownerNode, e.sheet);
+
+    try {
+      if (e.sheet && e.sheet.cssRules) {
+        cssText = cssRulesToText(e.sheet.cssRules);
+      } else if (e.ownerNode && String(e.ownerNode.tagName || '').toLowerCase() === 'style') {
+        cssText = String(e.ownerNode.textContent || '');
+      }
+    } catch (err) {
+      fallback = { reason: 'cssRules-blocked' };
+    }
+
+    if (cssText) {
+      cssText = sanitizeCssTextForSource(cssText);
+    } else if (fallback && href) {
+      fallback = { reason: 'href-relinked' };
+    } else if (fallback && fetchStylesheet) {
+      try {
+        var fetched = fetchStylesheet({ href: href || '', scope: cloneStyleScope(scope), ownerKind: ownerKind });
+        var fetchedCss = typeof fetched === 'string'
+          ? fetched
+          : (fetched && typeof fetched.css === 'string' ? fetched.css : '');
+        if (fetchedCss) {
+          cssText = sanitizeCssTextForSource(fetchedCss);
+          fallback = { reason: 'adapter-fetch' };
+        }
+      } catch (err2) {
+        logger.warn('[DOM Stream] cssom fetch failed', {
+          reason: 'adapter-fetch-failed',
+          ownerKind: ownerKind
+        });
+      }
+    }
+
+    if (!cssText && !href) {
+      cssText = sanitizeCssTextForSource(fallbackCssForScope(root));
+      ownerKind = 'fallback';
+      fallback = { reason: 'computed-fallback' };
+      sourceId = makeStyleSourceId(scope, order, ownerKind, '');
+    }
+
+    return {
+      sourceId: sourceId,
+      scope: cloneStyleScope(scope),
+      ownerKind: ownerKind,
+      order: order,
+      href: href || null,
+      media: media,
+      disabled: disabled,
+      cssText: cssText || '',
+      fallback: fallback,
+      approxBytes: wireByteLength(cssText || '')
+    };
+  }
+
+  function registerStyleSource(source, entry, doc, root) {
+    if (!source || !source.sourceId) return;
+    var key = String(source.sourceId);
+    styleSourceRegistry.set(key, {
+      source: source,
+      entry: entry || null,
+      scope: cloneStyleScope(source.scope),
+      doc: doc || document,
+      root: root || doc || document
+    });
+    if (styleOwnerToSourceKey) {
+      if (entry && entry.ownerNode) styleOwnerToSourceKey.set(entry.ownerNode, key);
+      if (entry && entry.sheet) styleOwnerToSourceKey.set(entry.sheet, key);
+    }
+  }
+
+  function collectCssomStyleSourcesForScope(doc, scope, options) {
+    var opts = options || {};
+    var root = opts.root || doc;
+    var sources = [];
+    if (styleMode !== 'cssom' || !doc) {
+      return { sources: sources, strategy: buildStyleStrategy('computed', sources) };
+    }
+    var entries = styleSheetEntriesForScope(doc, root);
+    for (var i = 0; i < entries.length; i++) {
+      var source = sourceFromStyleSheetEntry(entries[i], scope, i, doc, root);
+      sources.push(source);
+      registerStyleSource(source, entries[i], doc, root);
+    }
+    if (!sources.length) {
+      var fallback = {
+        sourceId: makeStyleSourceId(scope, 0, 'fallback', ''),
+        scope: cloneStyleScope(scope),
+        ownerKind: 'fallback',
+        order: 0,
+        href: null,
+        media: '',
+        disabled: false,
+        cssText: sanitizeCssTextForSource(fallbackCssForScope(root)),
+        fallback: { reason: 'computed-fallback' },
+        approxBytes: 0
+      };
+      fallback.approxBytes = wireByteLength(fallback.cssText || '');
+      sources.push(fallback);
+      registerStyleSource(fallback, null, doc, root);
+    }
+    styleScopeRoots.set(styleScopeKey(scope), { doc: doc, root: root, scope: cloneStyleScope(scope) });
+    return { sources: sources, strategy: buildStyleStrategy('cssom', sources) };
+  }
+
+  function scheduleMutationFlush() {
+    if (batchTimer) cancelAnimationFrame(batchTimer);
+    batchTimer = requestAnimationFrame(flushMutations);
+  }
+
+  function queueStyleSourceChange(action, source, scope, reason) {
+    if (styleMode !== 'cssom') return;
+    var sourceId = source && source.sourceId ? String(source.sourceId) : '';
+    if (!sourceId) return;
+    var safeSource = null;
+    if (action !== 'remove') {
+      safeSource = Object.assign({}, source, {
+        sourceId: sourceId,
+        scope: cloneStyleScope(scope || source.scope),
+        cssText: sanitizeCssTextForSource(source.cssText || '')
+      });
+      safeSource.approxBytes = wireByteLength(safeSource.cssText || '');
+    }
+    pendingStyleSourceChanges.set(sourceId, {
+      op: DIFF_OP.STYLE_SOURCE,
+      action: action === 'remove' ? 'remove' : (action === 'upsert' ? 'upsert' : 'replace'),
+      sourceId: sourceId,
+      scope: cloneStyleScope(scope || (source && source.scope) || {}),
+      source: safeSource,
+      reason: reason || 'cssom-style-source-stale'
+    });
+    logger.warn('[DOM Stream] cssom style source queued', {
+      action: action || 'replace',
+      sourceId: sourceId,
+      reason: reason || 'cssom-style-source-stale'
+    });
+    if (!flushingMutations) scheduleMutationFlush();
+  }
+
+  function drainPendingStyleSourceDiffs() {
+    var diffs = [];
+    pendingStyleSourceChanges.forEach(function(entry) {
+      var diff = {
+        op: DIFF_OP.STYLE_SOURCE,
+        action: entry.action,
+        sourceId: entry.sourceId,
+        scope: cloneStyleScope(entry.scope)
+      };
+      if (entry.action !== 'remove' && entry.source) diff.source = entry.source;
+      diffs.push(diff);
+    });
+    pendingStyleSourceChanges.clear();
+    return diffs;
+  }
+
+  function queueStyleScopeReplacement(scope, root, reason) {
+    if (styleMode !== 'cssom') return;
+    var scopeKey = styleScopeKey(scope);
+    var info = styleScopeRoots.get(scopeKey) || {};
+    var docForScope = info.doc || (root && root.ownerDocument) || document;
+    var rootForScope = root || info.root || docForScope;
+    var before = {};
+    styleSourceRegistry.forEach(function(entry, key) {
+      if (styleScopeKey(entry.scope) === scopeKey) before[key] = true;
+    });
+    var collected = collectCssomStyleSourcesForScope(docForScope, scope, { root: rootForScope });
+    for (var i = 0; i < collected.sources.length; i++) {
+      var source = collected.sources[i];
+      delete before[source.sourceId];
+      queueStyleSourceChange('replace', source, source.scope, reason || 'cssom-style-source-stale');
+    }
+    Object.keys(before).forEach(function(sourceId) {
+      var entry = styleSourceRegistry.get(sourceId);
+      styleSourceRegistry.delete(sourceId);
+      queueStyleSourceChange('remove', {
+        sourceId: sourceId,
+        scope: entry ? entry.scope : cloneStyleScope(scope)
+      }, entry ? entry.scope : scope, reason || 'cssom-style-source-stale');
+    });
+  }
+
+  function markStyleOwnerDirty(owner, reason) {
+    if (styleMode !== 'cssom') return;
+    var key = owner && styleOwnerToSourceKey ? styleOwnerToSourceKey.get(owner) : '';
+    var entry = key ? styleSourceRegistry.get(key) : null;
+    if (!entry) {
+      sendCssomFreshSnapshot('cssom-style-source-stale');
+      return;
+    }
+    queueStyleScopeReplacement(entry.scope, entry.root, reason || 'cssom-style-source-stale');
+  }
+
+  function patchCssStyleSheetMethods() {
+    if (styleMode !== 'cssom' || nativeCssStyleSheetMethods) return;
+    var proto = window && window.CSSStyleSheet && window.CSSStyleSheet.prototype;
+    if (!proto) return;
+    nativeCssStyleSheetMethods = {};
+    ['insertRule', 'deleteRule', 'replace', 'replaceSync'].forEach(function(name) {
+      if (typeof proto[name] !== 'function') return;
+      nativeCssStyleSheetMethods[name] = proto[name];
+      try {
+        proto[name] = function patchedCssStyleSheetMethod() {
+          var result = nativeCssStyleSheetMethods[name].apply(this, arguments);
+          var sheet = this;
+          if (name === 'replace' && result && typeof result.then === 'function') {
+            result.then(function() {
+              markStyleOwnerDirty(sheet, 'cssom-rule-mutated');
+            }, function() {
+              logger.warn('[DOM Stream] cssom hook unavailable', { reason: 'cssom-hook-unavailable' });
+              sendCssomFreshSnapshot('cssom-hook-unavailable');
+            });
+          } else {
+            markStyleOwnerDirty(sheet, 'cssom-rule-mutated');
+          }
+          return result;
+        };
+      } catch (err) {
+        logger.warn('[DOM Stream] cssom hook unavailable', { reason: 'cssom-hook-unavailable' });
+        sendCssomFreshSnapshot('cssom-hook-unavailable');
+      }
+    });
+  }
+
+  function restoreCssStyleSheetMethods() {
+    if (!nativeCssStyleSheetMethods) return;
+    var proto = window && window.CSSStyleSheet && window.CSSStyleSheet.prototype;
+    if (proto) {
+      Object.keys(nativeCssStyleSheetMethods).forEach(function(name) {
+        try {
+          proto[name] = nativeCssStyleSheetMethods[name];
+        } catch (err) { /* best-effort restore */ }
+      });
+    }
+    nativeCssStyleSheetMethods = null;
+  }
+
+  function reconcileAdoptedStyleSheetsForScope(root, scope) {
+    if (styleMode !== 'cssom') return;
+    try {
+      if (root && root.adoptedStyleSheets) {
+        queueStyleScopeReplacement(scope, root, 'adoptedStyleSheets');
+      }
+    } catch (err) {
+      logger.warn('[DOM Stream] cssom hook unavailable', { reason: 'cssom-hook-unavailable' });
+    }
+  }
+
+  function reconcileAllKnownStyleScopes() {
+    if (styleMode !== 'cssom') return;
+    styleScopeRoots.forEach(function(info) {
+      if (!info || !info.root || !info.scope) return;
+      reconcileAdoptedStyleSheetsForScope(info.root, info.scope);
+    });
+  }
+
+  function sendCssomFreshSnapshot(reason) {
+    if (styleMode !== 'cssom' || !streaming) return;
+    logger.warn('[DOM Stream] cssom resnapshot', {
+      reason: reason || 'cssom-style-source-stale'
+    });
+    safeSend(STREAM.SNAPSHOT, serializeDOM());
+  }
+
+  function prepareFrameDocumentClone(frameDoc, bodyClone, cloneToNid) {
+    var liveDescendants = frameDoc.body && frameDoc.body.querySelectorAll
+      ? frameDoc.body.querySelectorAll('*')
+      : [];
+    var cloneDescendants = bodyClone.querySelectorAll('*');
+    var toRemove = [];
+    var blockedPairs = [];
+
+    for (var i = 0; i < liveDescendants.length; i++) {
+      var live = liveDescendants[i];
+      var clone = cloneDescendants[i];
+      if (!clone) continue;
+      var tag = clone.tagName ? String(clone.tagName).toLowerCase() : '';
+
+      if (wireDroppedWithAncestors(live.parentElement)) {
+        reserveNodeId();
+        toRemove.push(clone);
+        continue;
+      }
+
+      var elemDecision = sanitizeForWire('element', { orig: live, clone: clone });
+      if (elemDecision && elemDecision.drop) {
+        toRemove.push(clone);
+        continue;
+      }
+      if (safeSkipElement(clone) || skipElementWithAncestors(clone)) {
+        toRemove.push(clone);
+        continue;
+      }
+      if (blockedWithAncestors(live.parentElement)) continue;
+      if (blockMatches(live)) {
+        assignNodeId(live, clone, cloneToNid);
+        blockedPairs.push({ orig: live, clone: clone });
+        continue;
+      }
+
+      assignNodeId(live, clone, cloneToNid);
+
+      if (tag === 'iframe') {
+        prepareIframeWireShell(live, clone);
+        continue;
+      }
+
+      for (var a = 0; a < URL_ATTRS.length; a++) {
+        var attrVal = clone.getAttribute(URL_ATTRS[a]);
+        if (attrVal) clone.setAttribute(URL_ATTRS[a], absolutifyUrl(attrVal, frameDoc));
+      }
+      var srcsetVal = clone.getAttribute('srcset');
+      if (srcsetVal) clone.setAttribute('srcset', absolutifySrcset(srcsetVal, frameDoc));
+      if (styleMode !== 'cssom') captureComputedStyles(live, clone);
+      sanitizeForWire('element', { orig: live, clone: clone });
+    }
+
+    for (var r = 0; r < toRemove.length; r++) {
+      if (toRemove[r].parentNode) toRemove[r].parentNode.removeChild(toRemove[r]);
+    }
+    for (var b = 0; b < blockedPairs.length; b++) {
+      replaceWithBlockPlaceholder(
+        blockedPairs[b].orig,
+        blockedPairs[b].clone,
+        readBlockRect(blockedPairs[b].orig),
+        cloneToNid
+      );
+    }
+  }
+
+  function serializeFrameDocument(iframe, frameNid, frameDoc) {
+    if (!iframe || !frameNid || !frameDoc || !frameDoc.documentElement || !frameDoc.body) {
+      return null;
+    }
+    var bodyClone = frameDoc.body.cloneNode(true);
+    var cloneToNid = new Map();
+    var htmlNid = ensureNodeId(frameDoc.documentElement);
+    var bodyNid = ensureNodeId(frameDoc.body);
+
+    prepareFrameDocumentClone(frameDoc, bodyClone, cloneToNid);
+    var subtreeResult = sanitizeForWire('subtree', {
+      root: bodyClone,
+      liveRoot: frameDoc.body,
+      cloneToNid: cloneToNid
+    });
+    if (subtreeResult && subtreeResult.drop) return null;
+
+    var nodeIds = buildNodeIdSidecar(bodyClone, cloneToNid, false);
+    var frameShadowRoots = collectShadowRootPayloads(frameDoc.body, nodeIds);
+    var nestedFrames = collectFramePayloads(frameDoc.body, cloneToNid);
+    var framePayload = {
+      frameNid: String(frameNid),
+      kind: 'same-origin',
+      html: bodyClone.innerHTML || '',
+      nodeIds: nodeIds,
+      shadowRoots: frameShadowRoots,
+      htmlNid: htmlNid ? String(htmlNid) : '',
+      bodyNid: bodyNid ? String(bodyNid) : '',
+      frames: nestedFrames,
+      stylesheets: collectStylesheetsFrom(frameDoc),
+      inlineStyles: collectInlineStylesFrom(frameDoc),
+      htmlAttrs: serializeShellAttributes(frameDoc.documentElement),
+      bodyAttrs: serializeShellAttributes(frameDoc.body),
+      htmlStyle: collectComputedStyleText(frameDoc.documentElement, SHELL_PROPS),
+      bodyStyle: collectComputedStyleText(frameDoc.body, SHELL_PROPS),
+      scrollX: frameDoc.defaultView ? frameDoc.defaultView.scrollX : 0,
+      scrollY: frameDoc.defaultView ? frameDoc.defaultView.scrollY : 0,
+      viewportWidth: frameDoc.defaultView ? frameDoc.defaultView.innerWidth : 0,
+      viewportHeight: frameDoc.defaultView ? frameDoc.defaultView.innerHeight : 0,
+      pageWidth: frameDoc.documentElement.scrollWidth,
+      pageHeight: frameDoc.documentElement.scrollHeight,
+      url: frameDoc.location ? String(frameDoc.location.href || '') : '',
+      title: frameDoc.title || ''
+    };
+    if (styleMode === 'cssom') {
+      var frameCssom = collectCssomStyleSourcesForScope(
+        frameDoc,
+        { kind: 'frame', frameNid: String(frameNid) },
+        { root: frameDoc }
+      );
+      framePayload.styleSources = frameCssom.sources;
+      framePayload.styleStrategy = frameCssom.strategy;
+    }
+    return framePayload;
+  }
+
+  function collectFramePayloads(root, cloneToNid, excludedFrameNodeIds) {
+    var payloads = [];
+    if (!root) return payloads;
+    var allowed = null;
+    if (cloneToNid && typeof cloneToNid.forEach === 'function') {
+      allowed = new Set();
+      cloneToNid.forEach(function(nid) {
+        if (nid !== undefined && nid !== null) allowed.add(String(nid));
+      });
+    }
+
+    var elements = elementsUnderRoot(root);
+    for (var i = 0; i < elements.length; i++) {
+      var iframe = elements[i];
+      var tag = iframe && iframe.tagName ? String(iframe.tagName).toLowerCase() : '';
+      if (tag !== 'iframe') continue;
+      if (skipElementWithAncestors(iframe) || blockedWithAncestors(iframe) || wireDroppedWithAncestors(iframe)) {
+        continue;
+      }
+      var frameNid = getTrackedNodeId(iframe) || ensureNodeId(iframe);
+      if (!frameNid) continue;
+      if (allowed && !allowed.has(String(frameNid))) continue;
+      if (excludedFrameNodeIds && excludedFrameNodeIds.has(String(frameNid))) continue;
+      var classification = classifyFrame(iframe);
+      if (classification.kind === 'same-origin') {
+        var sameOriginPayload = serializeFrameDocument(
+          iframe,
+          frameNid,
+          classification.document
+        );
+        if (sameOriginPayload) payloads.push(sameOriginPayload);
+        continue;
+      }
+      payloads.push(Object.assign({ frameNid: String(frameNid) }, classification));
+    }
+    return payloads;
+  }
+
+  function registerFrameLoadListener(iframe, frameNid) {
+    if (!iframe || !frameNid || typeof iframe.addEventListener !== 'function') return;
+    var key = String(frameNid);
+    var existing = frameLoadListeners.get(key);
+    if (existing && existing.iframe === iframe) return;
+    if (existing && existing.iframe && typeof existing.iframe.removeEventListener === 'function') {
+      existing.iframe.removeEventListener('load', existing.handler);
+    }
+    var handler = function() {
+      var classification = classifyFrame(iframe);
+      if (classification.kind === 'same-origin') {
+        registerFrameDocument(iframe, key, classification.document, true);
+      } else {
+        observedFrameDocuments.delete(key);
+      }
+    };
+    iframe.addEventListener('load', handler);
+    frameLoadListeners.set(key, { iframe: iframe, handler: handler });
+  }
+
+  function registerFrameDocument(iframe, frameNid, frameDoc, emitRefresh) {
+    if (!mutationObserver || !iframe || !frameNid || !frameDoc || !frameDoc.body) return null;
+    var key = String(frameNid);
+    var record = {
+      iframe: iframe,
+      document: frameDoc,
+      root: frameDoc,
+      frameNid: key
+    };
+    observedFrameDocuments.set(key, record);
+    frameDocumentToNid.set(frameDoc, key);
+    addValueListenerRoot(frameDoc);
+    registerFrameLoadListener(iframe, key);
+    var framePayload = serializeFrameDocument(iframe, key, frameDoc);
+    try {
+      mutationObserver.observe(frameDoc, mutationObserverOptions());
+    } catch (err) {
+      logger.warn('[DOM Stream] frame document observe failed', {
+        reason: 'observe-failed'
+      });
+      return record;
+    }
+    observeOpenShadowRoots(frameDoc.body);
+    observeSameOriginFrameDocuments(frameDoc.body);
+    if (emitRefresh && framePayload) {
+      sendMutationDiffs([{
+        op: DIFF_OP.FRAME,
+        frameNid: key,
+        frame: framePayload
+      }], { includeStaleFlushCount: false });
+    }
+    return record;
+  }
+
+  function observeSameOriginFrameDocuments(root) {
+    var elements = elementsUnderRoot(root);
+    for (var i = 0; i < elements.length; i++) {
+      var iframe = elements[i];
+      var tag = iframe && iframe.tagName ? String(iframe.tagName).toLowerCase() : '';
+      if (tag !== 'iframe') continue;
+      if (skipElementWithAncestors(iframe) || blockedWithAncestors(iframe) || wireDroppedWithAncestors(iframe)) {
+        continue;
+      }
+      var frameNid = getTrackedNodeId(iframe) || ensureNodeId(iframe);
+      if (!frameNid) continue;
+      var classification = classifyFrame(iframe);
+      if (classification.kind === 'same-origin') {
+        registerFrameDocument(iframe, frameNid, classification.document, false);
+      } else {
+        registerFrameLoadListener(iframe, frameNid);
+      }
+    }
+  }
+
+  function getMutationFrameRecord(target) {
+    if (!target) return null;
+    var ownerDoc = target.nodeType === Node.DOCUMENT_NODE ? target : target.ownerDocument;
+    if (!ownerDoc) return null;
+    var frameNid = frameDocumentToNid.get(ownerDoc);
+    if (!frameNid) return null;
+    var record = observedFrameDocuments.get(String(frameNid));
+    if (!record || record.document !== ownerDoc) return null;
+    return record;
+  }
+
+  function isInactiveFrameDocumentMutation(target) {
+    if (!target) return false;
+    var ownerDoc = target.nodeType === Node.DOCUMENT_NODE ? target : target.ownerDocument;
+    if (!ownerDoc) return false;
+    var frameNid = frameDocumentToNid.get(ownerDoc);
+    if (!frameNid) return false;
+    var record = observedFrameDocuments.get(String(frameNid));
+    return !record || record.document !== ownerDoc;
+  }
+
+  function scopeFrameDiff(diff, frameRecord) {
+    if (diff && frameRecord && frameRecord.frameNid) {
+      diff.frameNid = String(frameRecord.frameNid);
+    }
+    return diff;
+  }
+
+  function isValueControl(el) {
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    var tag = el.tagName ? String(el.tagName).toLowerCase() : '';
+    return tag === 'input' || tag === 'textarea' || tag === 'select';
+  }
+
+  function selectedOptionValues(select) {
+    var values = [];
+    var options = select && select.options ? select.options : [];
+    for (var i = 0; i < options.length; i++) {
+      if (options[i].selected) values.push(String(options[i].value));
+    }
+    return values;
+  }
+
+  // Positional identity for the selected options. selectedValues carry the
+  // masked option text, so colliding masks (default mask turns 'aa' and 'bb'
+  // both into '**') make value-based selection ambiguous on the renderer.
+  // Option indexes contain no page content, survive masking unchanged, and
+  // pin the exact option(s) the renderer must select.
+  function selectedOptionIndexes(select) {
+    var indexes = [];
+    var options = select && select.options ? select.options : [];
+    for (var i = 0; i < options.length; i++) {
+      if (options[i].selected) indexes.push(i);
+    }
+    return indexes;
+  }
+
+  function sanitizeInputValue(value, owner) {
+    return sanitizeForWire('input', {
+      value: value == null ? '' : String(value),
+      owner: owner
+    }).value;
+  }
+
+  function buildValueDiff(control) {
+    if (!isValueControl(control)) return null;
+    if (skipElementWithAncestors(control) || blockedWithAncestors(control) || wireDroppedWithAncestors(control)) {
+      return null;
+    }
+    var shadowHost = getMutationShadowHost(control);
+    if (shadowHost && (
+      skipElementWithAncestors(shadowHost)
+      || blockedWithAncestors(shadowHost)
+      || wireDroppedWithAncestors(shadowHost)
+    )) {
+      return null;
+    }
+    var nid = getTrackedNodeId(control);
+    if (!nid) return null;
+
+    var tag = control.tagName ? String(control.tagName).toLowerCase() : '';
+    var diff = {
+      op: DIFF_OP.VALUE,
+      nid: nid
+    };
+
+    if (tag === 'select') {
+      diff.value = sanitizeInputValue(control.value, control);
+      var selected = selectedOptionValues(control);
+      diff.selectedValues = [];
+      for (var s = 0; s < selected.length; s++) {
+        diff.selectedValues.push(sanitizeInputValue(selected[s], control));
+      }
+      // Authoritative selection identity (the renderer prefers this over the
+      // maskable selectedValues): option indexes never carry page content and
+      // stay unambiguous even when masked option values collide.
+      diff.selectedIndexes = selectedOptionIndexes(control);
+      return diff;
+    }
+
+    if (tag === 'textarea') {
+      diff.value = sanitizeInputValue(control.value, control);
+      return diff;
+    }
+
+    var inputType = '';
+    try {
+      inputType = String(control.type || control.getAttribute('type') || '').toLowerCase();
+    } catch (err) {
+      inputType = String(control.getAttribute && control.getAttribute('type') || '').toLowerCase();
+    }
+
+    if (inputType === 'checkbox' || inputType === 'radio') {
+      diff.checked = !!control.checked;
+      diff.value = sanitizeInputValue(control.value, control);
+      return diff;
+    }
+
+    diff.value = sanitizeInputValue(control.value, control);
+    return diff;
+  }
+
+  function handleValueEvent(event) {
+    if (!streaming || !event || !event.target) return;
+    var diff = buildValueDiff(event.target);
+    if (!diff) return;
+    sendMutationDiffs(
+      [scopeFrameDiff(diff, getMutationFrameRecord(event.target))],
+      { includeStaleFlushCount: false }
+    );
+  }
+
+  function addValueListenerRoot(root) {
+    if (!valueCaptureActive || !root || typeof root.addEventListener !== 'function') return;
+    if (valueListenerRoots.has(root)) return;
+    root.addEventListener('input', handleValueEvent, true);
+    root.addEventListener('change', handleValueEvent, true);
+    valueListenerRoots.add(root);
+    valueListenerRecords.push(root);
+  }
+
+  function addValueListenerRootsUnder(root) {
+    if (root && (root.nodeType === Node.DOCUMENT_NODE || isOpenShadowRoot(root))) {
+      addValueListenerRoot(root);
+    }
+    var elements = elementsUnderRoot(root);
+    for (var i = 0; i < elements.length; i++) {
+      if (elements[i].shadowRoot && isOpenShadowRoot(elements[i].shadowRoot)) {
+        addValueListenerRootsUnder(elements[i].shadowRoot);
+      }
+    }
+  }
+
+  function startValueCapture() {
+    stopValueCapture();
+    valueCaptureActive = true;
+    addValueListenerRoot(document);
+    addValueListenerRootsUnder(document.body);
+    observedFrameDocuments.forEach(function(record) {
+      if (!record || !record.document) return;
+      addValueListenerRoot(record.document);
+      addValueListenerRootsUnder(record.document.body);
+    });
+  }
+
+  function stopValueCapture() {
+    for (var i = 0; i < valueListenerRecords.length; i++) {
+      var root = valueListenerRecords[i];
+      try {
+        if (root && typeof root.removeEventListener === 'function') {
+          root.removeEventListener('input', handleValueEvent, true);
+          root.removeEventListener('change', handleValueEvent, true);
+        }
+      } catch (err) {
+        logger.warn('[DOM Stream] value listener cleanup failed', {
+          reason: 'cleanup-failed'
+        });
+      }
+    }
+    valueListenerRecords = [];
+    valueListenerRoots = new WeakSet();
+    valueCaptureActive = false;
+  }
+
+  function clearObservedFrameDocuments() {
+    frameLoadListeners.forEach(function(record) {
+      try {
+        if (record && record.iframe && typeof record.iframe.removeEventListener === 'function') {
+          record.iframe.removeEventListener('load', record.handler);
+        }
+      } catch (err) {
+        logger.warn('[DOM Stream] frame load listener cleanup failed', {
+          reason: 'cleanup-failed'
+        });
+      }
+    });
+    frameLoadListeners.clear();
+    observedFrameDocuments.clear();
+    frameDocumentToNid = new WeakMap();
+  }
+
+  function wrapAttachShadow() {
+    if (nativeAttachShadow) return;
+    var proto = window && window.Element && window.Element.prototype;
+    if (!proto || typeof proto.attachShadow !== 'function') return;
+    attachShadowProto = proto;
+    nativeAttachShadow = proto.attachShadow;
+    proto.attachShadow = function() {
+      var root = nativeAttachShadow.apply(this, arguments);
+      try {
+        if (isOpenShadowRoot(root)) {
+          observeOpenShadowRoot(root);
+          if (streaming) {
+            var hostNid = ensureNodeId(this);
+            var payload = serializeOpenShadowRoot(this, hostNid);
+            if (payload) {
+              safeSend(STREAM.MUTATIONS, {
+                mutations: [Object.assign({ op: DIFF_OP.SHADOW_ROOT }, payload)],
+                streamSessionId: streamSessionId || '',
+                snapshotId: currentSnapshotId || 0,
+                staleFlushCount: staleFlushCount
+              });
+            }
+          }
+        }
+      } catch (err) {
+        logger.error('[DOM Stream] attachShadow wrapper failed', err);
+      }
+      return root;
+    };
+  }
+
+  function restoreAttachShadow() {
+    if (!nativeAttachShadow || !attachShadowProto) return;
+    try {
+      attachShadowProto.attachShadow = nativeAttachShadow;
+    } catch (err) {
+      logger.error('[DOM Stream] attachShadow restore failed', err);
+    }
+    nativeAttachShadow = null;
+    attachShadowProto = null;
   }
 
   // =========================================================================
@@ -564,6 +1926,7 @@ export function createCapture(config) {
    */
   function injectDialogInterceptor() {
     // Only inject once
+    if (window.__phantomStreamDisableDialogInterceptor) return;
     if (document.getElementById('fsb-dialog-interceptor')) return;
 
     var script = document.createElement('script');
@@ -613,6 +1976,19 @@ export function createCapture(config) {
   /**
    * Listen for dialog events from the page-level interceptor and relay them
    * through the transport.
+   *
+   * SEC-03 side-channel masking disposition (threat T-03-26, accepted --
+   * the CONTEXT masking decision's "and side channels" clause, discharged
+   * explicitly here, never silently): dialog detail.message and
+   * detail.defaultValue (and the overlay payload text relayed by
+   * broadcastOverlayState) are NOT routed through the masking helpers.
+   * They are string-only payloads with no owner element, so blockSelector /
+   * maskTextSelector matching has nothing to match against; a page script
+   * that echoes masked content into an alert/prompt is outside capture-side
+   * masking's reach (the rrweb-parity boundary). The viewer renders these
+   * via textContent only (overlays.js, threat T-02-04), so the residual is
+   * privacy-scoped, not markup injection. docs/SECURITY.md lists this
+   * residual (plan 03-05).
    */
   function setupDialogRelay() {
     if (dialogRelayActive) return;
@@ -640,6 +2016,599 @@ export function createCapture(config) {
         })
       });
     });
+  }
+
+  // =========================================================================
+  // 0.4 SEC-03 Privacy-masking helpers (plan 03-03)
+  // =========================================================================
+
+  /**
+   * Validate a host-provided mask selector at factory time. Returns the
+   * selector string, or null when the option was not provided. Any provided
+   * value that is not a non-empty string, or that the ambient document's
+   * selector engine rejects, THROWS Error('invalid-mask-selector'):
+   * factory-time validation is the one allowed throwing site (D-07
+   * transport-send-required precedent, 03-PATTERNS Shared Patterns), and a
+   * silently dropped mask selector would be a privacy leak -- fail closed
+   * and loud. Runtime matcher errors on exotic elements are contained
+   * per-element by the predicates below instead (Pitfall 6).
+   * @param {*} raw - cfg.blockSelector / cfg.maskTextSelector as provided
+   * @returns {string|null}
+   */
+  function compileMaskSelector(raw) {
+    if (raw === undefined || raw === null) return null;
+    if (typeof raw !== 'string' || raw === '') {
+      throw new Error('invalid-mask-selector');
+    }
+    try {
+      document.querySelector(raw);
+    } catch (err) {
+      throw new Error('invalid-mask-selector');
+    }
+    return raw;
+  }
+
+  /**
+   * Ancestor-inclusive maskTextSelector predicate (closest()-shaped, the
+   * skipElementWithAncestors analog -- 03-RESEARCH Pattern 6). True when el
+   * or any ancestor (within el's tree: full live ancestry for live
+   * elements, clone-local ancestry for detached clones) matches
+   * maskTextSelector. A runtime matches/closest error on an exotic element
+   * is contained in the safeSkipElement shape: routed to the logger,
+   * treated as not-matched -- the capture never wedges (Pitfall 6).
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function maskTextMatches(el) {
+    if (!maskTextSelector) return false;
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    try {
+      return !!(el.closest && el.closest(maskTextSelector));
+    } catch (err) {
+      logger.error('[DOM Stream] maskTextSelector match failed', err);
+      return false;
+    }
+  }
+
+  /**
+   * True when the element itself matches blockSelector. Runtime selector
+   * errors are contained like maskTextSelector errors: logged and treated as
+   * not-blocked so capture never wedges after factory-time validation.
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function blockMatches(el) {
+    if (!blockSelector) return false;
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    try {
+      return !!(el.matches && el.matches(blockSelector));
+    } catch (err) {
+      logger.error('[DOM Stream] blockSelector match failed', err);
+      return false;
+    }
+  }
+
+  /**
+   * Ancestor-inclusive blockSelector predicate. Used by the differ skip
+   * guards so mutations ON or INSIDE a blocked subtree emit nothing.
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function blockedWithAncestors(el) {
+    if (!blockSelector) return false;
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    try {
+      return !!(el.closest && el.closest(blockSelector));
+    } catch (err) {
+      logger.error('[DOM Stream] blockSelector match failed', err);
+      return false;
+    }
+  }
+
+  /**
+   * Elements intentionally absent from the wire must also be absent from the
+   * live tracking graph. Otherwise descendants can receive nids before the
+   * clone subtree is removed, then later leak mutations for content the
+   * snapshot never mirrored.
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function isWireDroppedElement(el) {
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    var tag = el.tagName ? String(el.tagName).toLowerCase() : '';
+    return tag === 'script' || tag === 'noscript' || tag === 'object' || tag === 'embed';
+  }
+
+  /**
+   * Ancestor-inclusive dropped-subtree predicate, matching the blockSelector
+   * mutation guards for built-in forbidden wire roots.
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function wireDroppedWithAncestors(el) {
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    var node = el;
+    while (node && node.nodeType === Node.ELEMENT_NODE) {
+      if (isWireDroppedElement(node)) return true;
+      node = node.parentElement;
+    }
+    return false;
+  }
+
+  /**
+   * Apply the text mask: maskTextFn when provided, with fail-CLOSED
+   * containment -- a throwing custom fn falls back to the DEFAULT asterisk
+   * mask (raw text NEVER leaks, threat T-03-16) and routes to the logger.
+   * @param {string} text
+   * @param {Element} el - element owning the text (rrweb fn signature)
+   * @returns {string}
+   */
+  function safeMaskText(text, el) {
+    if (maskTextFn) {
+      try {
+        return String(maskTextFn(String(text), el));
+      } catch (err) {
+        logger.error('[DOM Stream] maskTextFn failed; default mask applied', err);
+        return defaultMaskText(text);
+      }
+    }
+    return defaultMaskText(text);
+  }
+
+  /**
+   * Apply the input-value mask: maskInputFn when provided, with the same
+   * fail-CLOSED containment as safeMaskText.
+   * @param {string} text
+   * @param {Element} el
+   * @returns {string}
+   */
+  function safeMaskInput(text, el) {
+    if (maskInputFn) {
+      try {
+        return String(maskInputFn(String(text), el));
+      } catch (err) {
+        logger.error('[DOM Stream] maskInputFn failed; default mask applied', err);
+        return defaultMaskText(text);
+      }
+    }
+    return defaultMaskText(text);
+  }
+
+  /**
+   * True when an element's value/text value must be masked. Password inputs
+   * are always masked; maskInputs extends masking to input/textarea/select.
+   * Select option display text is intentionally not masked here (T-03-18,
+   * accepted residual); a future Phase 8 input-event capture path must route
+   * typed values through safeMaskInput as well.
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function shouldMaskInput(el) {
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    var tag = el.tagName ? String(el.tagName).toLowerCase() : '';
+    if (tag === 'input') {
+      var inputType = '';
+      try {
+        inputType = String(el.type || el.getAttribute('type') || '').toLowerCase();
+      } catch (e) {
+        inputType = String(el.getAttribute && el.getAttribute('type') || '').toLowerCase();
+      }
+      if (inputType === 'password') return true;
+      return maskInputs;
+    }
+    if (tag === 'textarea' || tag === 'select') return maskInputs;
+    return false;
+  }
+
+  /**
+   * Option value attributes are the value surface of a masked select. Option
+   * display labels remain the documented residual; value attrs do not.
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function isOptionUnderMaskedSelect(el) {
+    if (!maskInputs || !el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    var tag = el.tagName ? String(el.tagName).toLowerCase() : '';
+    if (tag !== 'option') return false;
+    try {
+      return !!(el.closest && el.closest('select'));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function maskOptionValue(optionClone, owner) {
+    if (!optionClone || !optionClone.hasAttribute || !optionClone.hasAttribute('value')) return;
+    if (optionClone._psOptionValueMasked) return;
+    optionClone._psOptionValueMasked = true;
+    var value = optionClone.getAttribute('value');
+    var maskedValue = safeMaskInput(value == null ? '' : value, owner);
+    if (maskedValue !== value) {
+      optionClone.setAttribute('value', maskedValue);
+      sanitizeCounters.maskedInputs++;
+    }
+  }
+
+  /**
+   * Mask a clone's input/textarea/select wire value in place.
+   * @param {Element} clone
+   * @param {Element} owner
+   */
+  function maskInputCloneValue(clone, owner) {
+    if (isOptionUnderMaskedSelect(owner)) {
+      maskOptionValue(clone, owner);
+      return;
+    }
+    if (!shouldMaskInput(owner)) return;
+    var tag = clone.tagName ? String(clone.tagName).toLowerCase() : '';
+    if (tag === 'textarea') {
+      maskDirectChildText(clone, owner, safeMaskInput, 'maskedInputs');
+      return;
+    }
+    if (tag === 'select') {
+      var cloneOptions = clone.querySelectorAll ? clone.querySelectorAll('option') : [];
+      var ownerOptions = owner && owner.querySelectorAll ? owner.querySelectorAll('option') : [];
+      for (var o = 0; o < cloneOptions.length; o++) {
+        maskOptionValue(cloneOptions[o], ownerOptions[o] || owner);
+      }
+      return;
+    }
+    if (clone.hasAttribute && clone.hasAttribute('value')) {
+      var value = clone.getAttribute('value');
+      var maskedValue = safeMaskInput(value == null ? '' : value, owner);
+      if (maskedValue !== value) {
+        clone.setAttribute('value', maskedValue);
+        sanitizeCounters.maskedInputs++;
+      }
+    }
+  }
+
+  /**
+   * Mask every DIRECT child text node of a detached clone element in place.
+   * Descendant elements are deliberately NOT recursed into: each
+   * serialization walk visits every element, so descendant text is covered
+   * by the descendant's own visit. Counters move only when a value actually
+   * changes (SEC-01 idempotence discipline).
+   * @param {Element} el - detached clone whose direct text children to mask
+   * @param {Element} owner - element handed to the custom mask fn
+   * @param {(text: string, el: Element) => string} maskFn - safeMaskText
+   *   (or safeMaskInput for textarea values)
+   * @param {string} counterKey - sanitizeCounters key to increment
+   */
+  function maskDirectChildText(el, owner, maskFn, counterKey) {
+    var child = el.firstChild;
+    while (child) {
+      if (child.nodeType === Node.TEXT_NODE && child.nodeValue) {
+        var maskedValue = maskFn(child.nodeValue, owner);
+        if (maskedValue !== child.nodeValue) {
+          child.nodeValue = maskedValue;
+          sanitizeCounters[counterKey]++;
+        }
+      }
+      child = child.nextSibling;
+    }
+  }
+
+  /**
+   * Read the live dimensions used by rrweb-compatible block placeholders.
+   * @param {Element} el
+   * @returns {{width: number, height: number}}
+   */
+  function readBlockRect(el) {
+    try {
+      var rect = el.getBoundingClientRect();
+      return {
+        width: rect && typeof rect.width === 'number' ? rect.width : 0,
+        height: rect && typeof rect.height === 'number' ? rect.height : 0
+      };
+    } catch (e) {
+      return { width: 0, height: 0 };
+    }
+  }
+
+  /**
+   * Build the placeholder for a blocked element. It carries only dimensions:
+   * no original attributes, no children, no text. Its identity travels in
+   * the nodeIds sidecar.
+   * @param {Document} doc
+   * @param {{width: number, height: number}} rect
+   * @returns {Element}
+   */
+  function createBlockPlaceholder(doc, rect) {
+    var placeholder = doc.createElement('div');
+    placeholder.setAttribute('rr_width', String(rect.width || 0) + 'px');
+    placeholder.setAttribute('rr_height', String(rect.height || 0) + 'px');
+    return placeholder;
+  }
+
+  /**
+   * Replace a detached clone element with its blocked placeholder.
+   * @param {Element} liveEl
+   * @param {Element} cloneEl
+   * @param {{width: number, height: number}} rect
+   * @param {Map<Element, string>} [cloneToNid]
+   * @returns {Element|null}
+   */
+  function replaceWithBlockPlaceholder(liveEl, cloneEl, rect, cloneToNid) {
+    if (!cloneEl || !cloneEl.parentNode) return null;
+    var nid = cloneToNid && cloneToNid.get(cloneEl);
+    if (!nid) nid = getTrackedNodeId(liveEl) || '';
+    var placeholder = createBlockPlaceholder(cloneEl.ownerDocument, rect);
+    cloneEl.parentNode.replaceChild(placeholder, cloneEl);
+    if (cloneToNid) {
+      cloneToNid.delete(cloneEl);
+      if (nid) cloneToNid.set(placeholder, nid);
+    }
+    sanitizeCounters.blockedSubtrees++;
+    return placeholder;
+  }
+
+  function createTruncatedPlaceholder(doc) {
+    var placeholder = doc.createElement('div');
+    placeholder.setAttribute('data-phantomstream-truncated', 'true');
+    return placeholder;
+  }
+
+  function deleteCloneSubtreeMappings(cloneEl, cloneToNid) {
+    if (!cloneEl || !cloneToNid) return;
+    cloneToNid.delete(cloneEl);
+    if (!cloneEl.querySelectorAll) return;
+    var descendants = cloneEl.querySelectorAll('*');
+    for (var i = 0; i < descendants.length; i++) {
+      cloneToNid.delete(descendants[i]);
+    }
+  }
+
+  function replaceWithTruncatedPlaceholder(cloneEl, cloneToNid) {
+    if (!cloneEl || !cloneEl.parentNode) return null;
+    var nid = cloneToNid && cloneToNid.get(cloneEl);
+    if (!nid) return null;
+    var placeholder = createTruncatedPlaceholder(cloneEl.ownerDocument);
+    cloneEl.parentNode.replaceChild(placeholder, cloneEl);
+    deleteCloneSubtreeMappings(cloneEl, cloneToNid);
+    cloneToNid.set(placeholder, nid);
+    return placeholder;
+  }
+
+  function utf8ByteLength(text) {
+    var str = String(text || '');
+    var bytes = 0;
+    for (var i = 0; i < str.length; i++) {
+      var code = str.charCodeAt(i);
+      if (code < 0x80) {
+        bytes += 1;
+      } else if (code < 0x800) {
+        bytes += 2;
+      } else if (code >= 0xD800 && code <= 0xDBFF && i + 1 < str.length) {
+        var next = str.charCodeAt(i + 1);
+        if (next >= 0xDC00 && next <= 0xDFFF) {
+          bytes += 4;
+          i++;
+        } else {
+          bytes += 3;
+        }
+      } else {
+        bytes += 3;
+      }
+    }
+    return bytes;
+  }
+
+  function wireByteLength(value) {
+    try {
+      var json = JSON.stringify(value);
+      if (json === undefined) return 0;
+      if (typeof TextEncoder !== 'undefined') {
+        return new TextEncoder().encode(json).byteLength;
+      }
+      if (typeof Buffer !== 'undefined') {
+        return Buffer.byteLength(json, 'utf8');
+      }
+      return utf8ByteLength(json);
+    } catch (err) {
+      return Infinity;
+    }
+  }
+
+  function sidecarWireLength(value) {
+    return wireByteLength(value);
+  }
+
+  function findCloneElementByNid(root, cloneToNid, nid) {
+    if (!root || !cloneToNid || nid === undefined || nid === null) return null;
+    var key = String(nid);
+    var elements = elementsUnderRoot(root);
+    for (var i = 0; i < elements.length; i++) {
+      if (String(cloneToNid.get(elements[i]) || '') === key) return elements[i];
+    }
+    return null;
+  }
+
+  function markCloneNidTruncated(root, cloneToNid, nid, truncatedNodeIds) {
+    var cloneEl = findCloneElementByNid(root, cloneToNid, nid);
+    if (!cloneEl) return false;
+    var placeholder = replaceWithTruncatedPlaceholder(cloneEl, cloneToNid);
+    if (!placeholder) return false;
+    var placeholderNid = cloneToNid.get(placeholder) || nid;
+    if (placeholderNid && truncatedNodeIds && typeof truncatedNodeIds.add === 'function') {
+      truncatedNodeIds.add(String(placeholderNid));
+    }
+    return true;
+  }
+
+  function truncatedPayloadForNid(doc, nid) {
+    var placeholder = createTruncatedPlaceholder(doc || document);
+    return {
+      html: placeholder.outerHTML || '',
+      nodeIds: nid ? [String(nid)] : [],
+      shadowRoots: [],
+      frames: [],
+      truncated: true,
+      missingDescendants: 1
+    };
+  }
+
+  function pruneSnapshotSidecarsForBudget(basePayload, shadowRoots, frames, clone, cloneToNid, truncatedNodeIds) {
+    var base = Object.assign({}, basePayload || {});
+    var keptShadowRoots = Array.isArray(shadowRoots) ? shadowRoots.slice() : [];
+    var keptFrames = Array.isArray(frames) ? frames.slice() : [];
+    var removed = 0;
+
+    function currentWireLength() {
+      return wireByteLength(Object.assign({}, base, {
+        shadowRoots: keptShadowRoots,
+        frames: keptFrames
+      }));
+    }
+
+    while (currentWireLength() > SNAPSHOT_BUDGET_BYTES && (keptShadowRoots.length || keptFrames.length)) {
+      var largestKind = '';
+      var largestIndex = -1;
+      var largestLength = -1;
+
+      for (var s = 0; s < keptShadowRoots.length; s++) {
+        var shadowLength = sidecarWireLength(keptShadowRoots[s]);
+        if (shadowLength > largestLength) {
+          largestLength = shadowLength;
+          largestKind = 'shadow';
+          largestIndex = s;
+        }
+      }
+      for (var f = 0; f < keptFrames.length; f++) {
+        var frameLength = sidecarWireLength(keptFrames[f]);
+        if (frameLength > largestLength) {
+          largestLength = frameLength;
+          largestKind = 'frame';
+          largestIndex = f;
+        }
+      }
+
+      var ownerNid = '';
+      if (largestKind === 'shadow') {
+        var removedShadow = keptShadowRoots.splice(largestIndex, 1)[0];
+        ownerNid = removedShadow && removedShadow.hostNid;
+      } else if (largestKind === 'frame') {
+        var removedFrame = keptFrames.splice(largestIndex, 1)[0];
+        ownerNid = removedFrame && removedFrame.frameNid;
+      } else {
+        break;
+      }
+      markCloneNidTruncated(clone, cloneToNid, ownerNid, truncatedNodeIds);
+      removed++;
+      base.truncated = true;
+      base.missingDescendants = (base.missingDescendants || 0) + 1;
+      base.html = clone && clone.innerHTML ? clone.innerHTML : base.html;
+      base.nodeIds = buildNodeIdSidecar(clone, cloneToNid, false);
+    }
+
+    return {
+      html: base.html,
+      nodeIds: base.nodeIds || [],
+      shadowRoots: keptShadowRoots,
+      frames: keptFrames,
+      truncated: !!base.truncated,
+      missingDescendants: base.missingDescendants || 0,
+      removed: removed
+    };
+  }
+
+  function markSnapshotPayloadTruncated(payload) {
+    payload.truncated = true;
+    return payload;
+  }
+
+  function fitSnapshotPayloadForBudget(payload, clone, cloneToNid, truncatedNodeIds) {
+    var next = Object.assign({}, payload || {}, {
+      nodeIds: Array.isArray(payload && payload.nodeIds) ? payload.nodeIds.slice() : [],
+      shadowRoots: Array.isArray(payload && payload.shadowRoots) ? payload.shadowRoots.slice() : [],
+      frames: Array.isArray(payload && payload.frames) ? payload.frames.slice() : [],
+      stylesheets: Array.isArray(payload && payload.stylesheets) ? payload.stylesheets.slice() : [],
+      inlineStyles: Array.isArray(payload && payload.inlineStyles) ? payload.inlineStyles.slice() : [],
+      htmlAttrs: Object.assign({}, payload && payload.htmlAttrs ? payload.htmlAttrs : {}),
+      bodyAttrs: Object.assign({}, payload && payload.bodyAttrs ? payload.bodyAttrs : {})
+    });
+
+    // CSSOM mode carries full stylesheet text in styleSources; copy the array
+    // so the budget passes below can prune it without mutating the caller's
+    // sources. Only present in cssom mode -- computed mode omits the field.
+    if (Array.isArray(next.styleSources)) {
+      next.styleSources = next.styleSources.slice();
+    }
+
+    while (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.inlineStyles.length) {
+      next.inlineStyles.pop();
+      markSnapshotPayloadTruncated(next);
+    }
+    while (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.stylesheets.length) {
+      next.stylesheets.pop();
+      markSnapshotPayloadTruncated(next);
+    }
+    // A single large CSSOM source can dominate the payload; shed sources before
+    // dropping DOM structure so an oversized stylesheet cannot blow the cap.
+    while (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && Array.isArray(next.styleSources) && next.styleSources.length) {
+      next.styleSources.pop();
+      markSnapshotPayloadTruncated(next);
+    }
+
+    if (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.htmlStyle) {
+      next.htmlStyle = '';
+      markSnapshotPayloadTruncated(next);
+    }
+    if (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.bodyStyle) {
+      next.bodyStyle = '';
+      markSnapshotPayloadTruncated(next);
+    }
+    if (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && Object.keys(next.htmlAttrs).length) {
+      next.htmlAttrs = {};
+      markSnapshotPayloadTruncated(next);
+    }
+    if (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && Object.keys(next.bodyAttrs).length) {
+      next.bodyAttrs = {};
+      markSnapshotPayloadTruncated(next);
+    }
+    if (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.title) {
+      next.title = '';
+      markSnapshotPayloadTruncated(next);
+    }
+    if (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.url) {
+      next.url = '';
+      markSnapshotPayloadTruncated(next);
+    }
+
+    if (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && clone && cloneToNid) {
+      var cloneEls = cloneElementsWithNodeIds(clone, cloneToNid);
+      for (var i = cloneEls.length - 1; i >= 0 && wireByteLength(next) > SNAPSHOT_BUDGET_BYTES; i--) {
+        var nid = cloneToNid.get(cloneEls[i]);
+        if (markCloneNidTruncated(clone, cloneToNid, nid, truncatedNodeIds)) {
+          next.html = clone.innerHTML || '';
+          next.nodeIds = buildNodeIdSidecar(clone, cloneToNid, false);
+          next.shadowRoots = collectShadowRootPayloads(document.body, next.nodeIds, truncatedNodeIds);
+          next.frames = collectFramePayloads(document.body, cloneToNid, truncatedNodeIds);
+          next.missingDescendants = (next.missingDescendants || 0) + 1;
+          markSnapshotPayloadTruncated(next);
+        }
+      }
+    }
+
+    if (wireByteLength(next) > RELAY_PER_MESSAGE_LIMIT_BYTES) {
+      next.html = '';
+      next.nodeIds = [];
+      next.shadowRoots = [];
+      next.frames = [];
+      next.inlineStyles = [];
+      next.stylesheets = [];
+      if (Array.isArray(next.styleSources)) next.styleSources = [];
+      next.htmlAttrs = {};
+      next.bodyAttrs = {};
+      next.htmlStyle = '';
+      next.bodyStyle = '';
+      next.title = '';
+      next.url = '';
+      next.missingDescendants = (next.missingDescendants || 0) + 1;
+      markSnapshotPayloadTruncated(next);
+    }
+
+    return next;
   }
 
   // =========================================================================
@@ -696,15 +2665,19 @@ export function createCapture(config) {
   //   3. attr-op branch                   -- 'attr' dispatch, after
   //      absolutifyUrl/absolutifySrcset so the scheme check runs on final
   //      wire values
-  //   4. characterData text branch       -- 'text' dispatch (identity this
-  //      plan; SEC-03 masking seam, plan 03-03)
+  //   4. characterData text branch       -- 'text' dispatch (SEC-03
+  //      masking seam, plan 03-03)
   //   5. E2 text-childlist branch        -- 'text' dispatch (same seam)
+  //   6. input/change value branch       -- 'input' dispatch (CAPT-05
+  //      masking seam for event-driven form state)
   // Head inline <style> text additionally routes through the 'css' dispatch
   // at the serializeDOM collection site (a value scrub, not a markup walk).
-  // Side channels that BYPASS the markup scrub BY DESIGN: the dialog relay
-  // (setupDialogRelay) and the overlay broadcast (broadcastOverlayState)
-  // carry text/metadata only and are rendered via textContent in the viewer
-  // (overlays.js, threat T-02-04) -- no HTML parse path exists for them.
+  // Side channels that BYPASS the markup scrub AND the masking helpers BY
+  // DESIGN: the dialog relay (setupDialogRelay -- see the T-03-26
+  // disposition comment there) and the overlay broadcast
+  // (broadcastOverlayState) carry text/metadata only and are rendered via
+  // textContent in the viewer (overlays.js, threat T-02-04) -- no HTML
+  // parse path exists for them.
 
   /**
    * The capture-side sanitization chokepoint (SEC-01): the single named
@@ -727,10 +2700,13 @@ export function createCapture(config) {
    *     neutralize to '', style values are CSS-scrubbed; everything else
    *     passes through unchanged.
    *   'text',    { text, owner }         -> { text }
-   *     IDENTITY HOOK this plan: the SEC-03 masking seam -- plan 03-03
-   *     fills maskTextSelector/maskTextFn here (incrementing
+   *     SEC-03 masking seam (plan 03-03): maskTextSelector / maskTextFn
+   *     applied against the LIVE owner element's ancestry (incrementing
    *     maskedTextNodes); Phase 8 CAPT-05 typed-text capture plugs into the
    *     same seam.
+   *   'input',   { value, owner }        -> { value }
+   *     CAPT-05 masking seam for event-driven form values. Password inputs
+   *     and maskInputs/maskInputFn are applied before transport.
    *   'css',     { css }                 -> { css }
    *     Targeted CSS value scrub (scrubCssText) for head inline styles.
    *
@@ -782,25 +2758,27 @@ export function createCapture(config) {
           sanitizeCounters.blockedSubtrees++;
         }
       }
-      // URL-carrying attributes: dangerous schemes neutralize to '' --
-      // attribute EXISTENCE is preserved for mirror parity (T-03-02).
+      // URL-carrying attributes: dangerous schemes are removed, not
+      // rewritten to href="". Empty hrefs navigate to the iframe's own URL
+      // on click, so removal is the inert mirror behavior required by the
+      // Phase 3 browser checkpoint.
       for (var u = 0; u < URL_ATTRS.length; u++) {
         var urlVal = clone.getAttribute(URL_ATTRS[u]);
         if (urlVal && hasDangerousScheme(urlVal)) {
-          clone.setAttribute(URL_ATTRS[u], '');
+          clone.removeAttribute(URL_ATTRS[u]);
           sanitizeCounters.blockedUrlSchemes++;
         }
       }
       var formactionVal = clone.getAttribute('formaction');
       if (formactionVal && hasDangerousScheme(formactionVal)) {
-        clone.setAttribute('formaction', '');
+        clone.removeAttribute('formaction');
         sanitizeCounters.blockedUrlSchemes++;
       }
       // SVG xlink:href (getAttributeNS per the serializeDOM precedent).
       try {
         var xlinkVal = clone.getAttributeNS('http://www.w3.org/1999/xlink', 'href');
         if (xlinkVal && hasDangerousScheme(xlinkVal)) {
-          clone.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '');
+          clone.removeAttributeNS('http://www.w3.org/1999/xlink', 'href');
           sanitizeCounters.blockedUrlSchemes++;
         }
       } catch (e) { /* not an SVG element or no xlink support */ }
@@ -837,6 +2815,24 @@ export function createCapture(config) {
           }
         }
       }
+      // SEC-03 masking pass (plan 03-03), applied ONCE per clone: the pairs
+      // walk routes each pair through this dispatch twice (drop decision +
+      // final-wire-value re-scrub), and a second application would corrupt
+      // custom mask fn output -- so the pass marks the clone with a JS-only
+      // property that never serializes (clone-only; live nodes are never
+      // touched, threat T-03-06).
+      if (!clone._psMasked) {
+        clone._psMasked = true;
+        if (payload.orig) {
+          maskInputCloneValue(clone, payload.orig);
+        }
+        // maskTextSelector: the LIVE element's ancestry decides (orig is
+        // null for detached subtree descendants -- those are masked by the
+        // 'subtree' dispatch, which knows the inherited root state).
+        if (payload.orig && maskTextMatches(payload.orig)) {
+          maskDirectChildText(clone, payload.orig, safeMaskText, 'maskedTextNodes');
+        }
+      }
       return {};
     }
 
@@ -849,13 +2845,26 @@ export function createCapture(config) {
       if (rootResult && rootResult.drop) {
         return { drop: true };
       }
+      // SEC-03: every descendant uses its LIVE counterpart when available,
+      // so maskTextSelector sees full live ancestry (detached clones cannot)
+      // and maskInputs/password rules consult the real form control type.
+      var liveDescendants = (payload.liveRoot && payload.liveRoot.querySelectorAll)
+        ? payload.liveRoot.querySelectorAll('*')
+        : [];
       var descendants = root.querySelectorAll('*');
       for (var d = 0; d < descendants.length; d++) {
         var desc = descendants[d];
+        var liveDesc = liveDescendants[d] || null;
         // Skip nodes already detached with a removed forbidden ancestor
         // (querySelectorAll is static; removal does not re-enumerate).
         if (!root.contains(desc)) continue;
-        var descResult = sanitizeForWire('element', { orig: null, clone: desc });
+        if (liveDesc && wireDroppedWithAncestors(liveDesc.parentElement)) continue;
+        if (liveDesc && blockedWithAncestors(liveDesc.parentElement)) continue;
+        if (liveDesc && blockMatches(liveDesc)) {
+          replaceWithBlockPlaceholder(liveDesc, desc, readBlockRect(liveDesc), payload.cloneToNid);
+          continue;
+        }
+        var descResult = sanitizeForWire('element', { orig: liveDesc, clone: desc });
         if (descResult && descResult.drop && desc.parentNode) {
           desc.parentNode.removeChild(desc);
         }
@@ -894,26 +2903,58 @@ export function createCapture(config) {
         }
         return { value: scrubbedAttrSrcset };
       }
-      // URL-carrying attrs: dangerous schemes neutralize to '' -- the op
-      // (and so attribute EXISTENCE) is preserved for mirror parity.
+      // URL-carrying attrs: dangerous schemes remove the attr on the mirror.
+      // Preserving href with an empty value is still navigable in real
+      // browsers, so null is the inert ATTR-op shape (diff.js removeAttribute).
       if ((URL_ATTRS.indexOf(attrName) !== -1 || attrName === 'formaction' || attrName === 'xlink:href')
           && payload.value && hasDangerousScheme(payload.value)) {
         sanitizeCounters.blockedUrlSchemes++;
-        return { value: '' };
+        return { value: null };
       }
-      // The 'value' attribute passes through unchanged THIS plan: this is
-      // the plan 03-03 maskInputs seam (the always-on password mask and the
-      // maskInputs config consult payload.target here; Phase 8 CAPT-05
-      // typed-text capture reuses the same rule).
+      if (attrName === 'value' && (shouldMaskInput(payload.target) || isOptionUnderMaskedSelect(payload.target))) {
+        var maskedAttrValue = safeMaskInput(payload.value == null ? '' : payload.value, payload.target);
+        if (maskedAttrValue !== payload.value) {
+          sanitizeCounters.maskedInputs++;
+        }
+        return { value: maskedAttrValue };
+      }
       return { value: payload.value };
     }
 
     if (kind === 'text') {
-      // IDENTITY HOOK (this plan): the SEC-03 masking seam. Plan 03-03
-      // consults payload.owner against maskTextSelector / maskTextFn here
-      // and increments maskedTextNodes; Phase 8 CAPT-05 typed-text capture
-      // plugs into the same seam. Until then text passes through unchanged.
+      // SEC-03 masking (plan 03-03): BOTH text-op branches (characterData
+      // and the E2 text-childlist branch) route through this one hook. The
+      // owner element is LIVE, so closest() sees the full ancestry. Phase 8
+      // CAPT-05 typed-text capture plugs into the same seam. Unmasked text
+      // passes through unchanged (default-off: zero wire change without
+      // masking config).
+      if (shouldMaskInput(payload.owner)) {
+        var maskedInputText = safeMaskInput(payload.text == null ? '' : payload.text, payload.owner);
+        if (maskedInputText !== payload.text) {
+          sanitizeCounters.maskedInputs++;
+        }
+        return { text: maskedInputText };
+      }
+      if (maskTextMatches(payload.owner)) {
+        var maskedOpText = safeMaskText(payload.text, payload.owner);
+        if (maskedOpText !== payload.text) {
+          sanitizeCounters.maskedTextNodes++;
+        }
+        return { text: maskedOpText };
+      }
       return { text: payload.text };
+    }
+
+    if (kind === 'input') {
+      var inputValue = payload.value == null ? '' : String(payload.value);
+      if (shouldMaskInput(payload.owner)) {
+        var maskedValue = safeMaskInput(inputValue, payload.owner);
+        if (maskedValue !== inputValue) {
+          sanitizeCounters.maskedInputs++;
+        }
+        return { value: maskedValue };
+      }
+      return { value: inputValue };
     }
 
     if (kind === 'css') {
@@ -940,12 +2981,13 @@ export function createCapture(config) {
    * @param {string} val - The attribute value
    * @returns {string} Absolute URL or original value if invalid
    */
-  function absolutifyUrl(val) {
+  function absolutifyUrl(val, baseDoc) {
     if (!val || val.startsWith('data:') || val.startsWith('blob:') || val.startsWith('javascript:')) {
       return val;
     }
     try {
-      return new URL(val, document.baseURI).href;
+      var base = baseDoc && baseDoc.baseURI ? baseDoc.baseURI : document.baseURI;
+      return new URL(val, base).href;
     } catch (e) {
       return val;
     }
@@ -956,14 +2998,15 @@ export function createCapture(config) {
    * @param {string} srcset
    * @returns {string}
    */
-  function absolutifySrcset(srcset) {
+  function absolutifySrcset(srcset, baseDoc) {
     if (!srcset) return srcset;
-    return srcset.split(',').map(function(entry) {
-      var parts = entry.trim().split(/\s+/);
-      if (parts.length > 0) {
-        parts[0] = absolutifyUrl(parts[0]);
-      }
-      return parts.join(' ');
+    var candidates = parseSrcsetCandidates(srcset);
+    if (!candidates.length) return srcset;
+    return candidates.map(function(candidate) {
+      return formatSrcsetCandidate({
+        url: absolutifyUrl(candidate.url, baseDoc),
+        descriptor: candidate.descriptor
+      });
     }).join(', ');
   }
 
@@ -978,7 +3021,10 @@ export function createCapture(config) {
    */
   function collectComputedStyleText(original, props) {
     try {
-      var computed = window.getComputedStyle(original);
+      var view = original && original.ownerDocument && original.ownerDocument.defaultView
+        ? original.ownerDocument.defaultView
+        : window;
+      var computed = view.getComputedStyle(original);
       var styles = [];
       var styleProps = props || CURATED_PROPS;
 
@@ -1015,6 +3061,21 @@ export function createCapture(config) {
     }
   }
 
+  function collectSubtreeComputedStyles(root) {
+    var styles = new WeakMap();
+    if (!root || root.nodeType !== Node.ELEMENT_NODE) return styles;
+    var liveElements = [root];
+    if (root.querySelectorAll) {
+      var descendants = root.querySelectorAll('*');
+      for (var i = 0; i < descendants.length; i++) liveElements.push(descendants[i]);
+    }
+    for (var e = 0; e < liveElements.length; e++) {
+      var styleText = collectComputedStyleText(liveElements[e], CURATED_PROPS);
+      if (styleText) styles.set(liveElements[e], styleText);
+    }
+    return styles;
+  }
+
   /**
    * Serialize the attributes of a shell element (html/body), dropping style
    * and on* handler attributes. This was the reference's ONLY on*-strip
@@ -1038,9 +3099,9 @@ export function createCapture(config) {
 
   /**
    * Serialize the full DOM body into a clean HTML string.
-   * Strips scripts, absolutifies URLs, assigns stable node-id attributes
-   * (NID_ATTR), renders iframes live with absolutified src, and captures
-   * curated computed styles.
+   * Strips scripts, absolutifies URLs, assigns stable node identity through
+   * the internal mirror, renders iframes live with absolutified src, and
+   * captures curated computed styles.
    *
    * @returns {Object} { html, stylesheets, scrollX, scrollY, viewportWidth, viewportHeight,
    *                     pageWidth, pageHeight, url, title }
@@ -1049,11 +3110,9 @@ export function createCapture(config) {
     // SEC-01: counter snapshot for the ONE aggregate strip warn per pass.
     var sanBefore = sanitizeCountersSnapshot();
 
-    // Reset node ID counter for each full snapshot
-    nextNodeId = 1;
-
     // Clone the body for transformation
     var clone = document.body.cloneNode(true);
+    var cloneToNid = new Map();
 
     // Build a map from original elements to cloned elements for computed style capture.
     // Walk original body and clone in parallel using TreeWalker.
@@ -1080,11 +3139,17 @@ export function createCapture(config) {
 
     // Elements to remove from clone (scripts, noscript, host-flagged elements)
     var toRemove = [];
+    var blockedPairs = [];
 
     for (var i = 0; i < pairs.length; i++) {
       var orig = pairs[i].orig;
       var cl = pairs[i].clone;
       var tag = cl.tagName ? cl.tagName.toLowerCase() : '';
+
+      if (wireDroppedWithAncestors(orig.parentElement)) {
+        reserveNodeId();
+        continue;
+      }
 
       // SEC-01 drop decision routed through the chokepoint: script/noscript
       // (reference parity) plus object/embed (blocklist) -- the decision
@@ -1116,27 +3181,29 @@ export function createCapture(config) {
         continue;
       }
 
-      // Keep iframes live with absolutified src (D-04)
-      if (tag === 'iframe') {
-        assignNodeId(orig, cl);
-        var iframeSrc = cl.getAttribute('src');
-        if (iframeSrc) {
-          cl.setAttribute('src', absolutifyUrl(iframeSrc));
-        }
-        // Security: prevent interaction with embedded content (D-05)
-        var existingStyle = cl.getAttribute('style') || '';
-        cl.setAttribute('style', existingStyle + ';pointer-events:none');
-        // Capture computed styles for sizing/positioning
-        captureComputedStyles(orig, cl);
-        // SEC-01: iframe exits the loop early, so it gets its own
-        // final-wire-value scrub (srcdoc drop + post-absolutification
-        // scheme check on src).
-        sanitizeForWire('element', { orig: orig, clone: cl });
+      // blockSelector: descendants of a blocked root get no nid assignment
+      // (the root swap discards the whole cloned subtree). The blocked root
+      // itself is still tracked, then replaced after this walk by a
+      // dimension-preserving placeholder whose identity travels in nodeIds.
+      if (blockedWithAncestors(orig.parentElement)) {
+        continue;
+      }
+      if (blockMatches(orig)) {
+        assignNodeId(orig, cl, cloneToNid);
+        blockedPairs.push({ orig: orig, clone: cl });
         continue;
       }
 
-      // Assign stable node IDs on both the live DOM and the serialized clone.
-      var nid = assignNodeId(orig, cl);
+      // Frame documents travel only through frames[] sidecars; the shell
+      // iframe remains inert and content-free in the main html.
+      if (tag === 'iframe') {
+        assignNodeId(orig, cl, cloneToNid);
+        prepareIframeWireShell(orig, cl);
+        continue;
+      }
+
+      // Assign stable node identity in the internal mirror and sidecar map.
+      var nid = assignNodeId(orig, cl, cloneToNid);
 
       // Canvas-to-img conversion: capture canvas content before it's lost in the clone
       if (tag === 'canvas') {
@@ -1144,14 +3211,14 @@ export function createCapture(config) {
           var dataUrl = orig.toDataURL('image/png');
           var img = clone.ownerDocument.createElement('img');
           img.src = dataUrl;
-          img.setAttribute(NID_ATTR, nid);
           img.setAttribute('style', 'width:' + (orig.width || 300) + 'px;height:' + (orig.height || 150) + 'px;');
           if (cl.parentNode) {
             cl.parentNode.replaceChild(img, cl);
+            cloneToNid.delete(cl);
+            if (nid) cloneToNid.set(img, nid);
           }
         } catch (e) {
           // Tainted canvas or security error -- leave as empty canvas
-          cl.setAttribute(NID_ATTR, nid);
         }
         continue;
       }
@@ -1178,8 +3245,8 @@ export function createCapture(config) {
         cl.setAttribute('srcset', absolutifySrcset(srcsetVal));
       }
 
-      // Capture computed styles from original element
-      captureComputedStyles(orig, cl);
+      // Capture generated computed styles only in the default compatibility mode.
+      if (styleMode !== 'cssom') captureComputedStyles(orig, cl);
 
       // SEC-01 re-scrub on FINAL wire values: absolutifyUrl normalizes
       // whitespace-obfuscated schemes (the URL parser strips tab/LF/CR), and
@@ -1189,6 +3256,14 @@ export function createCapture(config) {
       sanitizeForWire('element', { orig: orig, clone: cl });
     }
 
+    // Read all blocked live rects together after the pair walk and before
+    // clone writes. This preserves the single-pass layout-read discipline:
+    // dimensions come from the original elements, never detached clones.
+    var blockedRects = [];
+    for (var bp = 0; bp < blockedPairs.length; bp++) {
+      blockedRects.push(readBlockRect(blockedPairs[bp].orig));
+    }
+
     // Remove marked elements
     for (var r = 0; r < toRemove.length; r++) {
       if (toRemove[r].parentNode) {
@@ -1196,39 +3271,33 @@ export function createCapture(config) {
       }
     }
 
-    // Collect stylesheet URLs from document.head
-    var stylesheets = [];
-    var links = document.querySelectorAll('head link[rel="stylesheet"]');
-    for (var s = 0; s < links.length; s++) {
-      var href = links[s].getAttribute('href');
-      if (href) {
-        stylesheets.push(absolutifyUrl(href));
-      }
+    for (var br = 0; br < blockedPairs.length; br++) {
+      replaceWithBlockPlaceholder(blockedPairs[br].orig, blockedPairs[br].clone, blockedRects[br], cloneToNid);
     }
+
+    // Collect stylesheet URLs from document.head
+    var stylesheets = collectStylesheetsFrom(document);
 
     // Collect inline <style> tags from document.head, value-scrubbed
     // through the chokepoint's 'css' dispatch (SEC-01: dangerous url()
     // schemes, expression(), -moz-binding, non-http(s) @import, </style
     // breakout). Benign CSS passes byte-identical.
-    var inlineStyles = [];
-    var styleTags = document.querySelectorAll('head style');
-    for (var st = 0; st < styleTags.length; st++) {
-      var cssText = styleTags[st].textContent;
-      if (cssText && cssText.length < INLINE_STYLE_MAX_BYTES) {
-        inlineStyles.push(sanitizeForWire('css', { css: cssText }).css);
-      }
-    }
+    var inlineStyles = collectInlineStylesFrom(document);
 
+    var documentCssom = styleMode === 'cssom'
+      ? collectCssomStyleSourcesForScope(document, { kind: 'document' }, { root: document })
+      : null;
     var html = clone.innerHTML;
     var truncated = false;
     var missingDescendants = 0;
+    var truncatedNodeIds = new Set();
 
     // Phase 211-02 (STREAM-03 + STREAM-04): single TreeWalker pre-pass on the
-    // LIVE document reads getBoundingClientRect().top per nid-annotated
-    // element into a Map BEFORE any clone mutation. This collapses N forced
-    // layout flushes into 1 (web-perf folklore: read-then-write batching).
-    // The Map is the authoritative position source because the clone is not
-    // in the document tree and getBoundingClientRect() on it returns zeros.
+    // LIVE document reads getBoundingClientRect().top per tracked element into
+    // a Map BEFORE any clone mutation. This collapses N forced layout flushes
+    // into 1 (web-perf folklore: read-then-write batching). The Map is the
+    // authoritative position source because the clone is not in the document
+    // tree and getBoundingClientRect() on it returns zeros.
     var topByNid = new Map();
     try {
       var walker = document.createTreeWalker(
@@ -1236,15 +3305,13 @@ export function createCapture(config) {
         NodeFilter.SHOW_ELEMENT,
         {
           acceptNode: function(el) {
-            return (el.hasAttribute && el.hasAttribute(NID_ATTR))
-              ? NodeFilter.FILTER_ACCEPT
-              : NodeFilter.FILTER_SKIP;
+            return getTrackedNodeId(el) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
           }
         }
       );
       var liveEl;
       while ((liveEl = walker.nextNode())) {
-        var liveNid = liveEl.getAttribute(NID_ATTR);
+        var liveNid = getTrackedNodeId(liveEl);
         if (liveNid) {
           // Single getBoundingClientRect call per annotated element.
           // All reads happen before any clone mutation -> 1 layout flush.
@@ -1253,10 +3320,10 @@ export function createCapture(config) {
       }
     } catch (e) { /* TreeWalker unavailable in this realm; truncation falls back to no-op */ }
 
-    // SNAPSHOT_BUDGET_BYTES is the imported 80%-of-relay-cap budget. The
-    // comparison against html.length (UTF-16 code units, not bytes) is an
-    // inherited reference quirk preserved for parity.
-    if (html.length > SNAPSHOT_BUDGET_BYTES) {
+    // SNAPSHOT_BUDGET_BYTES is the imported 80%-of-relay-cap budget. Compare
+    // UTF-8 wire bytes, not UTF-16 code units, so non-ASCII snapshots respect
+    // the relay's byte cap.
+    if (wireByteLength(html) > SNAPSHOT_BUDGET_BYTES) {
       truncated = true;
       var viewportCutoff = window.innerHeight * TRUNCATION_VIEWPORT_MULTIPLIER;
 
@@ -1265,14 +3332,15 @@ export function createCapture(config) {
       // consult the Map for live top. Removing a parent later in the loop
       // also removes its children, so we walk last-to-first to keep indices
       // stable as we mutate.
-      var cloneEls1 = clone.querySelectorAll('[' + NID_ATTR + ']');
+      var cloneEls1 = cloneElementsWithNodeIds(clone, cloneToNid);
       for (var t = cloneEls1.length - 1; t >= 0; t--) {
-        var nidVal1 = cloneEls1[t].getAttribute(NID_ATTR);
+        var nidVal1 = cloneToNid.get(cloneEls1[t]);
         var top1 = topByNid.get(nidVal1);
         if (typeof top1 === 'number' && top1 > viewportCutoff) {
-          var parent1 = cloneEls1[t].parentNode;
-          if (parent1) {
-            parent1.removeChild(cloneEls1[t]);
+          var placeholder1 = replaceWithTruncatedPlaceholder(cloneEls1[t], cloneToNid);
+          if (placeholder1) {
+            var placeholderNid1 = cloneToNid.get(placeholder1);
+            if (placeholderNid1) truncatedNodeIds.add(String(placeholderNid1));
             missingDescendants++;
           }
         }
@@ -1282,12 +3350,13 @@ export function createCapture(config) {
       // elements in document order and drops complete subtrees until under
       // cap. Only complete subtrees are removed -- never a mid-element cut.
       html = clone.innerHTML;
-      if (html.length > SNAPSHOT_BUDGET_BYTES) {
-        var cloneEls2 = clone.querySelectorAll('[' + NID_ATTR + ']');
-        for (var u = cloneEls2.length - 1; u >= 0 && clone.innerHTML.length > SNAPSHOT_BUDGET_BYTES; u--) {
-          var parent2 = cloneEls2[u].parentNode;
-          if (parent2 && cloneEls2[u].parentNode) {
-            parent2.removeChild(cloneEls2[u]);
+      if (wireByteLength(html) > SNAPSHOT_BUDGET_BYTES) {
+        var cloneEls2 = cloneElementsWithNodeIds(clone, cloneToNid);
+        for (var u = cloneEls2.length - 1; u >= 0 && wireByteLength(clone.innerHTML) > SNAPSHOT_BUDGET_BYTES; u--) {
+          var placeholder2 = replaceWithTruncatedPlaceholder(cloneEls2[u], cloneToNid);
+          if (placeholder2) {
+            var placeholderNid2 = cloneToNid.get(placeholder2);
+            if (placeholderNid2) truncatedNodeIds.add(String(placeholderNid2));
             missingDescendants++;
           }
         }
@@ -1295,11 +3364,17 @@ export function createCapture(config) {
       }
     }
 
+    html = clone.innerHTML;
+
     // SEC-01: one aggregate strip warn per serialization pass (never silent).
     warnIfSanitizeStrips(sanBefore);
 
-    return {
+    var nodeIds = buildNodeIdSidecar(clone, cloneToNid, false);
+    var shadowRoots = collectShadowRootPayloads(document.body, nodeIds, truncatedNodeIds);
+    var frames = collectFramePayloads(document.body, cloneToNid, truncatedNodeIds);
+    var budgetInput = {
       html: html,
+      nodeIds: nodeIds,
       truncated: truncated,
       missingDescendants: missingDescendants,
       stylesheets: stylesheets,
@@ -1319,6 +3394,54 @@ export function createCapture(config) {
       streamSessionId: streamSessionId || '',
       snapshotId: currentSnapshotId || 0
     };
+    if (documentCssom) {
+      budgetInput.styleSources = documentCssom.sources;
+      budgetInput.styleStrategy = documentCssom.strategy;
+    }
+    var budgetedSidecars = pruneSnapshotSidecarsForBudget(
+      budgetInput,
+      shadowRoots,
+      frames,
+      clone,
+      cloneToNid,
+      truncatedNodeIds
+    );
+    html = budgetedSidecars.html;
+    nodeIds = budgetedSidecars.nodeIds;
+    shadowRoots = budgetedSidecars.shadowRoots;
+    frames = budgetedSidecars.frames;
+    truncated = budgetedSidecars.truncated;
+    missingDescendants = budgetedSidecars.missingDescendants;
+
+    var snapshotPayload = {
+      html: html,
+      nodeIds: nodeIds,
+      shadowRoots: shadowRoots,
+      frames: frames,
+      truncated: truncated,
+      missingDescendants: missingDescendants,
+      stylesheets: stylesheets,
+      inlineStyles: inlineStyles,
+      htmlAttrs: serializeShellAttributes(document.documentElement),
+      bodyAttrs: serializeShellAttributes(document.body),
+      htmlStyle: collectComputedStyleText(document.documentElement, SHELL_PROPS),
+      bodyStyle: collectComputedStyleText(document.body, SHELL_PROPS),
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      pageWidth: document.documentElement.scrollWidth,
+      pageHeight: document.documentElement.scrollHeight,
+      url: location.href,
+      title: document.title,
+      streamSessionId: streamSessionId || '',
+      snapshotId: currentSnapshotId || 0
+    };
+    if (documentCssom) {
+      snapshotPayload.styleSources = documentCssom.sources;
+      snapshotPayload.styleStrategy = documentCssom.strategy;
+    }
+    return fitSnapshotPayloadForBudget(snapshotPayload, clone, cloneToNid, truncatedNodeIds);
   }
 
   // =========================================================================
@@ -1326,51 +3449,198 @@ export function createCapture(config) {
   // =========================================================================
 
   /**
-   * Stamp node ids on an added node and its descendants and absolutify URLs,
+   * Mirror node ids for an added node and its descendants, absolutify URLs,
    * then serialize a SCRUBBED detached clone of it (for add ops).
    *
-   * SEC-01: the live node keeps its nid stamping and URL absolutification
-   * exactly as before (reference parity -- the observed page must keep its
-   * event handlers; stripping the live node would change page behavior).
+   * SEC-01: the live node keeps URL absolutification exactly as before
+   * (reference parity -- the observed page must keep its event handlers;
+   * stripping the live node would change page behavior). PhantomStream
+   * identity stays in the internal mirror, not live attributes.
    * The wire HTML is then built from a detached cloneNode(true) routed
    * through sanitizeForWire('subtree') -- the serialized output never comes
    * from the live node directly (threat T-03-06).
    *
    * @param {Element} el - Added element to process
-   * @returns {string} Scrubbed wire HTML ('' when the root itself is a
-   *   forbidden element -- the caller emits no add op for it)
+   * @returns {{html: string, nodeIds: string[]}|null} Scrubbed wire HTML and
+   *   sidecar ids, or null when the root itself is forbidden.
    */
   function processAddedNode(el) {
-    if (el.nodeType !== Node.ELEMENT_NODE) return '';
+    if (el.nodeType !== Node.ELEMENT_NODE) return null;
+    if (wireDroppedWithAncestors(el)) {
+      reserveNodeId();
+      if (isWireDroppedElement(el)) sanitizeCounters.blockedSubtrees++;
+      return null;
+    }
 
-    // Live-node stamping + absolutification (reference parity, unchanged).
-    el.setAttribute(NID_ATTR, String(nextNodeId++));
+    // Live-node identity mirror + absolutification (reference parity for URL
+    // mutation, but no framework identity attributes on the observed page).
+    var rootNid = ensureNodeId(el);
+    if (blockMatches(el)) {
+      var blockedRootPlaceholder = createBlockPlaceholder(
+        document,
+        readBlockRect(el)
+      );
+      sanitizeCounters.blockedSubtrees++;
+      return {
+        html: blockedRootPlaceholder.outerHTML || '',
+        nodeIds: rootNid ? [rootNid] : []
+      };
+    }
+    var computedStyles = styleMode === 'cssom' ? new WeakMap() : collectSubtreeComputedStyles(el);
+    var rootTag = el.tagName ? String(el.tagName).toLowerCase() : '';
+    var baseDoc = el.ownerDocument || document;
     for (var a = 0; a < URL_ATTRS.length; a++) {
+      if (rootTag === 'iframe' && URL_ATTRS[a] === 'src') continue;
       var val = el.getAttribute(URL_ATTRS[a]);
-      if (val) el.setAttribute(URL_ATTRS[a], absolutifyUrl(val));
+      if (val) el.setAttribute(URL_ATTRS[a], absolutifyUrl(val, baseDoc));
     }
     var srcset = el.getAttribute('srcset');
-    if (srcset) el.setAttribute('srcset', absolutifySrcset(srcset));
+    if (srcset) el.setAttribute('srcset', absolutifySrcset(srcset, baseDoc));
 
     // Process descendant elements
     var descendants = el.querySelectorAll('*');
     for (var d = 0; d < descendants.length; d++) {
       var desc = descendants[d];
-      desc.setAttribute(NID_ATTR, String(nextNodeId++));
+      if (wireDroppedWithAncestors(desc)) {
+        reserveNodeId();
+        continue;
+      }
+      if (blockedWithAncestors(desc.parentElement)) continue;
+      ensureNodeId(desc);
+      if (blockMatches(desc)) continue;
+      var descTag = desc.tagName ? String(desc.tagName).toLowerCase() : '';
+      var descDoc = desc.ownerDocument || baseDoc;
       for (var b = 0; b < URL_ATTRS.length; b++) {
+        if (descTag === 'iframe' && URL_ATTRS[b] === 'src') continue;
         var dv = desc.getAttribute(URL_ATTRS[b]);
-        if (dv) desc.setAttribute(URL_ATTRS[b], absolutifyUrl(dv));
+        if (dv) desc.setAttribute(URL_ATTRS[b], absolutifyUrl(dv, descDoc));
       }
       var ds = desc.getAttribute('srcset');
-      if (ds) desc.setAttribute('srcset', absolutifySrcset(ds));
+      if (ds) desc.setAttribute('srcset', absolutifySrcset(ds, descDoc));
     }
 
     // SEC-01: scrub a detached wire clone through the chokepoint and
     // serialize THAT -- never the live node's own markup.
     var wireClone = el.cloneNode(true);
-    var subtreeResult = sanitizeForWire('subtree', { root: wireClone, liveRoot: el });
-    if (subtreeResult && subtreeResult.drop) return '';
-    return wireClone.outerHTML || '';
+    var cloneToNid = new Map();
+    if (rootNid) cloneToNid.set(wireClone, rootNid);
+    var rootStyleText = computedStyles.get(el);
+    if (rootStyleText) appendStyleDeclaration(wireClone, rootStyleText);
+    var liveDescendants = el.querySelectorAll('*');
+    var cloneDescendants = wireClone.querySelectorAll('*');
+    for (var c = 0; c < liveDescendants.length; c++) {
+      var liveNid = getTrackedNodeId(liveDescendants[c]);
+      if (liveNid && cloneDescendants[c]) cloneToNid.set(cloneDescendants[c], liveNid);
+      var descStyleText = computedStyles.get(liveDescendants[c]);
+      if (descStyleText && cloneDescendants[c]) {
+        appendStyleDeclaration(cloneDescendants[c], descStyleText);
+      }
+    }
+    prepareIframeWireShellsForClone(el, wireClone);
+    var subtreeResult = sanitizeForWire('subtree', {
+      root: wireClone,
+      liveRoot: el,
+      cloneToNid: cloneToNid
+    });
+    if (subtreeResult && subtreeResult.drop) return null;
+    var nodeIds = buildNodeIdSidecar(wireClone, cloneToNid, true);
+    var shadowRoots = collectShadowRootPayloads(el, nodeIds);
+    var frames = collectFramePayloads(el, cloneToNid);
+    var addedResult = {
+      html: wireClone.outerHTML || '',
+      nodeIds: nodeIds,
+      shadowRoots: shadowRoots,
+      frames: frames
+    };
+    if (styleMode === 'cssom') {
+      addedResult.styleSources = [];
+      addedResult.styleStrategy = buildStyleStrategy('cssom', []);
+    }
+    return addedResult;
+  }
+
+  function contentFreeSubtreeStatus(status) {
+    return {
+      status: status,
+      nodeIds: [],
+      shadowRoots: [],
+      frames: []
+    };
+  }
+
+  function serializeRequestedSubtree(nid) {
+    var key = String(nid || '');
+    if (!key) return contentFreeSubtreeStatus('untracked');
+    var el = nidToElement.get(key);
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) {
+      return contentFreeSubtreeStatus('untracked');
+    }
+    if (el.isConnected === false) {
+      return contentFreeSubtreeStatus('gone');
+    }
+    if (getTrackedNodeId(el) !== key) {
+      return contentFreeSubtreeStatus('untracked');
+    }
+    if (skipElementWithAncestors(el)) {
+      return contentFreeSubtreeStatus('skipped');
+    }
+    if (blockedWithAncestors(el)) {
+      return contentFreeSubtreeStatus('blocked');
+    }
+    if (wireDroppedWithAncestors(el)) {
+      return contentFreeSubtreeStatus('blocked');
+    }
+
+    var sanBefore = sanitizeCountersSnapshot();
+    var payload = processAddedNode(el);
+    warnIfSanitizeStrips(sanBefore);
+    if (!payload) {
+      return contentFreeSubtreeStatus('blocked');
+    }
+    return {
+      status: 'ok',
+      html: payload.html || '',
+      nodeIds: payload.nodeIds || [],
+      shadowRoots: payload.shadowRoots || [],
+      frames: payload.frames || []
+    };
+  }
+
+  function isCurrentControlPayload(payload) {
+    if (!payload) return false;
+    if (!streamSessionId || !currentSnapshotId) return false;
+    if (String(payload.streamSessionId || '') !== String(streamSessionId)) return false;
+    if (String(payload.snapshotId || '') !== String(currentSnapshotId)) return false;
+    return true;
+  }
+
+  function sendSubtreeResponse(request, result) {
+    var response = Object.assign({
+      requestId: request && request.requestId != null ? String(request.requestId) : '',
+      nid: request && request.nid != null ? String(request.nid) : '',
+      status: result.status || 'untracked',
+      streamSessionId: streamSessionId || '',
+      snapshotId: currentSnapshotId || 0
+    }, result);
+    if (response.status === 'ok' && wireByteLength(response) > RELAY_PER_MESSAGE_LIMIT_BYTES) {
+      response = Object.assign({
+        requestId: request && request.requestId != null ? String(request.requestId) : '',
+        nid: request && request.nid != null ? String(request.nid) : '',
+        streamSessionId: streamSessionId || '',
+        snapshotId: currentSnapshotId || 0
+      }, contentFreeSubtreeStatus('too-large'));
+    }
+    safeSend(STREAM.SUBTREE_RESPONSE, response);
+  }
+
+  function handleControl(type, payload) {
+    if (type !== CONTROL.SUBTREE_REQUEST) return;
+    var request = payload || {};
+    if (!isCurrentControlPayload(request)) {
+      sendSubtreeResponse(request, contentFreeSubtreeStatus('stale'));
+      return;
+    }
+    sendSubtreeResponse(request, serializeRequestedSubtree(request.nid));
   }
 
   /**
@@ -1380,6 +3650,8 @@ export function createCapture(config) {
    */
   function processMutationBatch(mutations) {
     var diffs = [];
+    var removedRoots = [];
+    var shadowHosts = new Map();
     // Dedup registry for childList-derived text ops (fidelity fix, ledger
     // D6): multiple childList records in one batch targeting the same
     // element (e.g. two textContent= writes between flushes) collapse to a
@@ -1390,19 +3662,44 @@ export function createCapture(config) {
 
     for (var i = 0; i < mutations.length; i++) {
       var m = mutations[i];
+      var frameRecord = getMutationFrameRecord(m.target);
+      if (!frameRecord && isInactiveFrameDocumentMutation(m.target)) continue;
 
       // Skip mutations on host-flagged elements (skipElement seam).
       // Ancestor-inclusive, matching the reference's isFsbOverlay closest()
       // semantics: mutations anywhere inside a skipped subtree are dropped.
-      if (m.target && m.target.nodeType === Node.ELEMENT_NODE && skipElementWithAncestors(m.target)) {
+      if (m.target && m.target.nodeType === Node.ELEMENT_NODE &&
+          (skipElementWithAncestors(m.target) || blockedWithAncestors(m.target) || wireDroppedWithAncestors(m.target))) {
         continue;
       }
       if (m.target && m.target.nodeType === Node.TEXT_NODE &&
-          m.target.parentElement && skipElementWithAncestors(m.target.parentElement)) {
+          m.target.parentElement &&
+          (skipElementWithAncestors(m.target.parentElement)
+            || blockedWithAncestors(m.target.parentElement)
+            || wireDroppedWithAncestors(m.target.parentElement))) {
+        continue;
+      }
+
+      var shadowHost = getMutationShadowHost(m.target);
+      if (shadowHost) {
+        if (skipElementWithAncestors(shadowHost) || blockedWithAncestors(shadowHost) || wireDroppedWithAncestors(shadowHost)) {
+          continue;
+        }
+        var shadowHostNid = getTrackedNodeId(shadowHost) || ensureNodeId(shadowHost);
+        if (shadowHostNid) {
+          shadowHosts.set(String(shadowHostNid), {
+            host: shadowHost,
+            frameRecord: frameRecord
+          });
+        }
         continue;
       }
 
       if (m.type === 'childList') {
+        if (styleMode === 'cssom' && m.target && m.target.nodeType === Node.ELEMENT_NODE) {
+          var childListTag = m.target.tagName ? String(m.target.tagName).toLowerCase() : '';
+          if (childListTag === 'style') markStyleOwnerDirty(m.target, 'style-text-mutated');
+        }
         // Bare text-node add/remove detection (fidelity fix, differential
         // ledger D6): el.textContent = '...' REPLACES the text child, which
         // the observer reports as a childList record with a TEXT-node
@@ -1421,26 +3718,31 @@ export function createCapture(config) {
           var added = m.addedNodes[a];
           if (added.nodeType === Node.ELEMENT_NODE) {
             if (skipElementWithAncestors(added)) continue;
+            if (wireDroppedWithAncestors(added.parentElement)) continue;
+            if (blockedWithAncestors(added.parentElement)) continue;
 
-            // Node identity is read through the NID_ATTR protocol constant
-            // (single source of truth, src/protocol/messages.js) -- never a
-            // hardcoded dataset-key mirror that could silently desync.
-            var parentNid = m.target.getAttribute ? m.target.getAttribute(NID_ATTR) : null;
+            var parentNid = getTrackedNodeId(m.target);
             if (!parentNid) continue; // Parent not tracked
 
-            var html = processAddedNode(added);
+            var addedPayload = processAddedNode(added);
             // SEC-01: a forbidden root (script/noscript/object/embed)
             // scrubs to nothing -- emit no add op rather than an empty op.
-            if (!html) continue;
+            if (!addedPayload || !addedPayload.html) continue;
+            observeOpenShadowRoots(added);
+            observeSameOriginFrameDocuments(added);
             var nextSib = added.nextElementSibling;
-            var beforeNid = (nextSib && nextSib.getAttribute) ? nextSib.getAttribute(NID_ATTR) || null : null;
+            var beforeNid = getTrackedNodeId(nextSib);
 
-            diffs.push({
+            var addDiff = scopeFrameDiff({
               op: 'add',
               parentNid: parentNid,
-              html: html,
-              beforeNid: beforeNid
-            });
+              html: addedPayload.html,
+              beforeNid: beforeNid,
+              nodeIds: addedPayload.nodeIds,
+              shadowRoots: addedPayload.shadowRoots || [],
+              frames: addedPayload.frames || []
+            }, frameRecord);
+            diffs.push(boundMutationDiffForBudget(addDiff));
           } else if (added.nodeType === Node.TEXT_NODE || added.nodeType === Node.CDATA_SECTION_NODE) {
             sawBareTextNode = true;
           }
@@ -1450,9 +3752,11 @@ export function createCapture(config) {
         for (var r = 0; r < m.removedNodes.length; r++) {
           var removed = m.removedNodes[r];
           if (removed.nodeType === Node.ELEMENT_NODE) {
-            var nid = removed.getAttribute ? removed.getAttribute(NID_ATTR) : null;
+            if (wireDroppedWithAncestors(removed)) continue;
+            var nid = getTrackedNodeId(removed);
             if (!nid) continue; // Not tracked
-            diffs.push({ op: 'rm', nid: nid });
+            diffs.push(scopeFrameDiff({ op: 'rm', nid: nid }, frameRecord));
+            removedRoots.push(removed);
           } else if (removed.nodeType === Node.TEXT_NODE || removed.nodeType === Node.CDATA_SECTION_NODE) {
             sawBareTextNode = true;
           }
@@ -1476,35 +3780,49 @@ export function createCapture(config) {
         // intact. Residual gap documented in the E2 README entry and the D6
         // ledger rationale.
         if (sawBareTextNode && !m.target.firstElementChild) {
-          var textTargetNid = m.target.getAttribute ? m.target.getAttribute(NID_ATTR) : null;
+          var textTargetNid = getTrackedNodeId(m.target);
           if (textTargetNid && !textOpNids[textTargetNid]) {
             textOpNids[textTargetNid] = true;
-            // SEC-03 masking seam (plan 03-03): identity transform this
-            // plan; owner is the mutation target itself for E2.
+            // SEC-03 masking seam (plan 03-03): maskTextSelector /
+            // maskTextFn applied inside the chokepoint; owner is the
+            // mutation target itself for E2.
             var e2TextResult = sanitizeForWire('text', {
               text: m.target.textContent,
               owner: m.target
             });
             // Same wire shape as the characterData branch: the renderer's
             // DIFF_OP.TEXT applier sets textContent on the nid target.
-            diffs.push({
+            diffs.push(scopeFrameDiff({
               op: 'text',
               nid: textTargetNid,
               text: e2TextResult.text
-            });
+            }, frameRecord));
           }
         }
       } else if (m.type === 'attributes') {
-        var targetNid = m.target.getAttribute ? m.target.getAttribute(NID_ATTR) : null;
+        var attrName = String(m.attributeName || '');
+        var attrNameLower = attrName.toLowerCase();
+        var attrTargetTag = m.target && m.target.tagName ? String(m.target.tagName).toLowerCase() : '';
+        if (styleMode === 'cssom'
+            && attrTargetTag === 'link'
+            && (attrNameLower === 'href' || attrNameLower === 'media' || attrNameLower === 'disabled')) {
+          markStyleOwnerDirty(m.target, 'link-attr-mutated');
+        }
+        var targetNid = getTrackedNodeId(m.target);
         if (!targetNid) continue;
+
+        if (attrTargetTag === 'iframe' && attrNameLower === 'src') {
+          registerFrameLoadListener(m.target, targetNid);
+          continue;
+        }
 
         var attrVal = m.target.getAttribute(m.attributeName);
         // Absolutify URL attributes in mutations
         if (URL_ATTRS.indexOf(m.attributeName) !== -1 && attrVal) {
-          attrVal = absolutifyUrl(attrVal);
+          attrVal = absolutifyUrl(attrVal, m.target.ownerDocument);
         }
         if (m.attributeName === 'srcset' && attrVal) {
-          attrVal = absolutifySrcset(attrVal);
+          attrVal = absolutifySrcset(attrVal, m.target.ownerDocument);
         }
 
         // SEC-01: route through the chokepoint AFTER absolutification so
@@ -1517,32 +3835,191 @@ export function createCapture(config) {
         });
         if (attrResult.drop) continue;
 
-        diffs.push({
+        diffs.push(scopeFrameDiff({
           op: 'attr',
           nid: targetNid,
           attr: m.attributeName,
           val: attrResult.value
-        });
+        }, frameRecord));
       } else if (m.type === 'characterData') {
         var parentEl = m.target.parentElement;
-        var textNid = (parentEl && parentEl.getAttribute) ? parentEl.getAttribute(NID_ATTR) : null;
+        if (styleMode === 'cssom'
+            && parentEl
+            && parentEl.tagName
+            && String(parentEl.tagName).toLowerCase() === 'style') {
+          markStyleOwnerDirty(parentEl, 'style-text-mutated');
+        }
+        var textNid = getTrackedNodeId(parentEl);
         if (!textNid) continue;
 
-        // SEC-03 masking seam (plan 03-03): identity transform this plan.
+        // SEC-03 masking seam (plan 03-03): maskTextSelector / maskTextFn
+        // applied inside the chokepoint; owner is the LIVE parent element.
         var textResult = sanitizeForWire('text', {
           text: m.target.textContent,
           owner: parentEl
         });
 
-        diffs.push({
+        diffs.push(scopeFrameDiff({
           op: 'text',
           nid: textNid,
           text: textResult.text
-        });
+        }, frameRecord));
+      }
+    }
+
+    shadowHosts.forEach(function(entry, hostNid) {
+      var host = entry && entry.host ? entry.host : entry;
+      var payload = serializeOpenShadowRoot(host, hostNid);
+      if (!payload) return;
+      diffs.push(scopeFrameDiff(
+        Object.assign({ op: DIFF_OP.SHADOW_ROOT }, payload),
+        entry && entry.frameRecord ? entry.frameRecord : null
+      ));
+    });
+
+    for (var rr = 0; rr < removedRoots.length; rr++) {
+      if (!removedRoots[rr].isConnected) {
+        forgetSubtreeIdentity(removedRoots[rr]);
       }
     }
 
     return diffs;
+  }
+
+  function mutationPayloadForBudget(diffs, options) {
+    var opts = options || {};
+    var payload = {
+      mutations: diffs || [],
+      streamSessionId: streamSessionId || '',
+      snapshotId: currentSnapshotId || 0
+    };
+    if (opts.includeStaleFlushCount !== false) {
+      payload.staleFlushCount = staleFlushCount;
+    }
+    return payload;
+  }
+
+  function firstPayloadNodeId(nodeIds) {
+    if (!Array.isArray(nodeIds)) return '';
+    for (var i = 0; i < nodeIds.length; i++) {
+      if (nodeIds[i] !== undefined && nodeIds[i] !== null && String(nodeIds[i]) !== '') {
+        return String(nodeIds[i]);
+      }
+    }
+    return '';
+  }
+
+  function boundedAddPlaceholder(diff) {
+    var rootNid = Array.isArray(diff.nodeIds) && diff.nodeIds.length ? diff.nodeIds[0] : '';
+    if (!rootNid) return null;
+    var bounded = Object.assign({
+      op: DIFF_OP.ADD,
+      parentNid: diff.parentNid || '',
+      beforeNid: diff.beforeNid || ''
+    }, truncatedPayloadForNid(document, rootNid));
+    if (diff.frameNid) bounded.frameNid = diff.frameNid;
+    return bounded;
+  }
+
+  function boundedFramePlaceholder(diff) {
+    var frame = diff && diff.frame ? diff.frame : {};
+    var frameNid = String((diff && diff.frameNid) || frame.frameNid || '');
+    if (!frameNid) return null;
+    var rootNid = firstPayloadNodeId(frame.nodeIds) || String(frame.bodyNid || frame.htmlNid || '');
+    if (!rootNid) return null;
+    var placeholder = truncatedPayloadForNid(document, rootNid);
+    var boundedFrame = {
+      frameNid: frameNid,
+      kind: 'same-origin',
+      html: placeholder.html || '',
+      nodeIds: placeholder.nodeIds || [],
+      shadowRoots: [],
+      htmlNid: frame.htmlNid ? String(frame.htmlNid) : '',
+      bodyNid: frame.bodyNid ? String(frame.bodyNid) : '',
+      frames: [],
+      stylesheets: [],
+      inlineStyles: [],
+      htmlAttrs: {},
+      bodyAttrs: {},
+      htmlStyle: '',
+      bodyStyle: '',
+      scrollX: frame.scrollX || 0,
+      scrollY: frame.scrollY || 0,
+      viewportWidth: frame.viewportWidth || 0,
+      viewportHeight: frame.viewportHeight || 0,
+      pageWidth: frame.pageWidth || 0,
+      pageHeight: frame.pageHeight || 0,
+      url: '',
+      title: '',
+      truncated: true,
+      missingDescendants: (frame.missingDescendants || 0) + 1
+    };
+    return { op: DIFF_OP.FRAME, frameNid: frameNid, frame: boundedFrame };
+  }
+
+  function boundedShadowRootPlaceholder(diff) {
+    var hostNid = String((diff && diff.hostNid) || '');
+    var rootNid = firstPayloadNodeId(diff && diff.nodeIds);
+    if (!hostNid || !rootNid) return null;
+    var placeholder = truncatedPayloadForNid(document, rootNid);
+    var bounded = {
+      op: DIFF_OP.SHADOW_ROOT,
+      hostNid: hostNid,
+      mode: diff.mode || 'open',
+      html: placeholder.html || '',
+      nodeIds: placeholder.nodeIds || [],
+      slotAssignment: diff.slotAssignment || 'none',
+      truncated: true,
+      missingDescendants: (diff.missingDescendants || 0) + 1
+    };
+    if (diff.frameNid) bounded.frameNid = diff.frameNid;
+    return bounded;
+  }
+
+  function boundMutationDiffForBudget(diff, options) {
+    if (!diff) return null;
+    if (wireByteLength(mutationPayloadForBudget([diff], options)) <= RELAY_PER_MESSAGE_LIMIT_BYTES) return diff;
+    var bounded = null;
+    if (diff.op === DIFF_OP.ADD) bounded = boundedAddPlaceholder(diff);
+    if (diff.op === DIFF_OP.FRAME) bounded = boundedFramePlaceholder(diff);
+    if (diff.op === DIFF_OP.SHADOW_ROOT) bounded = boundedShadowRootPlaceholder(diff);
+    if (!bounded) return null;
+    return wireByteLength(mutationPayloadForBudget([bounded], options)) <= RELAY_PER_MESSAGE_LIMIT_BYTES
+      ? bounded
+      : null;
+  }
+
+  function sendMutationDiffs(diffs, options) {
+    var chunk = [];
+    for (var i = 0; i < diffs.length; i++) {
+      var originalDiff = diffs[i];
+      var diff = boundMutationDiffForBudget(originalDiff, options);
+      if (!diff) {
+        if (originalDiff) {
+          logger.warn('[DOM Stream] mutation diff dropped over budget', {
+            op: originalDiff && originalDiff.op ? originalDiff.op : ''
+          });
+        }
+        continue;
+      }
+      var singlePayload = mutationPayloadForBudget([diff], options);
+      if (wireByteLength(singlePayload) > RELAY_PER_MESSAGE_LIMIT_BYTES) {
+        logger.warn('[DOM Stream] mutation diff dropped over budget', {
+          op: diff && diff.op ? diff.op : ''
+        });
+        continue;
+      }
+      var nextChunk = chunk.concat([diff]);
+      if (chunk.length && wireByteLength(mutationPayloadForBudget(nextChunk, options)) > RELAY_PER_MESSAGE_LIMIT_BYTES) {
+        safeSend(STREAM.MUTATIONS, mutationPayloadForBudget(chunk, options));
+        chunk = [diff];
+      } else {
+        chunk = nextChunk;
+      }
+    }
+    if (chunk.length) {
+      safeSend(STREAM.MUTATIONS, mutationPayloadForBudget(chunk, options));
+    }
   }
 
   /**
@@ -1550,7 +4027,7 @@ export function createCapture(config) {
    */
   function flushMutations() {
     batchTimer = null;
-    if (pendingMutations.length === 0) return;
+    if (pendingMutations.length === 0 && pendingStyleSourceChanges.size === 0) return;
 
     var batch = pendingMutations;
     pendingMutations = [];
@@ -1559,16 +4036,19 @@ export function createCapture(config) {
     // batch was dropped by the chokepoint (counted + logged, never silent),
     // so the snapshot/compare wraps the empty-diffs early return.
     var sanBefore = sanitizeCountersSnapshot();
-    var diffs = processMutationBatch(batch);
+    var diffs = [];
+    flushingMutations = true;
+    try {
+      diffs = processMutationBatch(batch);
+      reconcileAllKnownStyleScopes();
+      diffs = diffs.concat(drainPendingStyleSourceDiffs());
+    } finally {
+      flushingMutations = false;
+    }
     warnIfSanitizeStrips(sanBefore);
     if (diffs.length === 0) return;
 
-    safeSend(STREAM.MUTATIONS, {
-      mutations: diffs,
-      streamSessionId: streamSessionId || '',
-      snapshotId: currentSnapshotId || 0,
-      staleFlushCount: staleFlushCount
-    });
+    sendMutationDiffs(diffs);
 
     // Phase 211-02 STREAM-02: stale counter resets on successful drain.
     // Reset is flush-based (not ack-based) per D-14 / STREAM-FUTURE-01 deferral.
@@ -1588,6 +4068,8 @@ export function createCapture(config) {
     }
 
     pendingMutations = [];
+    observedShadowRoots = new WeakSet();
+    clearObservedFrameDocuments();
 
     mutationObserver = new MutationObserver(function(mutations) {
       // Accumulate mutations
@@ -1595,18 +4077,22 @@ export function createCapture(config) {
         pendingMutations.push(mutations[i]);
       }
 
-      // Batch flush synced to browser paint cycle via rAF (FIDELITY-03)
-      if (batchTimer) cancelAnimationFrame(batchTimer);
-      batchTimer = requestAnimationFrame(flushMutations);
+      // Batch flush synced to browser paint cycle via rAF (FIDELITY-03).
+      scheduleMutationFlush();
     });
 
-    mutationObserver.observe(document.body, {
-      childList: true,
-      attributes: true,
-      characterData: true,
-      subtree: true,
-      attributeOldValue: true
-    });
+    mutationObserver.observe(document.body, mutationObserverOptions());
+    if (styleMode === 'cssom' && document.head) {
+      try {
+        mutationObserver.observe(document.head, mutationObserverOptions());
+      } catch (err) {
+        logger.warn('[DOM Stream] cssom hook unavailable', { reason: 'cssom-hook-unavailable' });
+      }
+    }
+    observeOpenShadowRoots(document.body);
+    observeSameOriginFrameDocuments(document.body);
+    wrapAttachShadow();
+    patchCssStyleSheetMethods();
 
     // Phase 211-02 STREAM-01: 5s capture-side self-watchdog (trip wire).
     // Detects stuck mutation queues without involving the host. Uses a
@@ -1642,6 +4128,8 @@ export function createCapture(config) {
    * Stop the MutationObserver stream and flush any pending mutations.
    */
   function stopMutationStream() {
+    stopValueCapture();
+
     if (batchTimer) {
       cancelAnimationFrame(batchTimer);
       batchTimer = null;
@@ -1656,6 +4144,9 @@ export function createCapture(config) {
       mutationObserver.disconnect();
       mutationObserver = null;
     }
+    observedShadowRoots = new WeakSet();
+    restoreAttachShadow();
+    restoreCssStyleSheetMethods();
 
     // Flush any remaining mutations.
     // PARITY: the stop-path payload intentionally omits staleFlushCount,
@@ -1666,17 +4157,22 @@ export function createCapture(config) {
       pendingMutations = [];
       // SEC-01: same aggregate strip-warn discipline as flushMutations.
       var sanBefore = sanitizeCountersSnapshot();
-      var diffs = processMutationBatch(batch);
+      flushingMutations = true;
+      var diffs = [];
+      try {
+        diffs = processMutationBatch(batch);
+        reconcileAllKnownStyleScopes();
+        diffs = diffs.concat(drainPendingStyleSourceDiffs());
+      } finally {
+        flushingMutations = false;
+      }
       warnIfSanitizeStrips(sanBefore);
       if (diffs.length > 0) {
-        safeSend(STREAM.MUTATIONS, {
-          mutations: diffs,
-          streamSessionId: streamSessionId || '',
-          snapshotId: currentSnapshotId || 0
-        });
+        sendMutationDiffs(diffs, { includeStaleFlushCount: false });
       }
     }
 
+    clearObservedFrameDocuments();
     logger.info('[DOM Stream] MutationObserver stopped');
   }
 
@@ -1802,9 +4298,12 @@ export function createCapture(config) {
       stopScrollTracker();
     }
     beginStreamSession();
+    clearNodeMirror();
+    nextNodeId = 1;
     var snapshot = serializeDOM();
     safeSend(STREAM.SNAPSHOT, snapshot);
     startMutationStream();
+    startValueCapture();
     startScrollTracker();
     streaming = true;
     broadcastOverlayState(true);
@@ -1819,6 +4318,7 @@ export function createCapture(config) {
     stopMutationStream();
     stopScrollTracker();
     streaming = false;
+    clearNodeMirror();
     safeFlush();
   }
 
@@ -1845,8 +4345,31 @@ export function createCapture(config) {
   function resume() {
     logger.info('[DOM Stream] Resume requested');
     startMutationStream();
+    startValueCapture();
     startScrollTracker();
     streaming = true;
+  }
+
+  function getNodeId(element) {
+    if (!streaming) return null;
+    if (!element || element.nodeType !== Node.ELEMENT_NODE) return null;
+    if (element.isConnected === false && !getMutationFrameRecord(element)) return null;
+    return getTrackedNodeId(element);
+  }
+
+  function getObservedFrameDocuments() {
+    if (!streaming) return [];
+    var roots = [];
+    observedFrameDocuments.forEach(function(record) {
+      if (!record || !record.document) return;
+      roots.push({
+        iframe: record.iframe,
+        document: record.document,
+        root: record.root || record.document,
+        frameNid: record.frameNid
+      });
+    });
+    return roots;
   }
 
   // Readiness signal. The reference pinged its host once at script-load
@@ -1862,6 +4385,9 @@ export function createCapture(config) {
     start: start,
     stop: stop,
     pause: pause,
-    resume: resume
+    resume: resume,
+    handleControl: handleControl,
+    getNodeId: getNodeId,
+    getObservedFrameDocuments: getObservedFrameDocuments
   };
 }

@@ -4,15 +4,23 @@ This document describes the system as it shipped inside FSB (milestone v0.9.9.1 
 Stream" plus the reliability hardening of phases 211 and 276). File references point at the
 verbatim copies under `reference/`.
 
+For runnable package setup paths, see [QUICKSTARTS.md](QUICKSTARTS.md).
+
 ## 1. Overview
 
 PhantomStream mirrors a live browser tab to a remote viewer by streaming the page as
 **structured DOM data** rather than pixels:
 
-1. **Snapshot** — a one-time, style-inlined serialization of `document.body`, rebuilt by the
-   viewer into a sandboxed iframe.
+1. **Snapshot** — a one-time serialization of `document.body`, rebuilt by the
+   viewer into a sandboxed iframe. Default `styleMode: 'computed'` inlines
+   curated computed styles; opt-in `styleMode: 'cssom'` transports scoped
+   `styleSources[]` and `styleStrategy`. Standalone Phase 8 extends the
+   snapshot with `nodeIds`, `shadowRoots[]`, and `frames[]` sidecars for
+   scoped identity.
 2. **Diffs** — incremental MutationObserver batches (`add` / `rm` / `attr` / `text` ops)
-   addressed by stable node IDs, applied surgically to the mirror.
+   addressed by stable node IDs, applied surgically to the mirror. Phase 8 also
+   streams `shadow-root` replacement ops and narrow `value` ops; Phase 9 adds
+   CSSOM `style-source` ops.
 3. **Side channels** — scroll position, automation overlays (action glow, progress), and
    native dialog mirroring.
 4. **Reverse path** — remote control: clicks, typing, and scrolling performed on the mirror
@@ -30,10 +38,20 @@ dialogs, watchdog #1         watchdog #2                                  addres
 
 ### 2.1 Node identity
 
-Every serialized element is stamped with `data-fsb-nid`, a monotonically increasing string
-ID, applied to **both** the live DOM and the serialized clone (`assignNodeId`). This is the
-keystone of the whole system: every diff op, overlay rect, and remote-control action
-addresses nodes by nid. Nodes added after the snapshot get nids in `processAddedNode`.
+The original FSB reference design stamped every serialized element with
+`data-fsb-nid`, a monotonically increasing string ID, on **both** the live DOM
+and the serialized clone (`assignNodeId`). That attribute was the original
+addressing keystone: every diff op, overlay rect, and remote-control action
+addressed nodes by nid, and nodes added after the snapshot got nids in
+`processAddedNode`.
+
+The standalone framework design after Phase 7 keeps the same opaque nid wire
+contract but removes live-page identity mutation. Capture owns identity in an
+internal `WeakMap<Element, string>` plus reverse lookup, emits `nodeIds`
+sidecars on snapshots and add ops, and exposes `getNodeId(element)` for trusted
+host code. The renderer rebuilds a private `Map<nid, Node>` from `nodeIds`
+after sanitization, so page-owned `data-fsb-nid` attributes remain ordinary
+page data rather than PhantomStream identity.
 
 ### 2.2 Full snapshot (`serializeDOM`)
 
@@ -43,7 +61,12 @@ addresses nodes by nid. Nodes added after the snapshot get nids in `processAdded
 - Absolutifies URL attributes (`src`, `href`, `action`, `poster`, `data`, `srcset`,
   SVG `xlink:href`) against `document.baseURI`.
 - Converts `<canvas>` to a data-URL `<img>` (tainted canvases degrade gracefully).
-- Keeps iframes live with absolutified `src` but neuters them with `pointer-events:none`.
+- In the FSB reference, iframes stayed live with absolutified `src` and
+  `pointer-events:none`. In the standalone Phase 8 framework, same-origin
+  iframes serialize as scoped `frames[]` sidecars keyed by `frameNid`, while
+  cross-origin iframe content remains a content-free placeholder.
+- Open shadow roots serialize as `shadowRoots[]` sidecars keyed by `hostNid`.
+  Shadow slots remain slots; slotted light-DOM children are not duplicated.
 - Captures **curated computed styles**: ~85 visual-fidelity CSS properties
   (`CURATED_PROPS`) inlined as a `style` attribute, with common default values elided
   (`STYLE_DEFAULTS`). Iterating all 300+ computed properties made a YouTube serialize take
@@ -51,7 +74,9 @@ addresses nodes by nid. Nodes added after the snapshot get nids in `processAdded
 - Captures `<html>`/`<body>` attributes and a smaller shell style set (`SHELL_PROPS`) so
   the viewer can reproduce page-level background/typography.
 - Collects stylesheet URLs (`<link rel=stylesheet>`) and inline `<style>` text (< 500 KB
-  each) from `<head>` for the viewer to re-link.
+  each) from `<head>` for the viewer to re-link. In opt-in CSSOM mode this expands
+  to scoped `styleSources[]` for document, open shadow root, and same-origin frame
+  stylesheets instead of generated computed inline declarations.
 
 ### 2.3 Snapshot size budget
 
@@ -78,16 +103,51 @@ matched to the page's paint cadence. `processMutationBatch` converts records to 
 | `rm` | `nid` | remove subtree |
 | `attr` | `nid`, `attr`, `val` | attribute change (URLs re-absolutified) |
 | `text` | `nid`, `text` | character data change (addressed via parent nid) |
+| `shadow-root` | `hostNid`, `html`, `nodeIds` | replace a mirrored open shadow root after sanitization |
+| `value` | `nid`, `value` / `checked` / `selectedValues` | apply property-only form value drift |
+| `style-source` | `action`, `sourceId`, `scope`, `source` | upsert, replace, or remove a scoped CSSOM source |
 
 Mutations on untracked nodes (no nid) and on the host's own overlay are skipped.
+Open shadow roots and same-origin frame documents are observed explicitly, so
+their mutations do not depend on `document.body` observer reachability.
+Newly added subtrees carry curated computed styles in add-op HTML, collected in
+a read pass before detached clone mutation.
 
-### 2.5 Watchdog #1 (content script)
+### 2.5 CSSOM style mode
+
+Phase 9 adds `styleMode: 'computed' | 'cssom'`. The default remains computed
+style inlining for backward-compatible visual fidelity. CSSOM mode serializes
+document, open-shadow-root, and same-origin-frame stylesheets as sanitized
+`styleSources[]` entries with `styleStrategy` diagnostics. `sourceId` and
+`scope` make stylesheet sources addressable without CSS selectors.
+
+Fallbacks are explicit: `cssRules-blocked`, `href-relinked`, `adapter-fetch`,
+or `computed-fallback`. `fetchStylesheet({ href, scope, ownerKind })` is an
+optional host hook; PhantomStream does not perform hidden network fetches.
+Live stylesheet edits stream as `DIFF_OP.STYLE_SOURCE` with
+`action: 'upsert' | 'replace' | 'remove'`. CSSOM hook failures report
+`cssom-hook-unavailable` and fall back to a fresh snapshot; unreconciled style
+owners use `cssom-style-source-stale`, and renderer misses surface as
+`stale-style-scope`.
+
+### 2.6 Subtree recovery
+
+Standalone Phase 8 makes truncation interactive instead of purely passive.
+Dropped snapshot roots are replaced by `data-phantomstream-truncated="true"`
+markers whose nids stay in `nodeIds`. The viewer or host can request a single
+nid with `CONTROL.SUBTREE_REQUEST`; capture answers with
+`STREAM.SUBTREE_RESPONSE` carrying either content-free miss status or an `ok`
+payload that reuses add-op serialization: sanitized HTML, masking, URL
+absolutification, curated styles, `nodeIds`, `shadowRoots[]`, and `frames[]`.
+Requests are session/snapshot checked and are bounded by renderer-side latches.
+
+### 2.7 Watchdog #1 (content script)
 
 A 5 s self-watchdog (a `setTimeout` chain, not `setInterval`, so cadence resets on every
 drain) force-flushes a stuck mutation queue and increments `staleFlushCount`, which rides
 the next flush envelope so the host can observe rescue frequency.
 
-### 2.6 Side channels
+### 2.8 Side channels
 
 - **Scroll** — passive listener, throttled to 1 event / 200 ms.
 - **Overlay** — broadcasts the automation action-glow rect and progress card state,
@@ -96,11 +156,12 @@ the next flush envelope so the host can observe rescue frequency.
   `prompt` to dispatch `CustomEvent`s before/after the native call; the content script
   relays open/closed states so the viewer can show styled dialog cards.
 
-### 2.7 Lifecycle & readiness
+### 2.9 Lifecycle & readiness
 
 Control messages: `domStreamStart` (fresh session + snapshot + observers),
-`domStreamStop`, `domStreamPause` (observers off, session retained), `domStreamResume`
-(fresh session + snapshot), `pingDomStream` (synchronous readiness probe).
+`domStreamStop`, `domStreamPause` (observers off, session retained),
+`domStreamResume` (observers re-armed, same session/snapshot, no snapshot),
+`pingDomStream` (synchronous readiness probe).
 
 Auto-start chain: module load → `domStreamReady` ping → host issues stream start. If the
 viewer's start request arrives before the module loads (slow pages), the host parks it in
@@ -141,9 +202,20 @@ script.
 - **Snapshot** (`handleDOMSnapshot`): rebuilds a full HTML document — stylesheet links,
   inline styles, captured shell attributes — and writes it to a preview iframe via
   `srcdoc`. On load, scales the page to the stage and applies the captured scroll offset.
-- **Diff apply**: each op resolves its target via
-  `doc.querySelector('[data-fsb-nid="…"]')`; misses are recorded (a consequence of
-  truncation or lost messages) and degrade to awaiting the next snapshot.
+- **Diff apply**: the FSB reference resolved each op with
+  `doc.querySelector('[data-fsb-nid="…"]')`. In the standalone framework after
+  Phase 7, snapshots/add ops carry `nodeIds` sidecars and the viewer resolves
+  nids through an internal `Map<nid, Node>` index. Misses are still recorded
+  (a consequence of truncation or lost messages) and degrade to awaiting the
+  next snapshot.
+- **Shadow/frame reconstruction**: Phase 8 installs real open mirror shadow
+  roots from sanitized sidecars and reconstructs same-origin frame payloads as
+  inert nested `srcdoc` documents. Cross-origin iframe content is rendered only
+  as a safe placeholder label; no origin bypass is attempted.
+- **Value/subtree handling**: `DIFF_OP.VALUE` updates form-control properties
+  through the identity index. `requestSubtree()` sends bounded
+  `CONTROL.SUBTREE_REQUEST` frames and applies current `STREAM.SUBTREE_RESPONSE`
+  payloads only after render-side sanitization.
 - **Layout modes**: inline, maximized, picture-in-picture (drag-to-reposition), fullscreen
   (mouse-tracked exit overlay), with viewport-adaptive scale math per mode.
 - **Overlays**: action glow rect, progress card, and dialog cards positioned in mirror
@@ -166,26 +238,36 @@ script.
 | Forced layout thrash during truncation | single read-pass into a Map before any write |
 | Heavy pages (300+ computed props/element) | curated 85-property style list + default elision |
 
-## 6. Known limitations (inherited; targets for the standalone framework)
+## 6. Resolved limitations and residual boundaries
 
-These are honest weaknesses of the shipped design, documented here because fixing them is
-part of this repository's roadmap (and the paper's discussion section):
+These were weaknesses of the shipped/reference design. The standalone package
+has resolved the high-value framework gaps; the remaining items below are
+explicit browser/security boundaries or intentional default-mode tradeoffs:
 
-1. **Frozen computed styles.** Inlined styles are snapshot-time state. Class-flip diffs
-   (`attr` ops) cannot override stale inline styles in the mirror, so style-dynamic UI
-   drifts until the next full snapshot. A stylesheet-centric capture (CSSOM /
-   `adoptedStyleSheets`) would fix this and shrink payloads enough to retire most of the
-   truncation machinery.
-2. **Added nodes carry no computed styles.** `processAddedNode` assigns nids and fixes URLs
-   but does not capture styles, so post-snapshot content renders inconsistently with
-   snapshot-era siblings.
-3. **nid stamping mutates the observed page.** `data-fsb-nid` is visible to the page's own
-   observers/selectors; a WeakMap-based identity scheme would be invisible but requires a
-   different wire-addressing strategy.
-4. **Truncation recovery is passive.** Diff targets inside dropped subtrees miss until the
-   next snapshot; an on-demand subtree fetch would close the gap.
-5. **Sanitization gap.** `on*` event-handler attributes are only stripped for `<html>`/
-   `<body>` shells, not in the main element pass or `processAddedNode` — the viewer iframe
-   must be sandboxed without `allow-scripts`, and the framework should sanitize on both
-   ends.
-6. **Shadow DOM, `<video>`/`<audio>`, and cross-origin iframe content are not mirrored.**
+1. **Computed mode still freezes styles by design.** In default computed mode,
+   inlined styles are snapshot-time state. Class-flip diffs (`attr` ops) can
+   still drift until the next full snapshot. Opt-in CSSOM mode addresses
+   stylesheet-driven drift for readable, safely re-linkable, or host-fetched
+   sources, with explicit fallback reasons when a source cannot be represented.
+2. **Added-node computed styles resolved in standalone Phase 8.** Add ops now
+   carry curated computed styles using the same default-elision discipline as
+   snapshots. CSSOM mode remains opt-in rather than replacing the default.
+3. **Former nid stamping limitation resolved in standalone Phase 7.** The
+   reference `data-fsb-nid` live-page mutation is now replaced by WeakMap
+   capture identity and `nodeIds` sidecars in the standalone framework. This
+   entry remains here as design history for the FSB reference behavior, not as
+   a current framework limitation.
+4. **Truncation recovery resolved in standalone Phase 8 for explicit requests.**
+   Diff targets inside dropped subtrees no longer have to wait for the next full
+   snapshot when the host/viewer calls `requestSubtree`. Recovery is still
+   bounded and explicit; PhantomStream does not automatically crawl every miss.
+5. **Blocklist sanitizer coverage is intentionally conservative.** Capture and renderer
+   chokepoints now strip event handlers, dangerous URL schemes, `srcdoc`,
+   object/embed/script-like subtrees, and hostile CSS before mirrored content is
+   transported or inserted. This is still a framework-maintained blocklist, so the
+   viewer iframe remains sandboxed without `allow-scripts` as defense in depth.
+6. **Open shadow DOM and same-origin iframes resolved in standalone Phase 8.**
+   Remaining limits are closed shadow roots, cross-origin iframe content,
+   and `<video>`/`<audio>` media pixels/streams. Closed shadow roots and
+   cross-origin iframe content are browser security boundaries; the framework
+   documents them as non-captured content rather than faking or bypassing them.

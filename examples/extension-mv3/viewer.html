@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhantomStream Extension MV3 Viewer</title>
+<link rel="stylesheet" href="/extension/demo.css">
+</head>
+<body>
+<main class="demo-shell viewer-shell">
+  <section class="panel viewer-panel">
+    <p class="eyebrow">EXTENSION VIEWER</p>
+    <h1>PhantomStream Extension MV3 Viewer</h1>
+    <dl class="metrics">
+      <div><dt>Lifecycle</dt><dd id="lifecycle">connecting</dd></div>
+      <div><dt>Health</dt><dd id="health">0 frames</dd></div>
+      <div><dt>Room</dt><dd id="room">-</dd></div>
+    </dl>
+    <div id="mirror" class="mirror" aria-label="Mirrored source page"></div>
+  </section>
+</main>
+<script type="module">
+import { createViewer } from '/src/renderer/index.js';
+import { createWebSocketTransport } from '/src/transport/websocket.js';
+
+var params = new URL(window.location.href).searchParams;
+var wsUrl = params.get('ws');
+var room = params.get('room') || '';
+document.getElementById('room').textContent = room.slice(0, 8) + '...';
+
+var transport = createWebSocketTransport({ url: wsUrl });
+var viewer = createViewer({
+  container: document.getElementById('mirror'),
+  transport: transport,
+  requestResync: function (reason) {
+    transport.send('dash:dom-stream-start', { reason: reason || 'extension-demo-viewer-resync' });
+  }
+});
+
+function sumCounts(map) {
+  var total = 0;
+  map = map || {};
+  Object.keys(map).forEach(function (key) { total += map[key] || 0; });
+  return total;
+}
+
+viewer.on('state', function (event) {
+  document.getElementById('lifecycle').textContent = event.state;
+});
+viewer.on('health', function (health) {
+  document.getElementById('health').textContent = String(sumCounts(health.receivedByType)) + ' frames';
+});
+</script>
+</body>
+</html>

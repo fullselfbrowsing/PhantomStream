@@ -23,7 +23,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { createCapture } from '../src/capture/index.js';
-import { STREAM, DIFF_OP, NID_ATTR } from '../src/protocol/messages.js';
+import { STREAM, DIFF_OP } from '../src/protocol/messages.js';
 
 // Complete global set the capture core dereferences (audited from the
 // reference source in 01-RESEARCH.md Pattern 2).
@@ -123,7 +123,7 @@ function silentLogger() {
   return { info() {}, warn() {}, error() {} };
 }
 
-test('root-only skipElement predicate excludes the whole host subtree from the snapshot with no nid stamping', async () => {
+test('root-only skipElement predicate excludes the whole host subtree from the snapshot with no identity tracking', async () => {
   const env = setupEnv(BODY_HTML);
   try {
     const transport = createLoopbackTransport();
@@ -150,15 +150,15 @@ test('root-only skipElement predicate excludes the whole host subtree from the s
     assert.ok(html.includes('tracked text'), 'snapshot keeps tracked page content');
 
     // Reference parity (dom-stream.js closest() semantics): skipped subtrees
-    // receive NO node-id assignment on the LIVE elements either.
-    assert.equal(env.document.getElementById('host-overlay').hasAttribute(NID_ATTR), false,
-      'skipped root has no nid stamped');
-    assert.equal(env.document.getElementById('host-child').hasAttribute(NID_ATTR), false,
-      'skipped descendant has no nid stamped');
-    assert.equal(env.document.getElementById('host-deep').hasAttribute(NID_ATTR), false,
-      'deep skipped descendant has no nid stamped');
-    assert.equal(env.document.getElementById('content').hasAttribute(NID_ATTR), true,
-      'tracked content IS nid-stamped');
+    // receive NO node-id assignment in the internal mirror either.
+    assert.equal(env.capture.getNodeId(env.document.getElementById('host-overlay')), null,
+      'skipped root has no tracked nid');
+    assert.equal(env.capture.getNodeId(env.document.getElementById('host-child')), null,
+      'skipped descendant has no tracked nid');
+    assert.equal(env.capture.getNodeId(env.document.getElementById('host-deep')), null,
+      'deep skipped descendant has no tracked nid');
+    assert.equal(typeof env.capture.getNodeId(env.document.getElementById('content')), 'string',
+      'tracked content has an internal nid');
   } finally {
     env.teardown();
   }
@@ -237,8 +237,8 @@ test('a throwing skipElement predicate is contained: logged, never thrown, and t
     assert.ok(errorsAfterStart >= 1, 'serialization-path predicate errors were routed to the logger');
 
     // The poison subtree is treated as not-skipped (containment fallback),
-    // so it stays captured and nid-stamped.
-    assert.equal(env.document.getElementById('poison-child').hasAttribute(NID_ATTR), true,
+    // so it stays captured and tracked.
+    assert.equal(typeof env.capture.getNodeId(env.document.getElementById('poison-child')), 'string',
       'contained-error elements remain tracked');
 
     // One batch carrying a poison-walk op AND an innocent op: before the

@@ -26,8 +26,10 @@
 //                                        layer; defense chain: capture
 //                                        chokepoint + post-parse scrub +
 //                                        CSP meta + sandbox (03-02)
-//   3. stylesheet hrefs               -- double quotes escaped only
-//   4. html/body shell attrs + styles -- escapeAttribute (full escaping)
+//   3. stylesheet hrefs               -- dangerous schemes filtered, then
+//                                        double quotes escaped
+//   4. html/body shell attrs + styles -- attrs escapeAttribute; styleText
+//                                        scrubCssText + escapeAttribute
 //   5. viewportWidth                  -- numerically coerced
 //                                        (parseInt(_, 10) || 1920), never
 //                                        interpolated raw: the typed
@@ -59,6 +61,38 @@ var CSP_META = '<meta http-equiv="Content-Security-Policy" content="'
   + 'font-src http: https: data:'
   + '">';
 
+function hasDangerousStylesheetUrl(value) {
+  if (!value || typeof value !== 'string') return false;
+  var compact = value.replace(/[\u0000-\u0020]+/g, '').toLowerCase();
+  return compact.indexOf('javascript:') === 0
+    || compact.indexOf('vbscript:') === 0
+    || compact.indexOf('data:text/html') === 0;
+}
+
+function escapeStyleSourceId(value) {
+  return escapeAttribute(value);
+}
+
+function styleSourceTagsForDocument(styleSources) {
+  var sources = Array.isArray(styleSources) ? styleSources.slice() : [];
+  sources.sort(function (a, b) {
+    return (a && typeof a.order === 'number' ? a.order : 0)
+      - (b && typeof b.order === 'number' ? b.order : 0);
+  });
+  return sources.filter(function (source) {
+    return source && source.scope && source.scope.kind === 'document';
+  }).map(function (source) {
+    var sourceId = escapeStyleSourceId(source.sourceId || '');
+    if (source.href && !hasDangerousStylesheetUrl(source.href)) {
+      return '<link rel="stylesheet" data-ps-style-source-id="' + sourceId +
+        '" href="' + String(source.href).replace(/"/g, '&quot;') + '">';
+    }
+    return '<style data-ps-style-source-id="' + sourceId + '">' +
+      scrubCssText(source.cssText || '') +
+      '</style>';
+  }).join('\n');
+}
+
 /**
  * Escape a value for inclusion inside a double-quoted HTML attribute.
  * Renamed port of escapePreviewAttribute (dashboard.js:2671-2677): null and
@@ -80,8 +114,8 @@ export function escapeAttribute(value) {
  * dashboard.js:2679-2694: names are lowercased and must match
  * /^[a-z][a-z0-9_:.~-]*$/; 'style' and any on*-prefixed name are dropped
  * (shell event-handler attributes never reach the mirror); null/undefined
- * values are dropped; trimmed styleText is appended last as style="...".
- * Values are escaped via escapeAttribute.
+ * values are dropped; trimmed styleText is scrubbed and appended last as
+ * style="...". Values are escaped via escapeAttribute.
  * @param {Object|null|undefined} attrs     Captured shell attributes (name -> value)
  * @param {string|null|undefined} styleText Shell computed style text
  * @returns {string} ' name="value" ...' (leading-space-prefixed) or ''
@@ -98,7 +132,7 @@ export function buildShellAttributeString(attrs, styleText) {
       parts.push(name + '="' + escapeAttribute(value) + '"');
     });
   }
-  var style = String(styleText || '').trim();
+  var style = scrubCssText(String(styleText || '')).trim();
   if (style) parts.push('style="' + escapeAttribute(style) + '"');
   return parts.length ? ' ' + parts.join(' ') : '';
 }
@@ -122,9 +156,11 @@ export function buildShellAttributeString(attrs, styleText) {
 export function buildSnapshotHtml(payload) {
   var p = payload || {};
 
-  var stylesheetLinks = (p.stylesheets || []).map(function (url) {
-    return '<link rel="stylesheet" href="' + url.replace(/"/g, '&quot;') + '">';
-  }).join('\n');
+  var stylesheetLinks = (p.stylesheets || [])
+    .filter(function (url) { return !hasDangerousStylesheetUrl(url); })
+    .map(function (url) {
+      return '<link rel="stylesheet" href="' + url.replace(/"/g, '&quot;') + '">';
+    }).join('\n');
 
   var inlineStyleTags = (p.inlineStyles || []).map(function (css) {
     // CSS scrub at assembly (03-02): pure string pass; the scrub also
@@ -132,6 +168,7 @@ export function buildSnapshotHtml(payload) {
     // break out of this tag.
     return '<style>' + scrubCssText(css) + '</style>';
   }).join('\n');
+  var cssomStyleTags = styleSourceTagsForDocument(p.styleSources || []);
 
   var htmlAttrs = buildShellAttributeString(p.htmlAttrs, p.htmlStyle);
   var bodyAttrs = buildShellAttributeString(p.bodyAttrs, p.bodyStyle);
@@ -142,6 +179,24 @@ export function buildSnapshotHtml(payload) {
     '<meta name="viewport" content="width=' + (parseInt(p.viewportWidth, 10) || 1920) + '">' +
     stylesheetLinks +
     inlineStyleTags +
+    cssomStyleTags +
     '<style>body { margin: 0; overflow: hidden; } *::selection { background: transparent; } ::-webkit-scrollbar { display: none; }</style>' +
     '</head><body' + bodyAttrs + '>' + (p.html || '') + '</body></html>';
+}
+
+export function buildFramePlaceholderHtml(frame) {
+  var f = frame || {};
+  var label = escapeAttribute(f.label || 'Cross-origin iframe');
+  var origin = escapeAttribute(f.origin || '');
+  var src = escapeAttribute(f.src || '');
+  var meta = '';
+  if (origin) meta += '<p>Origin: ' + origin + '</p>';
+  if (src) meta += '<p>Source: ' + src + '</p>';
+  return '<!DOCTYPE html><html><head>' + CSP_META + '<meta charset="UTF-8">' +
+    '<style>body{margin:0;font:13px system-ui,sans-serif;color:#30333a;background:#f6f7f9;}' +
+    '.ps-frame-placeholder{box-sizing:border-box;min-height:100vh;display:flex;flex-direction:column;gap:6px;' +
+    'justify-content:center;align-items:center;text-align:center;border:1px dashed #9aa3af;padding:16px;}' +
+    '.ps-frame-placeholder strong{font-size:14px;} .ps-frame-placeholder p{margin:0;color:#5f6673;word-break:break-word;}</style>' +
+    '</head><body><div class="ps-frame-placeholder" role="note"><strong>' + label + '</strong>' +
+    meta + '</div></body></html>';
 }

@@ -1,0 +1,467 @@
+// Phase 08 RED coverage: iframe capture must mirror same-origin frame
+// documents and emit content-free placeholders for cross-origin frames.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { JSDOM, VirtualConsole } from 'jsdom';
+import { createCapture } from '../src/capture/index.js';
+import { RELAY_PER_MESSAGE_LIMIT_BYTES, SNAPSHOT_BUDGET_BYTES } from '../src/protocol/constants.js';
+import { STREAM, DIFF_OP } from '../src/protocol/messages.js';
+
+const AUDITED_GLOBALS = [
+  'window', 'document', 'Node', 'NodeFilter', 'MutationObserver',
+  'requestAnimationFrame', 'cancelAnimationFrame', 'CustomEvent',
+  'ShadowRoot', 'location', 'getComputedStyle', 'URL',
+];
+
+function setupEnv(bodyHtml) {
+  const dom = new JSDOM(
+    '<!DOCTYPE html><html><head><title>iframe fixture</title></head><body>'
+      + bodyHtml + '</body></html>',
+    {
+      url: 'https://fixture.test/page',
+      pretendToBeVisual: true,
+      virtualConsole: new VirtualConsole(),
+    }
+  );
+  const w = dom.window;
+  const prior = new Map();
+  for (const key of AUDITED_GLOBALS) {
+    prior.set(key, {
+      present: Object.prototype.hasOwnProperty.call(globalThis, key),
+      value: globalThis[key],
+    });
+    globalThis[key] = key === 'window' ? w : w[key];
+  }
+
+  const env = {
+    dom,
+    window: w,
+    document: w.document,
+    capture: null,
+    teardown() {
+      try {
+        if (env.capture) env.capture.stop();
+      } catch (e) { /* already stopped */ }
+      env.capture = null;
+      for (const key of AUDITED_GLOBALS) {
+        const p = prior.get(key);
+        if (p.present) {
+          globalThis[key] = p.value;
+        } else {
+          delete globalThis[key];
+        }
+      }
+      w.close();
+    },
+  };
+  return env;
+}
+
+async function settle(win) {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => win.requestAnimationFrame(resolve));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+}
+
+function createRecordingTransport() {
+  const sent = [];
+  return {
+    sent,
+    send(type, payload) { sent.push({ type, payload }); },
+  };
+}
+
+function silentLogger() {
+  return { info() {}, warn() {}, error() {} };
+}
+
+function snapshotPayload(transport) {
+  const snapshots = transport.sent.filter((m) => m.type === STREAM.SNAPSHOT);
+  assert.equal(snapshots.length, 1, 'start() emits exactly one snapshot');
+  return snapshots[0].payload;
+}
+
+function mutationOps(transport) {
+  return transport.sent
+    .filter((m) => m.type === STREAM.MUTATIONS)
+    .flatMap((m) => m.payload.mutations || []);
+}
+
+function wireByteLength(value) {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+function populateFrame(frame, html) {
+  const doc = frame.contentDocument;
+  doc.open();
+  doc.write(html);
+  doc.close();
+  return doc;
+}
+
+test('D-08 same-origin iframe.contentDocument serializes as a scoped frames payload', async () => {
+  const env = setupEnv('<main id="root"><iframe id="same-frame" src="/frame.html"></iframe></main>');
+  try {
+    const frame = env.document.getElementById('same-frame');
+    const frameDoc = populateFrame(frame,
+      '<!DOCTYPE html><html lang="en" data-frame="same"><head>'
+        + '<link rel="stylesheet" href="/frame.css">'
+        + '<style>.frame-button{color:blue}</style>'
+        + '</head><body data-frame-body="yes">'
+        + '<button id="inside-frame" class="frame-button">Frame button</button>'
+        + '<fs-frame-card id="frame-shadow-host"></fs-frame-card>'
+        + '</body></html>'
+    );
+    const frameButton = frameDoc.getElementById('inside-frame');
+    const frameShadowHost = frameDoc.getElementById('frame-shadow-host');
+    const frameShadowRoot = frameShadowHost.attachShadow({ mode: 'open' });
+    frameShadowRoot.innerHTML = '<span id="frame-shadow-child">Frame shadow child</span>';
+    const frameShadowChild = frameShadowRoot.getElementById('frame-shadow-child');
+
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const payload = snapshotPayload(transport);
+    const frameNid = env.capture.getNodeId(frame);
+
+    assert.equal(payload.html.includes('id="same-frame"'), true, 'iframe host remains in main payload.html');
+    assert.equal(Array.isArray(payload.frames), true, 'snapshot carries frames sidecar');
+
+    const framePayload = payload.frames.find((entry) => entry.frameNid === frameNid);
+    assert.ok(framePayload, 'frames entry is keyed by frameNid');
+    assert.equal(framePayload.kind, 'same-origin');
+    assert.equal(typeof framePayload.html, 'string');
+    assert.ok(framePayload.html.includes('id="inside-frame"'), 'same-origin frame DOM is serialized');
+    assert.ok(framePayload.html.includes('Frame button'), 'same-origin frame text is serialized');
+    assert.equal(Array.isArray(framePayload.nodeIds), true, 'frame descendants carry nodeIds sidecar');
+    assert.ok(framePayload.nodeIds.includes(env.capture.getNodeId(frameButton)), 'frame descendant nid matches getNodeId');
+    assert.equal(Array.isArray(framePayload.shadowRoots), true, 'frame payload carries shadowRoots sidecar');
+    const frameShadow = framePayload.shadowRoots.find((entry) => entry.hostNid === env.capture.getNodeId(frameShadowHost));
+    assert.ok(frameShadow, 'frame-local shadow root is keyed by host nid');
+    assert.ok(frameShadow.html.includes('Frame shadow child'), 'frame-local shadow DOM is serialized');
+    assert.ok(frameShadow.nodeIds.includes(env.capture.getNodeId(frameShadowChild)), 'frame shadow descendant nid is serialized');
+    assert.equal(Array.isArray(framePayload.stylesheets), true, 'frame stylesheets field exists');
+    assert.equal(Array.isArray(framePayload.inlineStyles), true, 'frame inlineStyles field exists');
+    assert.equal(typeof framePayload.htmlAttrs, 'object', 'frame htmlAttrs field exists');
+    assert.equal(typeof framePayload.bodyAttrs, 'object', 'frame bodyAttrs field exists');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-09 cross-origin iframe emits content-free placeholder and does not leak thrown content', async () => {
+  const env = setupEnv('<main id="root">'
+    + '<iframe id="remote-frame" src="https://remote.example/private"></iframe>'
+    + '</main>');
+  try {
+    const frame = env.document.getElementById('remote-frame');
+    let accessCount = 0;
+    Object.defineProperty(frame, 'contentDocument', {
+      configurable: true,
+      get() {
+        accessCount += 1;
+        throw new Error('cross-origin remote title SECRET_REMOTE_BODY');
+      },
+    });
+
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const payload = snapshotPayload(transport);
+    const frameNid = env.capture.getNodeId(frame);
+    assert.equal(Array.isArray(payload.frames), true, 'snapshot carries frames sidecar');
+
+    const framePayload = payload.frames.find((entry) => entry.frameNid === frameNid);
+    assert.ok(framePayload, 'cross-origin frame has a placeholder payload');
+    assert.ok(accessCount >= 1, 'contentDocument was used only as the origin gate');
+    assert.equal(framePayload.kind, 'cross-origin');
+    assert.equal(framePayload.label, 'Cross-origin iframe');
+    assert.equal(framePayload.src, 'https://remote.example/private');
+    assert.equal(framePayload.origin, 'https://remote.example');
+    assert.equal(Object.prototype.hasOwnProperty.call(framePayload, 'html'), false, 'placeholder has no nested html');
+    assert.equal(Object.prototype.hasOwnProperty.call(framePayload, 'nodeIds'), false, 'placeholder has no nested nodeIds');
+    assert.equal(Object.prototype.hasOwnProperty.call(framePayload, 'text'), false, 'placeholder has no remote text');
+    assert.equal(Object.prototype.hasOwnProperty.call(framePayload, 'title'), false, 'placeholder has no remote title');
+    assert.equal(JSON.stringify(transport.sent).includes('SECRET_REMOTE_BODY'), false, 'remote body text never reaches the wire');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-19 oversized same-origin frame sidecars become requestable placeholders', async () => {
+  const env = setupEnv('<main id="root"><iframe id="same-frame" src="/frame.html"></iframe></main>');
+  try {
+    const frame = env.document.getElementById('same-frame');
+    populateFrame(frame,
+      '<!DOCTYPE html><html><body><section id="oversized-frame">'
+        + '😀'.repeat(Math.floor(SNAPSHOT_BUDGET_BYTES / 3))
+        + '</section></body></html>'
+    );
+
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const payload = snapshotPayload(transport);
+    const frameNid = env.capture.getNodeId(frame);
+
+    assert.equal(payload.truncated, true, 'oversized frame sidecar marks snapshot truncated');
+    assert.ok(payload.nodeIds.includes(frameNid), 'iframe nid remains requestable');
+    assert.ok(
+      payload.html.includes('data-phantomstream-truncated="true"'),
+      'omitted frame sidecar host is replaced by a requestable truncated marker'
+    );
+    assert.equal(
+      (payload.frames || []).some((entry) => entry.frameNid === frameNid),
+      false,
+      'oversized same-origin frame sidecar is omitted from the bounded snapshot'
+    );
+    assert.equal(
+      wireByteLength(payload) <= SNAPSHOT_BUDGET_BYTES,
+      true,
+      'complete snapshot payload stays under the UTF-8 relay budget'
+    );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-11 frame descendant nids are opaque Phase 7 ids while capture is active', async () => {
+  const env = setupEnv('<main id="root"><iframe id="same-frame"></iframe></main>');
+  try {
+    const frame = env.document.getElementById('same-frame');
+    const frameDoc = populateFrame(frame,
+      '<!DOCTYPE html><html><body><button id="inside-frame">Frame button</button></body></html>'
+    );
+    const button = frameDoc.getElementById('inside-frame');
+
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const payload = snapshotPayload(transport);
+    const buttonNid = env.capture.getNodeId(button);
+
+    assert.equal(typeof buttonNid, 'string', 'frame descendant resolves through capture identity');
+    assert.equal(Array.isArray(payload.frames), true, 'snapshot carries frames sidecar');
+    assert.ok(payload.frames[0].nodeIds.includes(buttonNid), 'frame nodeIds sidecar includes descendant nid');
+    assert.equal(frameDoc.querySelectorAll('[data-fsb-nid]').length, 0, 'frame document carries no framework nid attrs');
+    assert.equal(JSON.stringify(transport.sent).includes('data-fsb-nid'), false, 'wire identity is sidecar-only');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-08 added same-origin iframes carry frames metadata on add ops', async () => {
+  const env = setupEnv('<main id="root"></main>');
+  try {
+    const root = env.document.getElementById('root');
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const frame = env.document.createElement('iframe');
+    frame.id = 'added-frame';
+    frame.setAttribute('src', '/added-frame.html');
+    root.appendChild(frame);
+    const frameDoc = populateFrame(frame,
+      '<!DOCTYPE html><html><body><button id="added-frame-button">Added frame button</button></body></html>'
+    );
+    const button = frameDoc.getElementById('added-frame-button');
+    await settle(env.window);
+
+    const frameNid = env.capture.getNodeId(frame);
+    const buttonNid = env.capture.getNodeId(button);
+    const addOp = mutationOps(transport).find((op) => (
+      op.op === DIFF_OP.ADD
+      && typeof op.html === 'string'
+      && op.html.includes('added-frame')
+    ));
+
+    assert.ok(addOp, 'added iframe emits an add op');
+    assert.equal(Array.isArray(addOp.frames), true, 'add op carries frames sidecar');
+    const framePayload = addOp.frames.find((entry) => entry.frameNid === frameNid);
+    assert.ok(framePayload, 'add-op frame sidecar is keyed by frameNid');
+    assert.equal(framePayload.kind, 'same-origin');
+    assert.ok(framePayload.html.includes('Added frame button'), 'same-origin added frame content is serialized');
+    assert.ok(framePayload.nodeIds.includes(buttonNid), 'added frame descendant nid is in frame sidecar');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-11 same-origin iframe document mutations emit frameNid-scoped diffs', async () => {
+  const env = setupEnv('<main id="root"><iframe id="same-frame" src="/frames/frame.html"></iframe></main>');
+  try {
+    const frame = env.document.getElementById('same-frame');
+    const frameDoc = populateFrame(frame,
+      '<!DOCTYPE html><html><body><section id="frame-root"></section></body></html>'
+    );
+
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const frameNid = env.capture.getNodeId(frame);
+    const late = frameDoc.createElement('img');
+    late.id = 'late-frame-child';
+    late.setAttribute('src', 'assets/late.png');
+    late.setAttribute('alt', 'Late frame child');
+    frameDoc.getElementById('frame-root').appendChild(late);
+    await settle(env.window);
+
+    const lateNid = env.capture.getNodeId(late);
+    assert.ok(
+      mutationOps(transport).some((op) => (
+        op.op === DIFF_OP.ADD
+        && op.frameNid === frameNid
+        && typeof op.html === 'string'
+        && op.html.includes('late-frame-child')
+        && op.html.includes('https://fixture.test/frames/assets/late.png')
+        && Array.isArray(op.nodeIds)
+        && op.nodeIds.includes(lateNid)
+      )),
+      'same-origin frame document mutation emits an add op scoped by frameNid'
+    );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-09 iframe src attribute mutations never emit a generic live-src attr op', async () => {
+  const env = setupEnv('<main id="root"><iframe id="same-frame" src="/frame.html"></iframe></main>');
+  try {
+    const frame = env.document.getElementById('same-frame');
+    populateFrame(frame,
+      '<!DOCTYPE html><html><body><p id="before-src-change">Before</p></body></html>'
+    );
+
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const frameNid = env.capture.getNodeId(frame);
+    frame.setAttribute('src', 'https://remote.example/private');
+    await settle(env.window);
+
+    assert.equal(
+      mutationOps(transport).some((op) => (
+        op.op === DIFF_OP.ATTR
+        && op.nid === frameNid
+        && String(op.attr).toLowerCase() === 'src'
+      )),
+      false,
+      'iframe src changes do not reach the wire as generic attr mutations'
+    );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-11 iframe load re-registers navigated same-origin frame documents', async () => {
+  const env = setupEnv('<main id="root"><iframe id="same-frame" src="/frame.html"></iframe></main>');
+  try {
+    const frame = env.document.getElementById('same-frame');
+    populateFrame(frame,
+      '<!DOCTYPE html><html><body><p id="before-load">Before load</p></body></html>'
+    );
+
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const frameNid = env.capture.getNodeId(frame);
+    const nextDoc = populateFrame(frame,
+      '<!DOCTYPE html><html><body><div id="after-load-root">'
+        + '<span id="after-load-static">After load static</span>'
+        + '</div></body></html>'
+    );
+    const staticChild = nextDoc.getElementById('after-load-static');
+    frame.dispatchEvent(new env.window.Event('load'));
+    await settle(env.window);
+
+    const staticNid = env.capture.getNodeId(staticChild);
+    const frameRefresh = mutationOps(transport).find((op) => (
+      op.op === DIFF_OP.FRAME
+      && op.frameNid === frameNid
+      && op.frame
+    ));
+    assert.ok(frameRefresh, 'iframe load emits a frame refresh op for the navigated document');
+    assert.equal(frameRefresh.frame.kind, 'same-origin');
+    assert.ok(frameRefresh.frame.html.includes('after-load-static'), 'frame refresh carries static loaded content');
+    assert.ok(frameRefresh.frame.nodeIds.includes(staticNid), 'frame refresh indexes static loaded content');
+
+    const child = nextDoc.createElement('strong');
+    child.id = 'after-load-child';
+    child.textContent = 'After load child';
+    nextDoc.getElementById('after-load-root').appendChild(child);
+    await settle(env.window);
+
+    assert.ok(
+      mutationOps(transport).some((op) => (
+        op.op === DIFF_OP.ADD
+        && op.frameNid === frameNid
+        && typeof op.html === 'string'
+        && op.html.includes('after-load-child')
+      )),
+      'iframe load listener re-registers the new same-origin frame document'
+    );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-19 oversized same-origin iframe load refreshes emit bounded requestable placeholders', async () => {
+  const env = setupEnv('<main id="root"><iframe id="same-frame" src="/frame.html"></iframe></main>');
+  try {
+    const frame = env.document.getElementById('same-frame');
+    populateFrame(frame,
+      '<!DOCTYPE html><html><body><p id="before-load">Before load</p></body></html>'
+    );
+
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const frameNid = env.capture.getNodeId(frame);
+    const nextDoc = populateFrame(frame,
+      '<!DOCTYPE html><html><body><section id="oversized-loaded-frame">'
+        + 'x'.repeat(RELAY_PER_MESSAGE_LIMIT_BYTES + 1024)
+        + '</section></body></html>'
+    );
+    const oversizedRoot = nextDoc.getElementById('oversized-loaded-frame');
+    frame.dispatchEvent(new env.window.Event('load'));
+    await settle(env.window);
+
+    const refreshMessage = transport.sent.find((message) => (
+      message.type === STREAM.MUTATIONS
+      && (message.payload.mutations || []).some((op) => op.op === DIFF_OP.FRAME && op.frameNid === frameNid)
+    ));
+    assert.ok(refreshMessage, 'oversized iframe load still emits a frame refresh message');
+    assert.equal(wireByteLength(refreshMessage.payload) <= RELAY_PER_MESSAGE_LIMIT_BYTES, true,
+      'bounded frame refresh payload stays under the relay cap');
+
+    const frameRefresh = refreshMessage.payload.mutations.find((op) => op.op === DIFF_OP.FRAME);
+    assert.equal(frameRefresh.frame.truncated, true, 'oversized frame refresh is explicit about truncation');
+    assert.ok(frameRefresh.frame.html.includes('data-phantomstream-truncated="true"'),
+      'oversized frame refresh carries a requestable placeholder');
+    assert.equal(frameRefresh.frame.html.includes('oversized-loaded-frame'), false,
+      'oversized frame HTML is not sent after bounding');
+    assert.ok(frameRefresh.frame.nodeIds.includes(env.capture.getNodeId(oversizedRoot)),
+      'placeholder is keyed by the oversized frame content nid');
+  } finally {
+    env.teardown();
+  }
+});

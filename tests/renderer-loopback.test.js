@@ -25,7 +25,7 @@ import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { createCapture } from '../src/capture/index.js';
 import { createViewer } from '../src/renderer/index.js';
-import { STREAM, CONTROL, DIFF_OP, NID_ATTR } from '../src/protocol/messages.js';
+import { STREAM, CONTROL, DIFF_OP } from '../src/protocol/messages.js';
 
 // Complete global set the capture core dereferences (audited from the
 // reference source in 01-RESEARCH.md Pattern 2). The viewer needs no swap
@@ -225,8 +225,9 @@ function wireLoopback(env, opts = {}) {
   // The resync round-trip glue: the viewer's re-snapshot request IS
   // CONTROL.START (02-RESEARCH Pattern 2 -- dash:request-snapshot does not
   // exist in the protocol); the host maps it to a clean capture restart.
-  transport.onControl((type) => {
+  transport.onControl((type, payload) => {
     if (type === CONTROL.START) capture.start();
+    if (type === CONTROL.SUBTREE_REQUEST) capture.handleControl(type, payload);
   });
 
   return { transport, received, controls, viewer, capture };
@@ -261,6 +262,7 @@ function glueMirror(iframe) {
   cd.open();
   cd.write(iframe.getAttribute('srcdoc'));
   cd.close();
+  iframe.dispatchEvent(new iframe.ownerDocument.defaultView.Event('load'));
   return cd;
 }
 
@@ -284,7 +286,7 @@ function controlStartsOf(controls) {
 
 // === Task 1: core mirror path + recursion guard + resync round-trip ========
 
-test('full wiring produces exactly one snapshot and a non-empty nid-stamped srcdoc', async () => {
+test('full wiring produces exactly one snapshot and a non-empty sidecar-indexed srcdoc', async () => {
   const env = setupEnv(BODY_HTML);
   try {
     const ctx = wireLoopback(env);
@@ -296,7 +298,11 @@ test('full wiring produces exactly one snapshot and a non-empty nid-stamped srcd
 
     const srcdoc = viewerIframe(env).getAttribute('srcdoc');
     assert.ok(srcdoc && srcdoc.length > 0, 'srcdoc is non-empty');
-    assert.ok(srcdoc.includes(NID_ATTR), 'srcdoc carries nid-stamped content');
+    assert.equal(srcdoc.includes('data-fsb-nid'), false, 'srcdoc carries no framework nid attrs');
+    assert.ok(
+      Array.isArray(snapshots[0].payload.nodeIds) && snapshots[0].payload.nodeIds.length > 0,
+      'snapshot carries nodeIds sidecar for the renderer index'
+    );
     assert.ok(srcdoc.includes('row one'), 'srcdoc contains the source pane rows');
     assert.ok(srcdoc.includes('row three'), 'srcdoc contains all tracked rows');
   } finally {
@@ -343,8 +349,8 @@ test('a live DOM add in the source pane appears in the mirror document (the firs
     await waitForStreaming(iframe);
     const cd = glueMirror(iframe);
     assert.ok(
-      cd.querySelector('[' + NID_ATTR + ']'),
-      'glued mirror document contains nid-stamped nodes'
+      cd.getElementById('row-1'),
+      'glued mirror document contains source nodes'
     );
 
     const added = env.document.createElement('div');
@@ -353,9 +359,9 @@ test('a live DOM add in the source pane appears in the mirror document (the firs
     env.document.getElementById('source-pane').appendChild(added);
     await settle(env.window);
 
-    const nid = added.getAttribute(NID_ATTR);
-    assert.ok(nid, 'the differ stamped a nid on the live added element');
-    const mirrored = cd.querySelector('[' + NID_ATTR + '="' + nid + '"]');
+    const nid = ctx.capture.getNodeId(added);
+    assert.ok(nid, 'the differ tracked a nid for the live added element');
+    const mirrored = cd.getElementById('added-row');
     assert.ok(mirrored, 'the added element was applied into the mirror document');
     assert.equal(mirrored.textContent, 'added row', 'mirrored content matches');
   } finally {
@@ -374,9 +380,9 @@ test('a text edit in the source pane updates the mirrored node textContent', asy
     const cd = glueMirror(iframe);
 
     const row = env.document.getElementById('row-1');
-    const nid = row.getAttribute(NID_ATTR);
-    assert.ok(nid, 'row-1 was nid-stamped at serialization');
-    const mirroredBefore = cd.querySelector('[' + NID_ATTR + '="' + nid + '"]');
+    const nid = ctx.capture.getNodeId(row);
+    assert.ok(nid, 'row-1 was tracked at serialization');
+    const mirroredBefore = cd.getElementById('row-1');
     assert.equal(mirroredBefore.textContent, 'row one', 'mirror starts in sync');
 
     // characterData mutation (nodeValue edit -- setting textContent would be
@@ -384,7 +390,7 @@ test('a text edit in the source pane updates the mirrored node textContent', asy
     row.firstChild.nodeValue = 'row one edited';
     await settle(env.window);
 
-    const mirrored = cd.querySelector('[' + NID_ATTR + '="' + nid + '"]');
+    const mirrored = cd.getElementById('row-1');
     assert.equal(mirrored.textContent, 'row one edited', 'text edit mirrored');
   } finally {
     env.teardown();
@@ -402,10 +408,10 @@ test('a textContent replacement (bare text-node childList) on a tracked element 
     const cd = glueMirror(iframe);
 
     const row = env.document.getElementById('row-2');
-    const nid = row.getAttribute(NID_ATTR);
-    assert.ok(nid, 'row-2 was nid-stamped at serialization');
+    const nid = ctx.capture.getNodeId(row);
+    assert.ok(nid, 'row-2 was tracked at serialization');
     assert.equal(
-      cd.querySelector('[' + NID_ATTR + '="' + nid + '"]').textContent,
+      cd.getElementById('row-2').textContent,
       'row two',
       'mirror starts in sync'
     );
@@ -419,7 +425,7 @@ test('a textContent replacement (bare text-node childList) on a tracked element 
     row.textContent = 'row two replaced';
     await settle(env.window);
 
-    const mirrored = cd.querySelector('[' + NID_ATTR + '="' + nid + '"]');
+    const mirrored = cd.getElementById('row-2');
     assert.equal(
       mirrored.textContent, 'row two replaced',
       'textContent replacement reached the mirror'
@@ -439,8 +445,8 @@ test('bare text-node childList mutations emit exactly one deduplicated text op p
     await waitForStreaming(iframe);
 
     const row = env.document.getElementById('row-3');
-    const nid = row.getAttribute(NID_ATTR);
-    assert.ok(nid, 'row-3 was nid-stamped at serialization');
+    const nid = ctx.capture.getNodeId(row);
+    assert.ok(nid, 'row-3 was tracked at serialization');
 
     // Two synchronous replacements on the SAME element accumulate two
     // childList records into one rAF batch -- the differ must emit exactly
@@ -483,11 +489,11 @@ test('a bare text-node append into a mixed-content element never flattens mirror
 
     const mixed = env.document.getElementById('mixed');
     const kept = env.document.getElementById('kept');
-    const mixedNid = mixed.getAttribute(NID_ATTR);
-    const keptNid = kept.getAttribute(NID_ATTR);
-    assert.ok(mixedNid && keptNid, 'both elements nid-stamped at serialization');
+    const mixedNid = ctx.capture.getNodeId(mixed);
+    const keptNid = ctx.capture.getNodeId(kept);
+    assert.ok(mixedNid && keptNid, 'both elements tracked at serialization');
     assert.ok(
-      cd.querySelector('[' + NID_ATTR + '="' + keptNid + '"]'),
+      cd.getElementById('kept'),
       'mirror starts with the span present'
     );
 
@@ -506,7 +512,7 @@ test('a bare text-node append into a mixed-content element never flattens mirror
       mutationBatchesOf(ctx.received).length, 0,
       'mixed-content bare-text record emits no wire signal (reference drop behavior)'
     );
-    const mirroredSpan = cd.querySelector('[' + NID_ATTR + '="' + keptNid + '"]');
+    const mirroredSpan = cd.getElementById('kept');
     assert.ok(mirroredSpan, 'the mirrored span survived (structure intact)');
     assert.equal(mirroredSpan.tagName, 'SPAN', 'still an element, not flattened text');
     assert.equal(mirroredSpan.textContent, 'a', 'span content untouched');
@@ -535,8 +541,8 @@ test('innerHTML with mixed content keeps the mirrored element child intact (CR-0
     const cd = glueMirror(iframe);
 
     const rich = env.document.getElementById('rich');
-    const richNid = rich.getAttribute(NID_ATTR);
-    assert.ok(richNid, 'rich was nid-stamped at serialization');
+    const richNid = ctx.capture.getNodeId(rich);
+    assert.ok(richNid, 'rich was tracked at serialization');
 
     // Mixed-content innerHTML: one childList record carrying an element
     // addition (<b>) AND a bare text-node addition. Without the
@@ -545,11 +551,11 @@ test('innerHTML with mixed content keeps the mirrored element child intact (CR-0
     rich.innerHTML = 'hello <b>world</b>';
     await settle(env.window);
 
-    const bNid = rich.querySelector('b').getAttribute(NID_ATTR);
-    assert.ok(bNid, 'the differ stamped a nid on the live added <b>');
+    const bNid = ctx.capture.getNodeId(rich.querySelector('b'));
+    assert.ok(bNid, 'the differ tracked a nid for the live added <b>');
 
-    const mirroredRich = cd.querySelector('[' + NID_ATTR + '="' + richNid + '"]');
-    const mirroredB = cd.querySelector('[' + NID_ATTR + '="' + bNid + '"]');
+    const mirroredRich = cd.getElementById('rich');
+    const mirroredB = cd.querySelector('#rich b');
     assert.ok(mirroredB, 'the added <b> reached the mirror and was NOT destroyed');
     assert.equal(mirroredB.tagName, 'B', 'mirrored element kept its tag');
     assert.equal(mirroredB.textContent, 'world', '<b> content intact in the mirror');
@@ -690,9 +696,9 @@ test('stale-miss threshold drives the CONTROL.START resync round-trip end-to-end
     env.document.getElementById('source-pane').appendChild(recovered);
     await settle(env.window);
 
-    const recoveredNid = recovered.getAttribute(NID_ATTR);
-    assert.ok(recoveredNid, 'gen-2 differ stamped the new element');
-    const mirrored = cd.querySelector('[' + NID_ATTR + '="' + recoveredNid + '"]');
+    const recoveredNid = ctx.capture.getNodeId(recovered);
+    assert.ok(recoveredNid, 'gen-2 differ tracked the new element');
+    const mirrored = cd.getElementById('post-resync-row');
     assert.ok(mirrored, 'post-resync mutation applied into the recovered mirror');
     assert.equal(mirrored.textContent, 'post-resync row');
 
@@ -700,6 +706,58 @@ test('stale-miss threshold drives the CONTROL.START resync round-trip end-to-end
       controlStartsOf(ctx.controls).length, 1,
       'still exactly one CONTROL.START -- recovery did not re-trigger resync'
     );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('on-demand subtree request recovers a truncated loopback region without full resnapshot', async () => {
+  const hugeText = 'x'.repeat(900000);
+  const env = setupEnv(
+    '<div id="source-pane">'
+      + '<section id="huge-region">' + hugeText + '</section>'
+      + '</div>'
+      + '<div id="mirror-container"></div>'
+  );
+  try {
+    const ctx = wireLoopback(env);
+    ctx.capture.start();
+    await settle(env.window);
+    const iframe = viewerIframe(env);
+    await waitForStreaming(iframe);
+    const cd = glueMirror(iframe);
+
+    const huge = env.document.getElementById('huge-region');
+    const hugeNid = ctx.capture.getNodeId(huge);
+    assert.ok(hugeNid, 'truncated live region remains tracked by nid');
+    assert.ok(
+      cd.querySelector('[data-phantomstream-truncated="true"]'),
+      'initial mirror contains a requestable truncated marker'
+    );
+    const markerCountBefore = cd.querySelectorAll('[data-phantomstream-truncated="true"]').length;
+
+    const requestId = ctx.viewer.requestSubtree(hugeNid, { reason: 'loopback-truncated-region' });
+    assert.match(requestId, /^subtree_[a-z0-9]+_\d+$/, 'viewer returned a concrete subtree requestId');
+    await settle(env.window);
+
+    assert.ok(
+      ctx.controls.some((c) => c.type === CONTROL.SUBTREE_REQUEST && c.payload.requestId === requestId),
+      'request traveled over the viewer-to-capture control path'
+    );
+    assert.equal(
+      snapshotsOf(ctx.received).length,
+      1,
+      'recovery did not request a full replacement snapshot'
+    );
+    assert.equal(
+      cd.querySelectorAll('[data-phantomstream-truncated="true"]').length,
+      markerCountBefore - 1,
+      'requested truncated marker was replaced'
+    );
+    const recovered = cd.getElementById('huge-region');
+    assert.ok(recovered, 'recovered source region was installed in the mirror');
+    assert.equal(recovered.textContent.length, hugeText.length, 'recovered subtree content matches');
+    assert.ok(ctx.viewer.resolveNode(hugeNid), 'original truncated nid now resolves to recovered content');
   } finally {
     env.teardown();
   }

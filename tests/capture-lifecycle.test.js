@@ -21,6 +21,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { createCapture } from '../src/capture/index.js';
+import { RELAY_PER_MESSAGE_LIMIT_BYTES } from '../src/protocol/constants.js';
 import { STREAM } from '../src/protocol/messages.js';
 
 // Complete global set the capture core dereferences (audited from the
@@ -41,12 +42,12 @@ const BODY_HTML = '<div id="root"><div id="a">hello</div><p id="b">world</p></di
  * a live watchdog timer chain into other tests (Pitfalls 3 and 8).
  * @param {string} bodyHtml
  */
-function setupEnv(bodyHtml) {
+function setupEnv(bodyHtml, pageUrl = 'https://fixture.test/page') {
   const dom = new JSDOM(
     '<!DOCTYPE html><html><head><title>lifecycle fixture</title></head><body>'
       + bodyHtml + '</body></html>',
     {
-      url: 'https://fixture.test/page',
+      url: pageUrl,
       pretendToBeVisual: true, // enables requestAnimationFrame for the rAF flush
       virtualConsole: new VirtualConsole(), // quiet: swallows "Not implemented" noise
     }
@@ -116,6 +117,10 @@ function silentLogger() {
   return { info() {}, warn() {}, error() {} };
 }
 
+function wireByteLength(value) {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
 test('factory emits ready and start emits a snapshot stamped with fresh identity', async () => {
   const env = setupEnv(BODY_HTML);
   try {
@@ -146,6 +151,59 @@ test('factory emits ready and start emits a snapshot stamped with fresh identity
   }
 });
 
+test('snapshot head payloads are bounded under the relay cap', async () => {
+  const styleText = '.a{color:red}' + 'x'.repeat(410000);
+  const env = setupEnv(BODY_HTML);
+  try {
+    for (let i = 0; i < 4; i++) {
+      const style = env.document.createElement('style');
+      style.textContent = styleText;
+      env.document.head.appendChild(style);
+    }
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+
+    const snapshots = transport.sent.filter((m) => m.type === STREAM.SNAPSHOT);
+    assert.equal(snapshots.length, 1, 'start emits one snapshot');
+    assert.equal(
+      wireByteLength(snapshots[0].payload) <= RELAY_PER_MESSAGE_LIMIT_BYTES,
+      true,
+      'snapshot payload stays under the UTF-8 relay cap'
+    );
+    assert.equal(snapshots[0].payload.truncated, true, 'dropping head payload marks snapshot truncated');
+    assert.equal(
+      snapshots[0].payload.inlineStyles.length < 4,
+      true,
+      'aggregate inline styles were pruned to fit the relay cap'
+    );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('snapshot fallback clears oversized URL payloads under the relay cap', async () => {
+  const longUrl = 'https://fixture.test/' + 'a'.repeat(RELAY_PER_MESSAGE_LIMIT_BYTES + 1024);
+  const env = setupEnv(BODY_HTML, longUrl);
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+
+    const snapshot = transport.sent.find((m) => m.type === STREAM.SNAPSHOT)?.payload;
+    assert.ok(snapshot, 'snapshot was emitted');
+    assert.equal(
+      wireByteLength(snapshot) <= RELAY_PER_MESSAGE_LIMIT_BYTES,
+      true,
+      'long-url snapshot payload stays under the UTF-8 relay cap'
+    );
+    assert.equal(snapshot.url, '', 'oversized URL metadata is dropped by fallback fitting');
+    assert.equal(snapshot.truncated, true, 'dropping URL metadata marks snapshot truncated');
+  } finally {
+    env.teardown();
+  }
+});
+
 test('stop then start mints a new stream session and snapshot identity', async () => {
   const env = setupEnv(BODY_HTML);
   try {
@@ -169,6 +227,53 @@ test('stop then start mints a new stream session and snapshot identity', async (
     // identity fields change across stop() -> start().
     assert.notEqual(second.streamSessionId, first.streamSessionId);
     assert.notEqual(second.snapshotId, first.snapshotId);
+  } finally {
+    env.teardown();
+  }
+});
+
+test('stop flush chunks pending mutations under the relay cap', async () => {
+  const env = setupEnv('<div id="root"></div>');
+  const heldRafs = [];
+  const holdRaf = (cb) => {
+    heldRafs.push(cb);
+    return heldRafs.length;
+  };
+  try {
+    env.window.requestAnimationFrame = holdRaf;
+    env.window.cancelAnimationFrame = () => {};
+    globalThis.requestAnimationFrame = holdRaf;
+    globalThis.cancelAnimationFrame = () => {};
+
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+
+    const root = env.document.getElementById('root');
+    for (let i = 0; i < 700; i++) {
+      const section = env.document.createElement('section');
+      section.id = 'pending-' + i;
+      section.textContent = 'z'.repeat(2500);
+      root.appendChild(section);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    env.capture.stop();
+
+    const mutationPayloads = transport.sent
+      .filter((m) => m.type === STREAM.MUTATIONS)
+      .map((m) => m.payload);
+    assert.equal(mutationPayloads.length > 1, true, 'stop flush emits chunked mutation payloads');
+    assert.equal(
+      mutationPayloads.every((payload) => wireByteLength(payload) <= RELAY_PER_MESSAGE_LIMIT_BYTES),
+      true,
+      'every stop-flush mutation payload stays under the UTF-8 relay cap'
+    );
+    assert.equal(
+      mutationPayloads.reduce((sum, payload) => sum + (payload.mutations || []).length, 0),
+      700,
+      'stop flush preserves all pending add ops across chunks'
+    );
   } finally {
     env.teardown();
   }
@@ -264,6 +369,36 @@ test('a transport without flush works through the no-op default', async () => {
 
     assert.ok(transport.sent.some((m) => m.type === STREAM.SNAPSHOT));
     assert.ok(transport.sent.some((m) => m.type === STREAM.MUTATIONS));
+  } finally {
+    env.teardown();
+  }
+});
+
+test('async transport flush rejections route to the injected logger', async () => {
+  const env = setupEnv(BODY_HTML);
+  try {
+    const errors = [];
+    const recordingLogger = {
+      info() {},
+      warn() {},
+      error(...args) { errors.push(args); },
+    };
+    const transport = {
+      send() {},
+      flush() { return Promise.reject(new Error('flush-down')); },
+    };
+    env.capture = createCapture({ transport, logger: recordingLogger });
+
+    env.capture.start();
+    env.capture.stop();
+    await Promise.resolve();
+
+    assert.ok(
+      errors.some((args) => String(args[0]) === '[DOM Stream] transport flush failed'
+        && args[1] instanceof Error
+        && args[1].message === 'flush-down'),
+      'async flush rejection was routed to the injected logger'
+    );
   } finally {
     env.teardown();
   }

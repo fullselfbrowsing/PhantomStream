@@ -17,7 +17,7 @@ PhantomStream mirrors a live browser tab to a remote viewer as structured DOM da
 [![Issues](https://img.shields.io/github/issues/fullselfbrowsing/PhantomStream?style=for-the-badge&logo=github&logoColor=white&color=555555)](https://github.com/fullselfbrowsing/PhantomStream/issues)
 [![Last Commit](https://img.shields.io/github/last-commit/fullselfbrowsing/PhantomStream?style=for-the-badge&logo=github&logoColor=white&color=555555)](https://github.com/fullselfbrowsing/PhantomStream/commits/main)
 
-[The Problem](#the-problem) · [The Solution](#the-solution) · [Why DOM Streaming](#why-dom-streaming-instead-of-video) · [Architecture](#architecture) · [Features](#features) · [Tech Stack](#tech-stack) · [Getting Started](#getting-started) · [Project Structure](#project-structure) · [Documentation](#documentation) · [Roadmap](#roadmap)
+[The Problem](#the-problem) · [The Solution](#the-solution) · [Why DOM Streaming](#why-dom-streaming-instead-of-video) · [Architecture](#architecture) · [Features](#features) · [Tech Stack](#tech-stack) · [Getting Started](#getting-started) · [Quickstarts](docs/QUICKSTARTS.md) · [Documentation](#documentation) · [Roadmap](#roadmap)
 
 </div>
 
@@ -31,7 +31,7 @@ Worse, pixels are opaque. The watcher cannot ask which element the agent is touc
 
 ## The Solution
 
-PhantomStream streams the DOM itself. It captures the page once as a style-inlined snapshot, stamps every element with a stable identifier, and then watches the page with a MutationObserver. From that point on it sends only small diffs (`add`, `rm`, `attr`, `text`) keyed by node ID, batched to the page's own paint cadence. The viewer rebuilds the document inside a sandboxed iframe and applies each diff by ID.
+PhantomStream streams the DOM itself. It captures the page once as a style-inlined snapshot, assigns stable identifiers in a WeakMap, and then watches the page with a MutationObserver. From that point on it sends only small diffs (`add`, `rm`, `attr`, `text`) keyed by node ID, batched to the page's own paint cadence. Snapshot and add-op identity travels in `nodeIds` sidecars, so the live page is not mutated with framework attributes. The viewer rebuilds the document inside a sandboxed iframe and applies each diff by ID.
 
 The payoff is a mirror that is cheap, exact, and addressable. Bandwidth tracks how much the page actually changes rather than the frame rate. Text renders natively at any resolution. Remote control targets real elements by their stable IDs instead of guessing at coordinates, so a click on the viewer maps back to the exact node on the source.
 
@@ -81,7 +81,7 @@ graph LR
 
 Core mechanisms (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full treatment and [docs/SECURITY.md](docs/SECURITY.md) for the embed security contract):
 
-- **Stable node identity.** Every element is stamped with a `data-fsb-nid`. All diff ops and remote-control actions address nodes by this key, so a late diff always lands on the right element.
+- **Stable node identity.** Capture owns identity in a `WeakMap<Element, string>` and emits `nodeIds` sidecars with snapshots and add ops. All diff ops and remote-control actions address nodes by this key, so a late diff always lands on the right mirror element without mutating the live page.
 - **Curated computed-style capture.** Roughly 85 visual-fidelity CSS properties are inlined per element rather than all 300 plus, with default-value elision. This is the fix that took a YouTube serialize from 45 seconds down to interactive.
 - **Display-matched diffing.** Mutations batch and flush on `requestAnimationFrame`, so the mirror updates at the same cadence the page paints.
 - **Budgeted snapshots.** Snapshots truncate to a relay-safe size by dropping whole subtrees below 3x the viewport, never mid-element, after a single batched layout read.
@@ -95,8 +95,9 @@ Core mechanisms (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full t
 
 | Feature | Description |
 |---|---|
-| **Stable node IDs** | Every captured element carries a `data-fsb-nid`. Diffs and remote-control actions address nodes by ID, never by coordinate or fragile selector. |
+| **Stable node IDs** | Capture uses WeakMap identity and `nodeIds` sidecars. Diffs and remote-control actions address nodes by ID, never by coordinate or fragile selector. |
 | **Curated style inlining** | About 85 fidelity-critical CSS properties are inlined per element with default elision, keeping heavy pages interactive instead of stalling on full style enumeration. |
+| **CSSOM capture mode** | Opt-in `styleMode: 'cssom'` transports scoped stylesheet sources and live `style-source` ops for document, open shadow root, and same-origin frame scopes. |
 | **Paint-cadence diffs** | A MutationObserver batches changes and flushes on `requestAnimationFrame`, so the wire carries one compact op per real change at the page's own update rate. |
 | **Budgeted snapshots** | Snapshots stay under the relay's per-message cap by dropping offscreen subtrees on whole-element boundaries after a single layout read. |
 | **Session stamping** | A per-session `streamSessionId` and per-snapshot `snapshotId` ride every message, so the viewer can reject anything from a stale page. |
@@ -126,17 +127,17 @@ Core mechanisms (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full t
 
 ## Getting Started
 
-PhantomStream is published as `@fullselfbrowsing/phantom-stream` and exposes one subpath per stage.
+PhantomStream is published as `@full-self-browsing/phantom-stream` and exposes one subpath per stage. For adapter-specific setup paths, see [docs/QUICKSTARTS.md](docs/QUICKSTARTS.md).
 
 ```bash
-npm install @fullselfbrowsing/phantom-stream
+npm install @full-self-browsing/phantom-stream
 ```
 
 **Capture a page** (runs in the page context):
 
 ```js
-import { createCapture } from '@fullselfbrowsing/phantom-stream/capture';
-import { createWebSocketTransport } from '@fullselfbrowsing/phantom-stream/transport/websocket';
+import { createCapture } from '@full-self-browsing/phantom-stream/capture';
+import { createWebSocketTransport } from '@full-self-browsing/phantom-stream/transport/websocket';
 
 const transport = createWebSocketTransport({
   url: 'wss://relay.example.com/ws?room=ROOM_KEY&role=source',
@@ -151,11 +152,14 @@ const capture = createCapture({
 capture.start(); // snapshot once, then stream diffs
 ```
 
+Use `styleMode: 'cssom'` when you want stylesheet-centric capture instead of
+generated computed inline styles.
+
 **Mirror it in a viewer** (runs in the remote context):
 
 ```js
-import { createViewer } from '@fullselfbrowsing/phantom-stream/renderer';
-import { createWebSocketTransport } from '@fullselfbrowsing/phantom-stream/transport/websocket';
+import { createViewer } from '@full-self-browsing/phantom-stream/renderer';
+import { createWebSocketTransport } from '@full-self-browsing/phantom-stream/transport/websocket';
 
 const transport = createWebSocketTransport({
   url: 'wss://relay.example.com/ws?room=ROOM_KEY&role=viewer',
@@ -174,7 +178,7 @@ viewer.on('state', (e) => console.log('viewer is', e.state)); // connecting | li
 
 ```js
 import http from 'node:http';
-import { createRelay, createWebSocketRelayBackend } from '@fullselfbrowsing/phantom-stream/relay';
+import { createRelay, createWebSocketRelayBackend } from '@full-self-browsing/phantom-stream/relay';
 
 const relay = createRelay();                 // routing core: 1 MiB per-message cap, backpressure drop
 const server = http.createServer();
@@ -222,9 +226,11 @@ bin/phantom-stream.js         CLI entry point for the demos
 
 | Document | What it covers |
 |---|---|
+| [docs/QUICKSTARTS.md](docs/QUICKSTARTS.md) | Installable package paths for embedded loopback, WebSocket demo, Playwright/CDP, extension MV3, bookmarklet, and CSSOM mode |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | End-to-end technical description of the capture, transport, relay, and renderer pipeline, plus known limitations |
 | [docs/SECURITY.md](docs/SECURITY.md) | The embed security contract: threat model, sanitization, masking, CSP, and sandbox guarantees |
 | [docs/DESIGN-HISTORY.md](docs/DESIGN-HISTORY.md) | How the system evolved, what failed along the way, and why the current shape won |
+| [docs/RELEASE.md](docs/RELEASE.md) | Package validation and publish-gate checklist |
 | [docs/paper/OUTLINE.md](docs/paper/OUTLINE.md) | Research paper structure and the evaluation plan against video and rrweb baselines |
 
 ---
@@ -240,7 +246,7 @@ bin/phantom-stream.js         CLI entry point for the demos
 | WebSocket transport plus the Playwright / CDP adapter | Shipped |
 | Security pipeline: sanitization, sandbox, privacy masking | Shipped |
 | Reference demos: two-tab, Playwright, and embedded loopback | Shipped |
-| v1 capture enhancements: CSSOM capture mode, computed styles on added nodes, WeakMap node identity, shadow DOM | Planned |
+| Fidelity completion: WeakMap identity, nodeIds sidecars, shadow DOM, same-origin iframes, subtree recovery, and CSSOM mode | Shipped |
 | Evaluation harness: bandwidth, latency, and fidelity against WebRTC, CDP screencast, and rrweb | Planned |
 | Research paper draft | Planned |
 

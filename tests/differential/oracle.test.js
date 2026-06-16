@@ -12,10 +12,12 @@
 //
 // Mode 2 (ref-vs-EXTRACTED, the phase exit bar): the same matrix with side B
 // flipped to src/capture/index.js behind a flush-less loopback transport.
-// Every intentional divergence must be a declared ledger entry (only D1, in
-// pause-resume); any undeclared divergence fails the suite, and stale-entry
-// detection (LAST test in the file) proves every mismatch-kind ledger entry
-// actually matched a real divergence.
+// Every intentional divergence must be a declared ledger entry (D1 in
+// pause-resume, D6 in text-childlist, D7 in sanitize-divergence, and
+// D24-scoped Phase 8 protocol extensions); any
+// undeclared divergence fails the suite, and stale-entry detection (LAST test
+// in the file) proves every mismatch-kind ledger entry actually matched a real
+// divergence.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -32,6 +34,9 @@ import * as scroll from './scenarios/scroll.js';
 import * as dialog from './scenarios/dialog.js';
 import * as pauseResume from './scenarios/pause-resume.js';
 import * as textChildlist from './scenarios/text-childlist.js';
+import * as sanitizeDivergence from './scenarios/sanitize-divergence.js';
+import * as phase8ProtocolExtensions from './scenarios/phase8-protocol-extensions.js';
+import * as cssomCaptureMode from './scenarios/cssom-capture-mode.js';
 
 /**
  * The full fixture x scenario matrix. Every reliability defense from the
@@ -47,11 +52,14 @@ const MATRIX = [
   { fixture: 'basic.html', scenario: scroll, config: {} },
   { fixture: 'basic.html', scenario: pauseResume, config: {} },
   { fixture: 'basic.html', scenario: textChildlist, config: {} },
+  { fixture: 'sanitize-corpus.html', scenario: sanitizeDivergence, config: {} },
   { fixture: 'heavy-realistic.html', scenario: snapshotOnly, config: {} },
   { fixture: 'heavy-realistic.html', scenario: structuralOps, config: {} },
   { fixture: 'truncation-overflow.html', scenario: snapshotOnly, config: { patchRects: true } },
   { fixture: 'canvas.html', scenario: snapshotOnly, config: {} },
   { fixture: 'dialog.html', scenario: dialog, config: { runScripts: 'dangerously' } },
+  { fixture: 'phase8-fidelity.html', scenario: phase8ProtocolExtensions, config: {} },
+  { fixture: 'cssom-mode.html', scenario: cssomCaptureMode, config: { styleMode: 'cssom' } },
 ];
 
 function loadFixture(fixtureFile) {
@@ -297,13 +305,144 @@ for (const entry of MATRIX) {
         [{ op: DIFF_OP.TEXT, text: 'Replaced intro text.' }],
         'one deduplicated text op carrying the replaced live text'
       );
+    } else if (entry.scenario.name === 'sanitize-divergence') {
+      // D7 territory: capture-side sanitization deliberately diverges from
+      // the raw reference stream by stripping on* handlers, neutralizing
+      // dangerous URL attrs, dropping embed surfaces, and masking password
+      // values before transport.
+      assert.ok(
+        matched.has('D7-capture-sanitization'),
+        'sanitize-divergence exercises ledger entry D7'
+      );
+      assert.equal(
+        matched.size,
+        1,
+        `only D7 consulted in sanitize-divergence (matched: ${[...matched].join(', ')})`
+      );
+
+      const refHtml = refStream
+        .filter((msg) => msg.type === STREAM.SNAPSHOT)
+        .map((msg) => (msg.payload && msg.payload.html) || '')
+        .join('\n');
+      const extHtml = extStream
+        .filter((msg) => msg.type === STREAM.SNAPSHOT)
+        .map((msg) => (msg.payload && msg.payload.html) || '')
+        .join('\n');
+      const hostileSnapshot = /on\w+\s*=|javascript:|<object|<embed|srcdoc=|expression\(|hunter2/i;
+      assert.match(
+        refHtml,
+        hostileSnapshot,
+        'reference snapshot carries hostile content and password plaintext'
+      );
+      assert.doesNotMatch(
+        extHtml,
+        hostileSnapshot,
+        'extracted snapshot strips hostile content and password plaintext'
+      );
+
+      const refOps = refStream
+        .filter((msg) => msg.type === STREAM.MUTATIONS)
+        .flatMap((msg) => (msg.payload && msg.payload.mutations) || []);
+      const extOps = extStream
+        .filter((msg) => msg.type === STREAM.MUTATIONS)
+        .flatMap((msg) => (msg.payload && msg.payload.mutations) || []);
+      assert.ok(
+        refOps.some((op) => op.op === DIFF_OP.ATTR && /^on/i.test(String(op.attr || ''))),
+        'reference mutation batch carries the hostile on* attr op'
+      );
+      assert.ok(
+        refOps.some((op) => op.op === DIFF_OP.ATTR && op.attr === 'href' && /javascript:/i.test(String(op.val || ''))),
+        'reference mutation batch carries the hostile javascript: href value'
+      );
+      assert.equal(
+        extOps.filter((op) => op.op === DIFF_OP.ATTR && /^on/i.test(String(op.attr || ''))).length,
+        0,
+        'extracted mutation batch drops on* attr ops'
+      );
+      assert.equal(
+        extOps.filter((op) => op.op === DIFF_OP.ATTR && /javascript:/i.test(String(op.val || ''))).length,
+        0,
+        'extracted mutation batch never carries javascript: attr values'
+      );
+      assert.ok(
+        extOps.some((op) => op.op === DIFF_OP.ATTR && op.attr === 'href' && op.val === null),
+        'extracted mutation batch carries the href removal attr op'
+      );
+    } else if (entry.fixture === 'truncation-overflow.html' && entry.scenario.name === 'snapshot-only') {
+      assert.ok(
+        matched.has('D24-phase8-truncated-subtree-markers'),
+        'truncation-overflow snapshot-only exercises the Phase 8 subtree marker ledger entry'
+      );
+      assert.equal(
+        matched.size,
+        1,
+        `only D24 subtree marker entry consulted for truncation-overflow (matched: ${[...matched].join(', ')})`
+      );
+    } else if (['basic-mutations', 'mutation-burst', 'structural-ops'].includes(entry.scenario.name)) {
+      assert.ok(
+        matched.has('D24-phase8-add-op-computed-styles'),
+        `${entry.scenario.name} exercises the Phase 8 add-op computed style ledger entry`
+      );
+      assert.equal(
+        matched.size,
+        1,
+        `only D24 add-op computed style entry consulted (matched: ${[...matched].join(', ')})`
+      );
+    } else if (entry.scenario.name === 'phase8-protocol-extensions') {
+      assert.ok(
+        matched.has('D24-phase8-shadow-frame-snapshot-sidecars'),
+        'Phase 8 fixture exercises shadow/frame snapshot sidecar divergence'
+      );
+      assert.ok(
+        matched.has('D24-phase8-shadow-value-mutations'),
+        'Phase 8 fixture exercises shadow-root and value mutation divergence'
+      );
+      assert.equal(
+        matched.size,
+        2,
+        `only D24 Phase 8 protocol entries consulted (matched: ${[...matched].join(', ')})`
+      );
+    } else if (entry.scenario.name === 'cssom-capture-mode') {
+      assert.ok(
+        matched.has('D25-cssom-mode-style-sources'),
+        'CSSOM fixture exercises the Phase 9 style-source ledger entry'
+      );
+      assert.equal(
+        matched.size,
+        1,
+        `only D25 CSSOM style-source entry consulted (matched: ${[...matched].join(', ')})`
+      );
+
+      const extSnapshot = extStream.find((msg) => msg.type === STREAM.SNAPSHOT);
+      assert.equal(
+        extSnapshot.payload.styleStrategy.mode,
+        'cssom',
+        'extracted CSSOM snapshot declares cssom style strategy'
+      );
+      assert.ok(
+        extSnapshot.payload.styleSources.some((source) => source.cssText.includes('.cssom-card')),
+        'extracted CSSOM snapshot carries document stylesheet text'
+      );
+      assert.equal(
+        /\sstyle=/.test(extSnapshot.payload.html),
+        false,
+        'CSSOM snapshot omits generated computed inline styles'
+      );
+      const styleOps = extStream
+        .filter((msg) => msg.type === STREAM.MUTATIONS)
+        .flatMap((msg) => msg.payload.mutations || [])
+        .filter((op) => op.op === DIFF_OP.STYLE_SOURCE);
+      assert.ok(
+        styleOps.some((op) => op.action === 'replace' && /40,\s*50,\s*60/.test(op.source.cssText)),
+        'extracted CSSOM stream carries live stylesheet replacement'
+      );
     } else {
-      // D1/D6 (and any future mismatch entry) must stay scoped: every
-      // scenario other than pause-resume and text-childlist compares clean
-      // with ZERO ledger consultations.
+      // D1/D6/D7/D24 (and any future mismatch entry) must stay scoped:
+      // every scenario other than the named divergence scenarios compares
+      // clean with ZERO ledger consultations.
       assert.equal(
         matched.size, 0,
-        `no ledger consultation outside pause-resume/text-childlist (matched: ${[...matched].join(', ') || 'none'})`
+        `no ledger consultation outside pinned divergence scenarios (matched: ${[...matched].join(', ') || 'none'})`
       );
     }
   });
@@ -364,6 +503,59 @@ test('text-childlist with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D6 is 
   // The divergence is REAL: without the ledger, the exact same stream pair
   // that passes above must fail loudly. This proves D6 is the thing
   // permitting it, not a comparison blind spot.
+  assert.throws(
+    () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
+    /UNDECLARED DIVERGENCE/
+  );
+});
+
+test('sanitize-divergence with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D7 is load-bearing, not decorative', async () => {
+  const entry = MATRIX.find((p) => p.scenario === sanitizeDivergence);
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
+  // The divergence is REAL: without the ledger, the exact same stream pair
+  // that passes above must fail loudly. This proves D7 is the thing
+  // permitting it, not a comparison blind spot.
+  assert.throws(
+    () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
+    /UNDECLARED DIVERGENCE/
+  );
+});
+
+test('phase8-protocol-extensions with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D24 entries are load-bearing', async () => {
+  const entry = MATRIX.find((p) => p.scenario === phase8ProtocolExtensions);
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
+  assert.throws(
+    () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
+    /UNDECLARED DIVERGENCE/
+  );
+});
+
+test('cssom-capture-mode with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D25 is load-bearing', async () => {
+  const entry = MATRIX.find((p) => p.scenario === cssomCaptureMode);
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
+  assert.throws(
+    () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
+    /UNDECLARED DIVERGENCE/
+  );
+});
+
+test('truncation-overflow snapshot-only with an EMPTY ledger throws UNDECLARED DIVERGENCE -- subtree markers are load-bearing', async () => {
+  const entry = MATRIX.find((p) => p.fixture === 'truncation-overflow.html');
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
+  assert.throws(
+    () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
+    /UNDECLARED DIVERGENCE/
+  );
+});
+
+test('basic-mutations with an EMPTY ledger throws UNDECLARED DIVERGENCE -- add-op computed styles are load-bearing', async () => {
+  const entry = MATRIX.find((p) => p.scenario === basicMutations);
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
   assert.throws(
     () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
     /UNDECLARED DIVERGENCE/

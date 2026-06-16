@@ -1,0 +1,266 @@
+* { box-sizing: border-box; }
+
+body {
+  background: #0f1117;
+  color: #e0e0e0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  padding: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+header { margin-bottom: 24px; }
+
+.header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+h1 {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.subtitle {
+  color: #888888;
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.5;
+  margin: 8px 0 0;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #e0e0e0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.badge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+}
+
+.badge.paused .badge-dot,
+.state-disconnected .badge-dot {
+  background: #ef4444;
+  animation: none;
+}
+
+.state-connecting .badge-dot,
+.state-stale .badge-dot {
+  background: #eab308;
+  animation: none;
+}
+
+.state-live .badge-dot,
+.badge:not(.paused) .badge-dot {
+  background: #22c55e;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .state-live .badge-dot,
+  .badge:not(.paused) .badge-dot {
+    animation: pulse 2000ms ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .6; }
+  }
+}
+
+.status-strip,
+.health-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  background: #1e1e2e;
+  border: 1px solid #333333;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 120px;
+}
+
+.metric-label,
+.pane-header {
+  color: #888888;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.metric-value {
+  color: #e0e0e0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.selectable { user-select: text; }
+
+.pane {
+  background: #1e1e2e;
+  border: 1px solid #333333;
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.pane-header { margin-bottom: 8px; }
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+button {
+  min-height: 36px;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font: 600 13px/1.2 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  cursor: pointer;
+  transition: background 150ms ease, filter 150ms ease;
+}
+
+button:focus-visible {
+  outline: 2px solid #f59e0b;
+  outline-offset: 2px;
+}
+
+.btn-primary {
+  background: #f59e0b;
+  color: #0f1117;
+  border: 1px solid transparent;
+}
+
+.btn-primary:hover { filter: brightness(1.1); }
+
+.btn-secondary {
+  background: transparent;
+  border: 1px solid #333333;
+  color: #e0e0e0;
+}
+
+.btn-secondary:hover { background: rgba(255, 255, 255, 0.06); }
+
+.source-surface {
+  position: relative;
+  min-height: 240px;
+}
+
+.rows {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+
+.rows li {
+  background: #0f1117;
+  border: 1px solid #333333;
+  border-radius: 6px;
+  padding: 8px 16px;
+}
+
+.source-empty {
+  display: none;
+  color: #888888;
+  text-align: center;
+  padding: 24px;
+}
+
+.rows:empty + .source-empty {
+  display: block;
+}
+
+.stage {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  min-height: 280px;
+  height: min(72vh, 720px);
+  background: #0f1117;
+  border: 1px solid #333333;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.empty-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #888888;
+  text-align: center;
+  padding: 16px;
+}
+
+.stage.has-frame .empty-state {
+  display: none;
+}
+
+.empty-state h2,
+.source-empty h2 {
+  color: #e0e0e0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.empty-state p,
+.source-empty p {
+  font-size: 13px;
+  margin: 0;
+}
+
+footer {
+  margin-top: 24px;
+  color: #888888;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.log {
+  margin-top: 8px;
+}
+
+.log div {
+  white-space: pre-wrap;
+}
+
+@media (max-width: 720px) {
+  body { padding: 16px; }
+  .stage { min-height: 220px; }
+  .metric { min-width: 100%; }
+}

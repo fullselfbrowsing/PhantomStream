@@ -37,26 +37,20 @@ standalone framework.
 - ✓ Extracted capture verified against `reference/` via a dual-jsdom differential oracle on frozen fixtures, with machine-enforced divergence ledger (D1 mismatch + D2–D5 mappings) — Validated in Phase 1 (CAPT-04)
 - ✓ Renderer decoupled from the FSB dashboard into an embeddable viewer (`createViewer({ container, transport })`, sandboxed iframe, scale-to-fit, extensible overlay registry, scroll/dialog parity) — Validated in Phase 2 (VIEW-01, VIEW-04, VIEW-06)
 - ✓ Embedded-SDK adapter + first-light loopback demo (`npm run example:loopback`) — a page mirrors itself live with zero infrastructure, verified in real Chrome — Validated in Phase 2 (ADPT-04)
+- ✓ Security pipeline for embeddable/publishable mirroring — capture-side sanitization in all serialization paths, renderer defense-in-depth with sandbox/CSP contract, and capture-side privacy masking vocabulary (`blockSelector`, `maskTextSelector`, `maskInputs`, custom mask fns) — Validated in Phase 3 (SEC-01, SEC-02, SEC-03)
+- ✓ Networked mirror foundation — transport-agnostic raw relay, self-hostable WebSocket backend, endpoint-owned native deflate transport with legacy `_lz` decode, viewer lifecycle/health events, and local two-tab demo verified in real Chrome/FSB — Validated in Phase 4 (RELY-01, RELY-02, VIEW-02, PKG-01)
+- ✓ Playwright/CDP adapter + agent-observability demo — single-file inject artifact, binding bridge, consent-gated native input replay, reverse-mapped mirror control, local Playwright-driven demo, browser verification, and threat verification — Validated in Phase 5 (ADPT-02, PKG-02, VIEW-05, SEC-04)
+- ✓ Extension MV3 + bookmarklet adapters — generated browser inject artifact, page-world bridge, service-worker watchdog state, bookmarklet loader diagnostics, and browser UAT for live mirror paths — Validated in Phase 6 (ADPT-01, ADPT-03)
+- ✓ WeakMap node identity + semantic addressing API — capture no longer writes framework identity attributes into the observed page, identity travels through `nodeIds` sidecars, renderer resolves through a private Map index, and hosts can use `getNodeId`, `resolveNode`, `highlightNode`, and `clearHighlight` — Validated in Phase 7 (CAPT-07, VIEW-03)
+- ✓ Modern web fidelity completion — open shadow DOM sidecars/reconstruction, same-origin iframe mirroring with cross-origin placeholders, live form value diffs, computed styles for late-added nodes, bounded on-demand subtree recovery, relay-cap hardening, and Playwright inject parity — Validated in Phase 8 (CAPT-05, CAPT-06, CAPT-08, CAPT-09, CAPT-11)
+- ✓ Stylesheet-centric capture mode (CSSOM) — opt-in `styleMode: 'cssom'`, scoped `styleSources[]` / `styleStrategy`, live `DIFF_OP.STYLE_SOURCE` ops, fallback diagnostics, Playwright inject support, and D25 oracle coverage — Validated in Phase 9 (CAPT-10)
 
 ### Active
 
 <!-- Current scope. Building toward these. -->
 
-**Framework extraction (first priority):**
-- [ ] Transport-agnostic relay with pluggable backends (WebSocket reference implementation)
-- [ ] All six inherited limitations fixed in the standalone v1:
-  - [ ] Sanitization as a first-class stage (`on*` attrs, `javascript:` URLs stripped in all serialization paths; sandboxed rendering enforced)
-  - [ ] Stylesheet-centric capture mode (CSSOM) — fixes frozen-style drift, shrinks payloads, enables the paper's ablation
-  - [ ] Computed styles for nodes added after the snapshot
-  - [ ] On-demand subtree fetch to close the truncation gap interactively
-  - [ ] WeakMap-based node identity (stop mutating the observed page with `data-fsb-nid`)
-  - [ ] Shadow DOM mirroring
-
 **Plug-and-play surface:**
-- [ ] Host adapters for every context that makes sense: extension content script, Playwright/CDP, bookmarklet, embedded SDK
-- [ ] Two-tab demo (`npx phantom-stream demo`: capture one tab, mirror live in another via bundled relay)
-- [ ] Playwright-driven demo (script drives a real page; viewer mirrors live with remote control)
-- [ ] npm package published as `@fullselfbrowsing/phantom-stream` with JSDoc-generated `.d.ts`
+- [ ] npm package published as `@full-self-browsing/phantom-stream` with JSDoc-generated `.d.ts`
 
 **FSB integration:**
 - [ ] FSB swap-in verified from this repo — FSB consumes the published package as its streaming layer
@@ -82,8 +76,13 @@ standalone framework.
   relay), pinned to FSB commit `867d6f0c`. Eleven phases of original planning docs, UAT, and
   verification live under `reference/planning/`. The codebase map is at `.planning/codebase/`.
 - **Extraction state:** `src/protocol/` is done (messages, envelope, constants — clean ESM,
-  dependency-free, tested with `node --test`). `src/capture/`, `src/relay/`, `src/renderer/`
-  are README stubs specifying the planned module splits and decoupling seams.
+  dependency-free, tested with `node --test`). `src/capture/`, `src/renderer/`, `src/relay/`,
+  `src/transport/websocket.js`, and `src/adapters/playwright.js` now hold the extracted
+  capture/viewer cores, Phase 3 sanitization and masking gates, the raw relay/ws backend,
+  endpoint WebSocket transport, Playwright/CDP adapter, extension/bookmarklet adapters,
+  the Phase 7 WeakMap/nodeIds identity contract with semantic addressing APIs, and the
+  Phase 8 shadow DOM/iframe/value/subtree fidelity extensions, and Phase 9 opt-in CSSOM
+  stylesheet capture.
 - **Docs are strong:** `docs/ARCHITECTURE.md` (full system description + 6 known limitations),
   `docs/DESIGN-HISTORY.md` (what failed and why — e.g. the 45 s YouTube serialize that forced
   curated style capture), `docs/paper/OUTLINE.md` (paper structure + evaluation plan).
@@ -114,10 +113,15 @@ standalone framework.
 |----------|-----------|---------|
 | Framework-first sequencing (extract → demo → FSB swap-in → paper) | A clean standalone framework is the prerequisite for both other deliverables | — Pending |
 | Plain JS ESM + JSDoc types, generated `.d.ts` (not TypeScript migration) | Sources must inject build-free into page contexts; consumers still get full types; `tsc --checkJs` enforces in CI | — Pending |
-| All six inherited limitations are v1 must-fix, not deferred | Published framework can't ship known security/fidelity gaps; CSSOM mode doubles as paper ablation | — Pending |
+| All six inherited limitations are v1 must-fix, not deferred | Published framework can't ship known security/fidelity gaps; CSSOM mode doubles as paper ablation | Validated in Phase 9 |
 | FSB integration verified from this repo via published npm package | Keeps "SDK that plugs back into FSB" an observable success criterion here, while FSB code stays in its own repo | — Pending |
 | Full system-track paper (WWW/UIST/CHI tier), no fixed deadline | Deep evaluation valued over fast turnaround; arXiv/workshop versions can derive from the full draft | — Pending |
 | Both demos: two-tab + Playwright-driven | Two-tab proves plug-and-play; Playwright proves the agent-observability story the paper leads with | — Pending |
+| Security pipeline is enforced before relay/publishing work | Anything embeddable or published must be safe to render and must not leak masked content | Validated in Phase 3 |
+| Relay stays raw; compression and decode are endpoint-owned | Keeps routing transport-agnostic, preserves byte-cap diagnostics, and maintains FSB `_lz` compatibility without a relay-side payload dependency | Validated in Phase 4 |
+| Consent-gated remote control belongs in host/adapter boundaries, not renderer/relay | Renderer exposes geometry only and relay stays raw; the adapter owns authorization and driver-native replay | Validated in Phase 5 |
+| Capture and renderer identity is private state, not live-page markup | Prevents framework identity from mutating or colliding with the observed page while preserving opaque nid addressing through `nodeIds` sidecars | Validated in Phase 7 |
+| Phase 8 fidelity extensions use sidecars and bounded refreshes instead of live frame loads or unbounded payloads | Keeps the viewer inert/sandboxed and preserves relay-cap guarantees while adding shadow DOM, iframe, value, late-style, and subtree recovery fidelity | Validated in Phase 8 |
 
 ## Evolution
 
@@ -137,4 +141,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-11 after Phase 2 completion (embeddable viewer + loopback mirror live; text-node fidelity fix D6)*
+*Last updated: 2026-06-16 after Phase 9 completion (CSSOM capture mode validated and Phase 10 packaging next)*

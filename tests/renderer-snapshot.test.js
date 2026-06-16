@@ -134,6 +134,22 @@ test('stylesheet URLs render as link tags with only double quotes escaped', () =
   );
 });
 
+test('stylesheet URLs with dangerous schemes are filtered at srcdoc assembly', () => {
+  const html = buildSnapshotHtml(minimalPayload({
+    stylesheets: [
+      'javascript:alert(1)',
+      'vbscript:msgbox(1)',
+      'data:text/html,<b>x</b>',
+      'https://x.test/a.css',
+    ],
+  }));
+  assert.ok(!/javascript:|vbscript:|data:text\/html/i.test(html), 'dangerous stylesheet URLs absent');
+  assert.ok(
+    html.includes('<link rel="stylesheet" href="https://x.test/a.css">'),
+    'benign stylesheet URL still renders'
+  );
+});
+
 test('inlineStyles are CSS-scrubbed at assembly -- </style> breakout and url(javascript:) neutralized, benign CSS byte-identical', () => {
   // DELIBERATE FLIP of the raw parity pin (plan 03-02 Task 3): inline CSS
   // now routes through scrubCssText before the style tag is assembled.
@@ -150,6 +166,17 @@ test('inlineStyles are CSS-scrubbed at assembly -- </style> breakout and url(jav
     benignHtml.includes('<style>' + benign + '</style>'),
     'benign CSS passes byte-identical through the scrub'
   );
+});
+
+test('htmlStyle and bodyStyle are CSS-scrubbed before shell assembly', () => {
+  const html = buildSnapshotHtml(minimalPayload({
+    htmlStyle: 'background:url("javascript:alert(1)");width:expression(alert(2));',
+    bodyStyle: "background:url('javascript:alert(3)');color: red;",
+  }));
+  assert.ok(!/javascript:/i.test(html), 'shell styles have no javascript: URL');
+  assert.ok(!/expression\(/i.test(html), 'shell styles have no expression()');
+  assert.ok(html.includes('<html style="background:url(about:blank);width:blocked(alert(2));">'));
+  assert.ok(html.includes('<body style="background:url(about:blank);color: red;">'));
 });
 
 test('payload.html is inserted raw between the body tags AT THE STRING LAYER', () => {

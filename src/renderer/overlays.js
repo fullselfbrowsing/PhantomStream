@@ -53,6 +53,34 @@ export var OVERLAY_CSS = [
   '    transition: top 100ms ease, left 100ms ease, width 100ms ease, height 100ms ease;',
   '  }',
   '}',
+  '.ps-node-highlight {',
+  '  position: absolute;',
+  '  border: 2px solid #38bdf8;',
+  '  border-radius: 4px;',
+  '  box-shadow: 0 0 0 1px rgba(8, 47, 73, 0.55), 0 0 14px rgba(56, 189, 248, 0.45);',
+  '  background: rgba(56, 189, 248, 0.12);',
+  '  pointer-events: none;',
+  '  display: none;',
+  '}',
+  '@media (prefers-reduced-motion: no-preference) {',
+  '  .ps-node-highlight {',
+  '    transition: top 80ms ease, left 80ms ease, width 80ms ease, height 80ms ease;',
+  '  }',
+  '}',
+  '.ps-node-highlight-label {',
+  '  position: absolute;',
+  '  left: 0;',
+  '  top: -24px;',
+  '  max-width: 240px;',
+  '  overflow: hidden;',
+  '  text-overflow: ellipsis;',
+  '  white-space: nowrap;',
+  '  border-radius: 4px;',
+  '  padding: 3px 7px;',
+  '  background: rgba(8, 47, 73, 0.92);',
+  '  color: #e0f2fe;',
+  '  font: 600 12px/1.2 system-ui, sans-serif;',
+  '}',
   '.ps-overlay-progress {',
   '  position: absolute;',
   '  bottom: 8px;',
@@ -151,6 +179,48 @@ export function mapRectToHost(rect, scale) {
     left: scale.offsetX + rect.x * scale.s,
     width: rect.w * scale.s,
     height: rect.h * scale.s
+  };
+}
+
+/**
+ * Map a host-document point over the scaled mirror back into captured-page
+ * viewport CSS pixels. Letterbox/out-of-bounds points are classified before
+ * rounding and clamping so hosts can reject non-dispatchable input.
+ *
+ * @param {{x: number, y: number}} point
+ *   Host-stage point relative to the viewer root.
+ * @param {{s?: number, offsetX?: number, offsetY?: number, pageW?: number, pageH?: number}} scale
+ *   Scale state from the viewer. Missing page dimensions are treated as 0.
+ * @returns {{inside: boolean, x: number|null, y: number|null}}
+ *   Dispatchable viewport coordinates, or null coordinates when outside.
+ */
+export function mapHostPointToViewport(point, scale) {
+  var p = point || {};
+  var sc = scale || {};
+  var s = (typeof sc.s === 'number' && isFinite(sc.s) && sc.s > 0) ? sc.s : 1;
+  var offsetX = (typeof sc.offsetX === 'number' && isFinite(sc.offsetX)) ? sc.offsetX : 0;
+  var offsetY = (typeof sc.offsetY === 'number' && isFinite(sc.offsetY)) ? sc.offsetY : 0;
+  var pageW = (typeof sc.pageW === 'number' && isFinite(sc.pageW)) ? Math.max(0, sc.pageW) : 0;
+  var pageH = (typeof sc.pageH === 'number' && isFinite(sc.pageH)) ? Math.max(0, sc.pageH) : 0;
+
+  if (pageW <= 0 || pageH <= 0 ||
+      typeof p.x !== 'number' || !isFinite(p.x) ||
+      typeof p.y !== 'number' || !isFinite(p.y)) {
+    return { inside: false, x: null, y: null };
+  }
+
+  var rawX = (p.x - offsetX) / s;
+  var rawY = (p.y - offsetY) / s;
+  if (rawX < 0 || rawY < 0 || rawX >= pageW || rawY >= pageH) {
+    return { inside: false, x: null, y: null };
+  }
+
+  var maxX = Math.max(0, Math.floor(pageW) - 1);
+  var maxY = Math.max(0, Math.floor(pageH) - 1);
+  return {
+    inside: true,
+    x: Math.max(0, Math.min(maxX, Math.round(rawX))),
+    y: Math.max(0, Math.min(maxY, Math.round(rawY)))
   };
 }
 

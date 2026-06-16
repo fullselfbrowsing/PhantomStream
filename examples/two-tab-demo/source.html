@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhantomStream — Source Tab</title>
+<link rel="stylesheet" href="./demo.css">
+</head>
+<body>
+
+<header data-phantomstream-ui="source-header">
+  <div class="header-row">
+    <div>
+      <h1>PhantomStream — Source Tab</h1>
+      <p class="subtitle">Mutate this page; the viewer tab mirrors it through the local relay.</p>
+    </div>
+    <span class="badge" id="capture-badge" role="status" aria-live="polite">
+      <span class="badge-dot" aria-hidden="true"></span>
+      <span id="capture-label">CAPTURING</span>
+    </span>
+  </div>
+</header>
+
+<section class="status-strip" data-phantomstream-ui="source-status" aria-label="Source stream status">
+  <div class="metric">
+    <span class="metric-label">Room</span>
+    <span class="metric-value selectable" id="source-room">unknown</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Relay</span>
+    <span class="metric-value" id="source-relay">connecting</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Sent</span>
+    <span class="metric-value" id="source-sent">0</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Last send</span>
+    <span class="metric-value" id="source-last-send">never</span>
+  </div>
+</section>
+
+<main>
+  <section class="pane">
+    <div class="pane-header">SOURCE</div>
+    <div class="controls" data-phantomstream-ui="source-controls">
+      <button type="button" class="btn-primary" id="btn-add">Add row</button>
+      <button type="button" class="btn-secondary" id="btn-remove">Remove row</button>
+      <button type="button" class="btn-secondary" id="btn-edit">Edit text</button>
+      <button type="button" class="btn-secondary" id="btn-dialog">Show dialog</button>
+      <button type="button" class="btn-secondary" id="btn-auto" aria-pressed="true">Auto-mutate</button>
+    </div>
+    <div class="source-surface" id="capture-surface">
+      <ul class="rows" id="rows"></ul>
+      <div class="source-empty" id="source-empty">
+        <h2>No rows yet</h2>
+        <p>Add a row to send a visible mutation.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer data-phantomstream-ui="source-log">
+  <div>Source tab transport log</div>
+  <div class="log" id="source-log"></div>
+</footer>
+
+<script type="module" src="./source.js?v=04-demo"></script>
+</body>
+</html>

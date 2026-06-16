@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PhantomStream sanitize corpus fixture</title>
+  <style>
+    @import "ftp://evil.example/remote.css";
+    @import url("javascript:alert(1)");
+    body { font-family: system-ui, sans-serif; }
+    p { color: #235; }
+    .safe-list li { margin-block: 4px; }
+    .hostile-css { background-image: url(javascript:alert(1)); }
+  </style>
+</head>
+<body>
+  <h1 id="main-heading">Sanitize corpus fixture</h1>
+  <p id="intro">Benign paragraph preserved for structural comparison.</p>
+  <p id="detail">A second paragraph keeps ordinary text and element order stable.</p>
+  <ul id="item-list" class="safe-list">
+    <li id="item-one">First safe item</li>
+    <li id="item-two">Second safe item</li>
+    <li id="item-three">Third safe item</li>
+  </ul>
+
+  <form id="login-form" action="/login">
+    <label for="username-input">Username</label>
+    <input id="username-input" type="text" name="username" value="casey">
+    <label for="password-input">Password</label>
+    <input id="password-input" type="password" name="password" value="hunter2">
+    <button id="danger-button" type="submit" onclick="alert(1)">Sign in</button>
+  </form>
+
+  <a id="danger-link" href="javascript:alert(1)">Hostile link</a>
+  <iframe id="srcdoc-frame" srcdoc="<script>alert(1)</script><p>nested</p>"></iframe>
+  <object id="object-payload" data="javascript:alert(1)" type="text/html"></object>
+  <embed id="embed-payload" src="javascript:alert(1)" type="text/html">
+  <svg id="svg-payload" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <a id="svg-danger-link" xlink:href="javascript:alert(1)">
+      <text x="0" y="16">SVG hostile link</text>
+    </a>
+  </svg>
+  <div id="hostile-style" style="background:url(javascript:alert(1));width:expression(alert(1));">
+    Hostile inline style
+  </div>
+
+  <a id="tgt" href="/safe">Mutation target link</a>
+  <div id="tgt2" class="before">Benign mutation target</div>
+</body>
+</html>

@@ -1,11 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   encodeEnvelope,
   decodeEnvelope,
   isCompressedEnvelope,
   isCurrentStream,
   createStreamSessionId,
+  CONTROL,
+  STREAM,
+  DIFF_OP,
   SNAPSHOT_BUDGET_BYTES,
   RELAY_PER_MESSAGE_LIMIT_BYTES,
 } from '../src/protocol/index.js';
@@ -72,4 +77,25 @@ test('session ids are deterministic given entropy', () => {
 test('snapshot budget stays inside the relay cap with headroom', () => {
   assert.ok(SNAPSHOT_BUDGET_BYTES < RELAY_PER_MESSAGE_LIMIT_BYTES);
   assert.equal(SNAPSHOT_BUDGET_BYTES, Math.floor(RELAY_PER_MESSAGE_LIMIT_BYTES * 0.8));
+});
+
+test('Phase 8 protocol constants are exported for fidelity sidecars and recovery', () => {
+  assert.equal(DIFF_OP.VALUE, 'value');
+  assert.equal(DIFF_OP.SHADOW_ROOT, 'shadow-root');
+  assert.equal(DIFF_OP.FRAME, 'frame');
+  assert.equal(CONTROL.SUBTREE_REQUEST, 'dash:ps-subtree-request');
+  assert.equal(STREAM.SUBTREE_RESPONSE, 'ext:ps-subtree-response');
+});
+
+test('Phase 9 protocol constants and typedefs are exported for CSSOM style sources', () => {
+  assert.equal(DIFF_OP.STYLE_SOURCE, 'style-source');
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/protocol/messages.js', import.meta.url)),
+    'utf8'
+  );
+  for (const typedef of ['StyleScope', 'StyleSource', 'StyleStrategy', 'StyleSourceDiffOp']) {
+    assert.match(source, new RegExp('@typedef \\{Object\\} ' + typedef));
+  }
+  assert.match(source, /styleSources/);
+  assert.match(source, /styleStrategy/);
 });

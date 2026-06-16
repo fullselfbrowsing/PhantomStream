@@ -14,8 +14,8 @@
 //   - scroll handler (store first, gated smooth follow): 3358-3372
 //
 // Intentional divergences (renderer divergence ledger, plan 02-04):
-//   - FSB 9-state preview machine -> minimal 'waiting' | 'streaming' gate;
-//     the formal state/event surface (VIEW-02) arrives in Phase 4.
+//   - FSB 9-state preview machine -> minimal 'waiting' | 'streaming' gate
+//     plus Phase 4's host-facing state/health event surface (VIEW-02).
 //   - tabId identity checks dropped (FSB extension concern); staleness goes
 //     through the protocol's isCurrentStream instead.
 //   - dash:request-status send dropped from the resync path -- the resync
@@ -34,11 +34,11 @@
 // || inline defaulting, function expressions, named exports, explicit .js
 // import extensions, factory-time validation as the ONLY throwing site.
 
-import { buildSnapshotHtml } from './snapshot.js';
+import { buildSnapshotHtml, buildFramePlaceholderHtml } from './snapshot.js';
 import { applyMutations } from './diff.js';
-import { sanitizeFragment } from './sanitize.js';
+import { sanitizeFragment, scrubCssText } from './sanitize.js';
 import { createOverlays, mapRectToHost, OVERLAY_CSS } from './overlays.js';
-import { STREAM, CONTROL, NID_ATTR, isCurrentStream } from '../protocol/messages.js';
+import { STREAM, CONTROL, isCurrentStream } from '../protocol/messages.js';
 
 /**
  * The host-injected viewer transport. Mirrors the capture Transport's
@@ -53,6 +53,9 @@ import { STREAM, CONTROL, NID_ATTR, isCurrentStream } from '../protocol/messages
  * @property {(handler: (type: string, payload: Object) => void) => (() => void)} onMessage
  *   Subscribe to capture-host -> viewer (STREAM.*) messages. Returns an
  *   unsubscribe function; detach() invokes it.
+ * @property {(handler: (status: Object) => void) => (() => void)} [onStatus]
+ *   Optional Phase 4 status subscription implemented by WebSocket transports.
+ *   Status objects are telemetry only; mirrored payloads never flow here.
  */
 
 /**
@@ -72,6 +75,9 @@ import { STREAM, CONTROL, NID_ATTR, isCurrentStream } from '../protocol/messages
  *   or onMessage is not a function.
  * @property {ViewerLogger} [logger]
  *   Optional. Defaults to a console-backed logger.
+ * @property {number} [disconnectDelayMs]
+ *   Optional stale-to-disconnected delay for closed transports. Defaults to a
+ *   short demo-friendly window; tests may set a smaller value.
  */
 
 /**
@@ -81,9 +87,26 @@ import { STREAM, CONTROL, NID_ATTR, isCurrentStream } from '../protocol/messages
  *   the viewer root from the container. Idempotent.
  * @property {() => void} destroy
  *   detach() plus state/overlay reset. Idempotent.
+ * @property {() => {scale: Object, viewport: Object, container: Object}} getViewportMapping
+ *   Return cloned scale, viewport, and container geometry for host-owned
+ *   input overlays.
+ * @property {(nid: string|number) => ({nid: string, exists: boolean, rect: Object, streamSessionId: string, snapshotId: number}|null)} resolveNode
+ *   Resolve an opaque PhantomStream nid to host-document geometry and stream
+ *   identity. Missing or stale nids return null.
+ * @property {(nid: string|number, options?: {label?: string}) => boolean} highlightNode
+ *   Show or update a local host-document highlight for a resolved nid.
+ *   Returns false for stale or missing nids.
+ * @property {() => void} clearHighlight
+ *   Hide the local node highlight. Idempotent.
+ * @property {(nid: string|number, options?: {reason?: string}) => string|null} requestSubtree
+ *   Request a bounded fresh subtree for an indexed truncated marker. Returns
+ *   the generated requestId, or null when the nid is invalid, missing, or
+ *   already in flight.
  * @property {(kind: string, renderFn: (payload: *, anchorRect: ?Object, layer: Element) => void) => void} registerOverlay
  *   Register a custom overlay kind (delegates to the overlays registry --
  *   the host-facing extension seam from D-10).
+ * @property {(eventName: 'state'|'health', handler: (event: Object) => void) => (() => void)} on
+ *   Subscribe to host-facing lifecycle and health events. Returns unsubscribe.
  */
 
 /**
@@ -143,6 +166,9 @@ export function createViewer(options) {
     warn: function () { console.warn.apply(console, arguments); },
     error: function () { console.error.apply(console, arguments); }
   };
+  var disconnectDelayMs = typeof cfg.disconnectDelayMs === 'number'
+    ? Math.max(0, cfg.disconnectDelayMs)
+    : 750;
 
   // All DOM construction happens in the container's own document so the
   // viewer works in any window (host page, jsdom test, future multi-doc).
@@ -202,6 +228,12 @@ export function createViewer(options) {
       var scrubDoc = iframe.contentDocument;
       if (scrubDoc && scrubDoc.body) {
         sanitizeFragment(scrubDoc.body, sanitizeCounters, logger);
+        if (lastSnapshotPayload) {
+          resetIdentityIndex(scrubDoc, lastSnapshotPayload.nodeIds || []);
+          installStyleSources(scrubDoc, lastSnapshotPayload.styleSources || [], { kind: 'document' });
+          installShadowRoots(scrubDoc, lastSnapshotPayload.shadowRoots || []);
+          installFrames(scrubDoc, lastSnapshotPayload.frames || []);
+        }
       }
     } catch (e) {
       logger.warn('[Renderer] post-parse scrub failed', e);
@@ -243,6 +275,15 @@ export function createViewer(options) {
 
   // --- Viewer state (reference module state -> factory closure state) ---
   var viewerState = 'waiting'; // 'waiting' | 'streaming' minimal gate
+  var publicState = 'connecting'; // 'connecting' | 'live' | 'stale' | 'disconnected'
+  var publicStateEvent = {
+    state: publicState,
+    reason: 'viewer-created',
+    ts: Date.now()
+  };
+  var stateListeners = new Set();
+  var healthListeners = new Set();
+  var disconnectTimer = null;
   var active = { streamSessionId: '', snapshotId: 0 };
   var lastScroll = { x: 0, y: 0 };
   var counters = { staleMisses: 0, applyFailures: 0 };
@@ -257,10 +298,174 @@ export function createViewer(options) {
     strippedHandlers: 0, blockedUrls: 0, droppedSubtrees: 0, cssScrubs: 0
   };
   var resyncPending = false; // latch: at most one resync in flight per generation
+  var receivedByType = {};
+  var sentByType = {};
+  var lastFrameAt = 0;
+  var lastSnapshotAt = 0;
+  var lastMutationAt = 0;
+  var lastTransportStatus = {};
   var lastSnapshotPayload = null;
   var scaleState = computeScale(1920, 1080, container.clientWidth, container.clientHeight);
   var detached = false;
   var destroyed = false;
+  var nidToNode = new Map();
+  var nodeToNid = new WeakMap();
+  var frameLoadHandlers = new WeakMap();
+  var nodeHighlightEl = null;
+  var pendingSubtreeRequests = new Map();
+  var nextSubtreeRequestId = 1;
+
+  function incrementCounter(counter, type) {
+    var key = typeof type === 'string' && type ? type : 'unknown';
+    counter[key] = (counter[key] || 0) + 1;
+  }
+
+  function copyCounters(counter) {
+    var out = {};
+    for (var key in counter) {
+      if (Object.prototype.hasOwnProperty.call(counter, key)) out[key] = counter[key];
+    }
+    return out;
+  }
+
+  function copyErrors(errors) {
+    if (!Array.isArray(errors)) return [];
+    return errors.map(function (entry) {
+      var e = entry || {};
+      return {
+        code: typeof e.code === 'string' ? e.code : '',
+        reason: typeof e.reason === 'string' ? e.reason : '',
+        ts: typeof e.ts === 'number' ? e.ts : 0
+      };
+    });
+  }
+
+  function sanitizeTransportStatus(status) {
+    var s = status || {};
+    return {
+      state: typeof s.state === 'string' ? s.state : (typeof s.status === 'string' ? s.status : ''),
+      reason: typeof s.reason === 'string' ? s.reason : '',
+      readyState: typeof s.readyState === 'number' ? s.readyState : null,
+      bufferedAmount: typeof s.bufferedAmount === 'number' ? s.bufferedAmount : 0,
+      drops: typeof s.drops === 'number' ? s.drops : 0,
+      errors: copyErrors(s.errors),
+      lastCloseAt: typeof s.lastCloseAt === 'number' ? s.lastCloseAt : 0,
+      lastSendAt: typeof s.lastSendAt === 'number' ? s.lastSendAt : 0,
+      lastReceiveAt: typeof s.lastReceiveAt === 'number' ? s.lastReceiveAt : 0,
+      closeCode: typeof s.closeCode === 'number' ? s.closeCode : null,
+      closeReason: typeof s.closeReason === 'string' ? s.closeReason : '',
+      sentByType: copyCounters(s.sentByType || {}),
+      receivedByType: copyCounters(s.receivedByType || {})
+    };
+  }
+
+  function currentTransportHealth() {
+    var live = {};
+    if (transport && typeof transport.getHealth === 'function') {
+      try {
+        live = sanitizeTransportStatus(transport.getHealth());
+      } catch (err) {
+        logger.error('[Renderer] transport health failed', err);
+      }
+    }
+    return Object.assign(sanitizeTransportStatus(lastTransportStatus), live);
+  }
+
+  function cloneStateEvent(event) {
+    return {
+      state: event.state,
+      reason: event.reason,
+      ts: event.ts
+    };
+  }
+
+  function healthSnapshot() {
+    return {
+      state: publicState,
+      ts: Date.now(),
+      lastFrameAt: lastFrameAt,
+      lastSnapshotAt: lastSnapshotAt,
+      lastMutationAt: lastMutationAt,
+      receivedByType: copyCounters(receivedByType),
+      sentByType: copyCounters(sentByType),
+      staleMisses: counters.staleMisses,
+      applyFailures: counters.applyFailures,
+      resyncPending: resyncPending,
+      sanitizer: copyCounters(sanitizeCounters),
+      transport: currentTransportHealth()
+    };
+  }
+
+  function notifyState() {
+    var event = cloneStateEvent(publicStateEvent);
+    stateListeners.forEach(function (handler) {
+      try {
+        handler(cloneStateEvent(event));
+      } catch (err) {
+        logger.error('[Renderer] event handler failed', 'state', err);
+      }
+    });
+  }
+
+  function notifyHealth() {
+    var event = healthSnapshot();
+    healthListeners.forEach(function (handler) {
+      try {
+        handler(healthSnapshot());
+      } catch (err) {
+        logger.error('[Renderer] event handler failed', 'health', err);
+      }
+    });
+    return event;
+  }
+
+  function clearDisconnectTimer() {
+    if (!disconnectTimer) return;
+    clearTimeout(disconnectTimer);
+    disconnectTimer = null;
+  }
+
+  function setPublicState(state, reason) {
+    if (state !== 'connecting' && state !== 'live' &&
+        state !== 'stale' && state !== 'disconnected') {
+      return;
+    }
+    if (state !== 'stale') clearDisconnectTimer();
+    if (publicState === state) return;
+    publicState = state;
+    publicStateEvent = {
+      state: state,
+      reason: reason || '',
+      ts: Date.now()
+    };
+    notifyState();
+    notifyHealth();
+  }
+
+  function scheduleDisconnected(reason) {
+    clearDisconnectTimer();
+    disconnectTimer = setTimeout(function () {
+      disconnectTimer = null;
+      if (detached || destroyed || publicState !== 'stale') return;
+      setPublicState('disconnected', reason || 'transport-closed');
+    }, disconnectDelayMs);
+  }
+
+  function on(eventName, handler) {
+    if ((eventName !== 'state' && eventName !== 'health') || typeof handler !== 'function') {
+      throw new Error('viewer-event-unsupported');
+    }
+    var listeners = eventName === 'state' ? stateListeners : healthListeners;
+    listeners.add(handler);
+    try {
+      handler(eventName === 'state' ? cloneStateEvent(publicStateEvent) : healthSnapshot());
+    } catch (err) {
+      logger.error('[Renderer] event handler failed', eventName, err);
+    }
+    return function unsubscribeViewerEvent() {
+      listeners.delete(handler);
+    };
+  }
 
   /**
    * Deliver one CONTROL message through the injected transport. Capture-
@@ -270,6 +475,8 @@ export function createViewer(options) {
    * @param {Object} payload
    */
   function safeSend(type, payload) {
+    incrementCounter(sentByType, type);
+    notifyHealth();
     try {
       var result = transport.send(type, payload);
       if (result && typeof result.catch === 'function') {
@@ -295,10 +502,84 @@ export function createViewer(options) {
   function requestResync(reason, details) {
     if (resyncPending) return;
     resyncPending = true;
+    setPublicState('stale', reason || 'preview-resync');
     safeSend(CONTROL.START, {
       trigger: 'preview-resync',
       reason: reason || 'unknown'
     });
+  }
+
+  function clearSubtreeLatch(payload) {
+    var p = payload || {};
+    if (p.nid === undefined || p.nid === null || p.requestId === undefined || p.requestId === null) {
+      return false;
+    }
+    var key = String(p.nid);
+    var requestId = String(p.requestId);
+    var pending = pendingSubtreeRequests.get(key);
+    if (!pending || pending.requestId !== requestId) return false;
+    pendingSubtreeRequests.delete(key);
+    return true;
+  }
+
+  function requestSubtree(nid, options) {
+    if (nid === undefined || nid === null) return null;
+    var key = String(nid);
+    if (!key) return null;
+    var target = resolveIndexedNode(key);
+    if (!target) return null;
+    if (pendingSubtreeRequests.has(key)) return null;
+
+    var opts = options || {};
+    var reason = typeof opts === 'string'
+      ? opts
+      : (opts.reason || 'truncated-region');
+    var requestId = 'subtree_' + Date.now().toString(36) + '_' + nextSubtreeRequestId++;
+    pendingSubtreeRequests.set(key, { requestId: requestId });
+    safeSend(CONTROL.SUBTREE_REQUEST, {
+      requestId: requestId,
+      nid: key,
+      streamSessionId: active.streamSessionId || '',
+      snapshotId: active.snapshotId || 0,
+      reason: reason || 'truncated-region'
+    });
+    return requestId;
+  }
+
+  function markLive(reason) {
+    setPublicState('live', reason || 'frame');
+  }
+
+  function handleTransportStatus(status) {
+    if (detached) return;
+    lastTransportStatus = sanitizeTransportStatus(status);
+    var before = publicState;
+    var s = status && (status.state || status.status);
+    if (s === 'closed') {
+      setPublicState('stale', 'transport-closed');
+      scheduleDisconnected('transport-closed');
+    } else if (s === 'reconnecting' || s === 'error') {
+      setPublicState('stale', 'transport-' + s);
+    } else if (s === 'open' || s === 'connected') {
+      if (viewerState === 'streaming' || lastSnapshotPayload) {
+        markLive('transport-open');
+      } else {
+        setPublicState('connecting', 'transport-open');
+      }
+    } else if (s === 'connecting') {
+      if (publicState !== 'live') setPublicState('connecting', 'transport-connecting');
+    }
+    if (before === publicState) notifyHealth();
+  }
+
+  function handleStreamState(payload) {
+    var p = payload || {};
+    var state = p.state || p.status;
+    if (state !== 'connecting' && state !== 'live' &&
+        state !== 'stale' && state !== 'disconnected') {
+      return;
+    }
+    setPublicState(state, p.reason || 'stream-state');
   }
 
   /**
@@ -322,6 +603,394 @@ export function createViewer(options) {
     iframe.style.transform = 'scale(' + scaleState.s + ')';
   }
 
+  function getViewportMapping() {
+    return {
+      scale: {
+        s: scaleState.s,
+        offsetX: scaleState.offsetX,
+        offsetY: scaleState.offsetY,
+        pageW: scaleState.pageW,
+        pageH: scaleState.pageH
+      },
+      viewport: {
+        width: scaleState.pageW,
+        height: scaleState.pageH
+      },
+      container: {
+        width: container.clientWidth || 0,
+        height: container.clientHeight || 0
+      }
+    };
+  }
+
+  function clearIdentityIndex() {
+    nidToNode.clear();
+    nodeToNid = new WeakMap();
+  }
+
+  function elementsInSubtree(root) {
+    var elements = [];
+    if (!root) return elements;
+    if (root.nodeType === 1) elements.push(root);
+    if (root.querySelectorAll) {
+      var descendants = root.querySelectorAll('*');
+      for (var i = 0; i < descendants.length; i++) elements.push(descendants[i]);
+    }
+    return elements;
+  }
+
+  function pairIdentityElements(elements, nodeIds, scope) {
+    var ids = Array.isArray(nodeIds) ? nodeIds : [];
+    if (elements.length !== ids.length) {
+      logger.warn('[Renderer] identity sidecar mismatch', {
+        scope: scope || '',
+        elements: elements.length,
+        nodeIds: ids.length
+      });
+    }
+    for (var i = 0; i < elements.length && i < ids.length; i++) {
+      if (ids[i] === undefined || ids[i] === null) continue;
+      var nid = String(ids[i]);
+      nidToNode.set(nid, elements[i]);
+      nodeToNid.set(elements[i], nid);
+    }
+  }
+
+  function resetIdentityIndex(targetDoc, nodeIds) {
+    clearIdentityIndex();
+    if (!targetDoc || !targetDoc.body) return;
+    pairIdentityElements(
+      Array.prototype.slice.call(targetDoc.body.querySelectorAll('*')),
+      nodeIds,
+      'snapshot'
+    );
+  }
+
+  function resolveIndexedNode(nid) {
+    if (nid === undefined || nid === null) return null;
+    return nidToNode.get(String(nid)) || null;
+  }
+
+  function indexSubtree(root, nodeIds) {
+    pairIdentityElements(elementsInSubtree(root), nodeIds, 'add');
+  }
+
+  function removeIndexedSubtree(root) {
+    var elements = elementsInSubtree(root);
+    for (var i = 0; i < elements.length; i++) {
+      var nid = nodeToNid.get(elements[i]);
+      if (nid) nidToNode.delete(nid);
+      nodeToNid.delete(elements[i]);
+    }
+  }
+
+  function cssEscapeIdent(value) {
+    var input = String(value || '');
+    if (win && win.CSS && typeof win.CSS.escape === 'function') {
+      return win.CSS.escape(input);
+    }
+    return input.replace(/[^a-zA-Z0-9_-]/g, function (ch) {
+      return '\\' + ch.charCodeAt(0).toString(16) + ' ';
+    });
+  }
+
+  function hasDangerousStylesheetUrl(value) {
+    if (!value || typeof value !== 'string') return false;
+    var compact = value.replace(/[\u0000-\u0020]+/g, '').toLowerCase();
+    return compact.indexOf('javascript:') === 0
+      || compact.indexOf('vbscript:') === 0
+      || compact.indexOf('data:text/html') === 0;
+  }
+
+  function setScopedStyleText(styleEl, cssText) {
+    styleEl.textContent = scrubCssText(String(cssText || ''));
+  }
+
+  function findStyleSourceElement(rootNode, sourceId) {
+    if (!rootNode || !rootNode.querySelector) return null;
+    try {
+      return rootNode.querySelector('[data-ps-style-source-id="' + cssEscapeIdent(sourceId) + '"]');
+    } catch (err) {
+      var nodes = rootNode.querySelectorAll ? rootNode.querySelectorAll('[data-ps-style-source-id]') : [];
+      for (var i = 0; i < nodes.length; i++) {
+        if (nodes[i].getAttribute('data-ps-style-source-id') === String(sourceId || '')) return nodes[i];
+      }
+      return null;
+    }
+  }
+
+  function installOneStyleSource(targetDoc, rootNode, source) {
+    var s = source || {};
+    if (!targetDoc || !rootNode || !s.sourceId) return false;
+    var existing = findStyleSourceElement(rootNode, s.sourceId);
+    if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+    var el = null;
+    if (s.href && !hasDangerousStylesheetUrl(s.href)) {
+      el = targetDoc.createElement('link');
+      el.setAttribute('rel', 'stylesheet');
+      el.setAttribute('href', String(s.href || ''));
+    } else {
+      el = targetDoc.createElement('style');
+      setScopedStyleText(el, s.cssText || '');
+    }
+    el.setAttribute('data-ps-style-source-id', String(s.sourceId));
+    if (s.media) el.setAttribute('media', String(s.media));
+    if (s.disabled) el.setAttribute('data-ps-style-disabled', 'true');
+    rootNode.appendChild(el);
+    // A disabled source must not apply in the mirror -- the diagnostic
+    // attribute above is not enough. Disable the sheet itself, set after
+    // insertion so the StyleSheet object exists to be disabled.
+    if (s.disabled) {
+      try { el.disabled = true; } catch (err) { /* CSSOM disabled unsupported */ }
+    }
+    return true;
+  }
+
+  function installStyleSources(targetDoc, styleSources, scopeContext) {
+    var sources = Array.isArray(styleSources) ? styleSources.slice() : [];
+    if (!targetDoc) return false;
+    var scope = scopeContext || { kind: 'document' };
+    var rootNode = null;
+    if (scope.kind === 'document') {
+      rootNode = targetDoc.head || targetDoc.documentElement;
+    } else if (scope.kind === 'shadow') {
+      var host = resolveIndexedNode(scope.hostNid);
+      rootNode = host && host.shadowRoot ? host.shadowRoot : null;
+    } else if (scope.kind === 'frame') {
+      rootNode = targetDoc.head || targetDoc.documentElement;
+    }
+    if (!rootNode) {
+      logger.warn('[Renderer] style source scope missing', {
+        scopeKind: scope.kind || '',
+        reason: 'stale-style-scope'
+      });
+      return false;
+    }
+    sources.sort(function (a, b) {
+      return (a && typeof a.order === 'number' ? a.order : 0)
+        - (b && typeof b.order === 'number' ? b.order : 0);
+    });
+    for (var i = 0; i < sources.length; i++) {
+      var source = sources[i] || {};
+      var sourceScope = source.scope || {};
+      if (sourceScope.kind !== scope.kind) continue;
+      if (scope.kind === 'shadow' && String(sourceScope.hostNid || '') !== String(scope.hostNid || '')) continue;
+      if (scope.kind === 'frame' && String(sourceScope.frameNid || '') !== String(scope.frameNid || '')) continue;
+      installOneStyleSource(targetDoc, rootNode, source);
+    }
+    return true;
+  }
+
+  function rootForStyleScope(targetDoc, scope) {
+    var s = scope || {};
+    if (!targetDoc) return null;
+    if (s.kind === 'document') return { doc: targetDoc, root: targetDoc.head || targetDoc.documentElement };
+    if (s.kind === 'shadow') {
+      var host = resolveIndexedNode(s.hostNid);
+      if (!host || !host.shadowRoot) return null;
+      return { doc: targetDoc, root: host.shadowRoot };
+    }
+    if (s.kind === 'frame') {
+      var frameEl = resolveIndexedNode(s.frameNid);
+      var frameDoc = null;
+      try {
+        frameDoc = frameEl && frameEl.contentDocument;
+      } catch (err) {
+        frameDoc = null;
+      }
+      if (!frameDoc || !frameDoc.head) return null;
+      return { doc: frameDoc, root: frameDoc.head };
+    }
+    return null;
+  }
+
+  function applyStyleSource(action, sourceId, scope, source) {
+    var targetDoc = iframe.contentDocument;
+    var resolved = rootForStyleScope(targetDoc, scope);
+    if (!resolved || !resolved.root) {
+      logger.warn('[Renderer] style source scope missing', {
+        sourceId: sourceId || '',
+        scopeKind: scope && scope.kind ? scope.kind : '',
+        reason: 'stale-style-scope'
+      });
+      return false;
+    }
+    var existing = findStyleSourceElement(resolved.root, sourceId);
+    if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+    return installOneStyleSource(resolved.doc, resolved.root, source || {});
+  }
+
+  function removeStyleSource(sourceId, scope) {
+    var targetDoc = iframe.contentDocument;
+    var resolved = rootForStyleScope(targetDoc, scope);
+    if (!resolved || !resolved.root) {
+      logger.warn('[Renderer] style source scope missing', {
+        sourceId: sourceId || '',
+        scopeKind: scope && scope.kind ? scope.kind : '',
+        reason: 'stale-style-scope'
+      });
+      return false;
+    }
+    var existing = findStyleSourceElement(resolved.root, sourceId);
+    if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+    return true;
+  }
+
+  function installOneShadowRoot(targetDoc, payload) {
+    var p = payload || {};
+    if (!targetDoc || !p.hostNid) return false;
+    if (p.mode && p.mode !== 'open') return false;
+    var host = resolveIndexedNode(p.hostNid);
+    if (!host) {
+      logger.warn('[Renderer] shadow root host missing', { hostNid: p.hostNid || '' });
+      return false;
+    }
+    var shadowRoot = host.shadowRoot || null;
+    if (!shadowRoot) {
+      if (typeof host.attachShadow !== 'function') {
+        logger.warn('[Renderer] shadow root unsupported', { hostNid: p.hostNid || '' });
+        return false;
+      }
+      try {
+        shadowRoot = host.attachShadow({ mode: 'open' });
+      } catch (err) {
+        logger.warn('[Renderer] shadow root attach failed', {
+          hostNid: p.hostNid || '',
+          error: err && err.message ? err.message : String(err)
+        });
+        return false;
+      }
+    }
+
+    removeIndexedSubtree(shadowRoot);
+    while (shadowRoot.firstChild) shadowRoot.removeChild(shadowRoot.firstChild);
+
+    var tpl = targetDoc.createElement('template');
+    tpl.innerHTML = p.html || '';
+    sanitizeFragment(tpl.content, sanitizeCounters, logger);
+    shadowRoot.appendChild(targetDoc.importNode(tpl.content, true));
+    installStyleSources(targetDoc, p.styleSources || [], { kind: 'shadow', hostNid: p.hostNid });
+    pairIdentityElements(
+      Array.prototype.slice.call(shadowRoot.querySelectorAll('*')),
+      p.nodeIds || [],
+      'shadow'
+    );
+    return true;
+  }
+
+  function installShadowRoots(targetDoc, shadowRoots) {
+    if (!Array.isArray(shadowRoots)) return;
+    for (var i = 0; i < shadowRoots.length; i++) {
+      installOneShadowRoot(targetDoc, shadowRoots[i]);
+    }
+  }
+
+  function setFrameLoadHandler(frameEl, handler) {
+    if (!frameEl || typeof frameEl.addEventListener !== 'function') return;
+    var existing = frameLoadHandlers.get(frameEl);
+    if (existing && typeof frameEl.removeEventListener === 'function') {
+      frameEl.removeEventListener('load', existing);
+    }
+    frameEl.addEventListener('load', handler);
+    frameLoadHandlers.set(frameEl, handler);
+  }
+
+  function indexFrameDocument(frameEl, framePayload) {
+    var p = framePayload || {};
+    try {
+      var frameDoc = frameEl && frameEl.contentDocument;
+      if (!frameDoc || !frameDoc.documentElement || !frameDoc.body) return false;
+      removeIndexedSubtree(frameDoc.documentElement);
+      sanitizeFragment(frameDoc.body, sanitizeCounters, logger);
+      if (p.htmlNid) {
+        nidToNode.set(String(p.htmlNid), frameDoc.documentElement);
+        nodeToNid.set(frameDoc.documentElement, String(p.htmlNid));
+      }
+      if (p.bodyNid) {
+        nidToNode.set(String(p.bodyNid), frameDoc.body);
+        nodeToNid.set(frameDoc.body, String(p.bodyNid));
+      }
+      installStyleSources(frameDoc, p.styleSources || [], { kind: 'frame', frameNid: p.frameNid });
+      pairIdentityElements(
+        Array.prototype.slice.call(frameDoc.body.querySelectorAll('*')),
+        p.nodeIds || [],
+        'frame'
+      );
+      installShadowRoots(frameDoc, p.shadowRoots || []);
+      installFrames(frameDoc, p.frames || []);
+      return true;
+    } catch (err) {
+      logger.warn('[Renderer] frame document index failed', {
+        frameNid: p.frameNid || ''
+      });
+      return false;
+    }
+  }
+
+  function installOneFrame(targetDoc, framePayload) {
+    var p = framePayload || {};
+    if (!targetDoc || !p.frameNid) return false;
+    var frameEl = resolveIndexedNode(p.frameNid);
+    if (!frameEl) {
+      logger.warn('[Renderer] frame host missing', { frameNid: p.frameNid || '' });
+      return false;
+    }
+    if (!frameEl.tagName || String(frameEl.tagName).toLowerCase() !== 'iframe') {
+      logger.warn('[Renderer] frame host is not iframe', { frameNid: p.frameNid || '' });
+      return false;
+    }
+
+    frameEl.removeAttribute('src');
+    frameEl.setAttribute('sandbox', 'allow-same-origin');
+
+    if (p.kind === 'same-origin') {
+      setFrameLoadHandler(frameEl, function() {
+        indexFrameDocument(frameEl, p);
+      });
+      frameEl.setAttribute('srcdoc', buildSnapshotHtml(p));
+      indexFrameDocument(frameEl, p);
+      return true;
+    }
+
+    if (p.kind === 'cross-origin') {
+      setFrameLoadHandler(frameEl, function() {
+        try {
+          var placeholderDoc = frameEl.contentDocument;
+          if (placeholderDoc && placeholderDoc.body) {
+            sanitizeFragment(placeholderDoc.body, sanitizeCounters, logger);
+          }
+        } catch (err) {
+          logger.warn('[Renderer] frame placeholder sanitize failed', {
+            frameNid: p.frameNid || ''
+          });
+        }
+      });
+      frameEl.setAttribute('srcdoc', buildFramePlaceholderHtml(p));
+      return true;
+    }
+
+    logger.warn('[Renderer] frame kind unsupported', {
+      frameNid: p.frameNid || '',
+      kind: p.kind || ''
+    });
+    return false;
+  }
+
+  function installFrames(targetDoc, frames) {
+    if (!Array.isArray(frames)) return;
+    for (var i = 0; i < frames.length; i++) {
+      installOneFrame(targetDoc, frames[i]);
+    }
+  }
+
+  function hostRectForElement(el) {
+    var rect = el.getBoundingClientRect();
+    return mapRectToHost(
+      { x: rect.left, y: rect.top, w: rect.width, h: rect.height },
+      scaleState
+    );
+  }
+
   /**
    * Resolve a captured node id to a host-document overlay rect. Reads the
    * mirror contentDocument FRESH per call (never cached -- re-snapshots
@@ -333,21 +1002,82 @@ export function createViewer(options) {
    */
   function resolveNidRect(nid) {
     try {
-      var cd = iframe.contentDocument;
-      if (!cd) return null;
-      var el = cd.querySelector('[' + NID_ATTR + '="' + nid + '"]');
+      var el = resolveIndexedNode(nid);
       if (!el) return null;
-      var rect = el.getBoundingClientRect();
-      return mapRectToHost(
-        { x: rect.left, y: rect.top, w: rect.width, h: rect.height },
-        scaleState
-      );
+      return hostRectForElement(el);
     } catch (err) {
       // Containment: a malformed nid (selector syntax) or a torn-down
       // mirror must never break the overlay kind loop.
       logger.warn('[Renderer] nid rect resolution failed', nid, err);
       return null;
     }
+  }
+
+  function resolveNode(nid) {
+    if (nid === undefined || nid === null) return null;
+    var key = String(nid);
+    try {
+      var el = resolveIndexedNode(key);
+      if (!el) return null;
+      var rect = hostRectForElement(el);
+      return {
+        nid: key,
+        exists: true,
+        rect: {
+          top: rect.top,
+          left: rect.left,
+          width: rect.width,
+          height: rect.height
+        },
+        streamSessionId: active.streamSessionId || '',
+        snapshotId: active.snapshotId || 0
+      };
+    } catch (err) {
+      logger.warn('[Renderer] node resolution failed', key, err);
+      return null;
+    }
+  }
+
+  function ensureNodeHighlight() {
+    if (nodeHighlightEl && nodeHighlightEl.parentNode === overlays.layer) {
+      return nodeHighlightEl;
+    }
+    nodeHighlightEl = doc.createElement('div');
+    nodeHighlightEl.className = 'ps-node-highlight';
+    nodeHighlightEl.setAttribute('aria-hidden', 'true');
+    nodeHighlightEl.style.zIndex = '15';
+    nodeHighlightEl.style.display = 'none';
+    overlays.layer.appendChild(nodeHighlightEl);
+    return nodeHighlightEl;
+  }
+
+  function clearHighlight() {
+    if (!nodeHighlightEl) return;
+    nodeHighlightEl.hidden = true;
+    nodeHighlightEl.style.display = 'none';
+    nodeHighlightEl.textContent = '';
+  }
+
+  function highlightNode(nid, options) {
+    var resolved = resolveNode(nid);
+    if (!resolved) return false;
+    var el = ensureNodeHighlight();
+    var rect = resolved.rect;
+    el.hidden = false;
+    el.style.top = rect.top + 'px';
+    el.style.left = rect.left + 'px';
+    el.style.width = rect.width + 'px';
+    el.style.height = rect.height + 'px';
+    el.style.display = 'block';
+    el.textContent = '';
+    var opts = options || {};
+    if (opts.label !== undefined && opts.label !== null && String(opts.label) !== '') {
+      var label = doc.createElement('div');
+      label.className = 'ps-node-highlight-label';
+      label.textContent = String(opts.label);
+      el.appendChild(label);
+    }
+    return true;
   }
 
   /**
@@ -363,7 +1093,7 @@ export function createViewer(options) {
    */
   function handleSnapshot(payload) {
     var p = payload || {};
-    if (!p.html) {
+    if (typeof p.html !== 'string') {
       logger.error('[Renderer] snapshot missing html');
       return;
     }
@@ -372,11 +1102,16 @@ export function createViewer(options) {
     counters.staleMisses = 0;
     counters.applyFailures = 0;
     resyncPending = false; // the latch's ONLY release site
+    pendingSubtreeRequests.clear();
+    lastSnapshotAt = Date.now();
     overlays.resetOverlays();
+    clearHighlight();
     lastScroll.x = p.scrollX || 0;
     lastScroll.y = p.scrollY || 0;
     lastSnapshotPayload = p;
+    clearIdentityIndex();
     iframe.srcdoc = buildSnapshotHtml(p);
+    markLive('snapshot');
   }
 
   /**
@@ -390,15 +1125,66 @@ export function createViewer(options) {
   function handleMutations(payload) {
     if (viewerState !== 'streaming') return;
     if (!isCurrentStream(payload, active)) return;
+    lastMutationAt = Date.now();
     var cd = iframe.contentDocument;
     applyMutations(cd, payload.mutations, counters, {
       logger: logger,
       requestResync: requestResync,
-      sanitizeCounters: sanitizeCounters
+      sanitizeCounters: sanitizeCounters,
+      identity: {
+        resolve: resolveIndexedNode,
+        indexSubtree: indexSubtree,
+        removeSubtree: removeIndexedSubtree,
+        installShadowRoot: function(hostNid, payload) {
+          var opPayload = Object.assign({}, payload || {}, { hostNid: hostNid });
+          installOneShadowRoot(cd, opPayload);
+        },
+        installFrames: function(frames) {
+          installFrames(cd, frames || []);
+        },
+        applyStyleSource: applyStyleSource,
+        removeStyleSource: removeStyleSource
+      }
     });
+    if (!resyncPending) markLive('mutations');
     try {
       iframe.contentWindow.scrollTo(lastScroll.x, lastScroll.y);
     } catch (e) { /* ignore: scroll maintenance is best-effort */ }
+  }
+
+  function handleSubtreeResponse(payload) {
+    var p = payload || {};
+    if (!isCurrentStream(p, active)) {
+      clearSubtreeLatch(p);
+      return;
+    }
+    if (!clearSubtreeLatch(p)) return;
+    if (p.status !== 'ok') return;
+
+    var target = resolveIndexedNode(p.nid);
+    if (!target || !target.parentNode || typeof target.getAttribute !== 'function') return;
+    if (target.getAttribute('data-phantomstream-truncated') !== 'true') return;
+    var targetDoc = target.ownerDocument || iframe.contentDocument;
+    if (!targetDoc || !targetDoc.createElement) return;
+
+    var tpl = targetDoc.createElement('template');
+    tpl.innerHTML = p.html || '';
+    sanitizeFragment(tpl.content, sanitizeCounters, logger);
+    var newNode = tpl.content.firstElementChild;
+    if (!newNode) {
+      logger.warn('[Renderer] subtree response dropped: html parsed to no element', {
+        nid: p.nid || ''
+      });
+      return;
+    }
+    var imported = targetDoc.importNode(newNode, true);
+    removeIndexedSubtree(target);
+    target.parentNode.replaceChild(imported, target);
+    indexSubtree(imported, p.nodeIds || []);
+    installShadowRoots(targetDoc, p.shadowRoots || []);
+    installFrames(targetDoc, p.frames || []);
+    lastMutationAt = Date.now();
+    markLive('subtree');
   }
 
   /**
@@ -413,6 +1199,7 @@ export function createViewer(options) {
     lastScroll.x = (payload && payload.scrollX) || 0;
     lastScroll.y = (payload && payload.scrollY) || 0;
     if (viewerState !== 'streaming') return;
+    markLive('scroll');
     try {
       iframe.contentWindow.scrollTo({
         left: lastScroll.x,
@@ -434,6 +1221,7 @@ export function createViewer(options) {
       scale: scaleState,
       resolveNidRect: resolveNidRect
     });
+    markLive('overlay');
   }
 
   /**
@@ -448,6 +1236,7 @@ export function createViewer(options) {
     if (viewerState !== 'streaming') return;
     if (!isCurrentStream(payload, active)) return;
     overlays.handleDialogMessage(payload);
+    markLive('dialog');
   }
 
   /**
@@ -460,6 +1249,8 @@ export function createViewer(options) {
    */
   function dispatch(type, payload) {
     if (detached) return;
+    incrementCounter(receivedByType, type);
+    lastFrameAt = Date.now();
     try {
       switch (type) {
         case STREAM.SNAPSHOT:
@@ -467,6 +1258,9 @@ export function createViewer(options) {
           break;
         case STREAM.MUTATIONS:
           handleMutations(payload);
+          break;
+        case STREAM.SUBTREE_RESPONSE:
+          handleSubtreeResponse(payload);
           break;
         case STREAM.SCROLL:
           handleScroll(payload);
@@ -477,15 +1271,23 @@ export function createViewer(options) {
         case STREAM.DIALOG:
           handleDialog(payload);
           break;
+        case STREAM.STATE:
+          handleStreamState(payload);
+          break;
         default:
           break;
       }
     } catch (err) {
       logger.error('[Renderer] message handler failed', type, err);
     }
+    notifyHealth();
   }
 
   var unsubscribe = transport.onMessage(dispatch);
+  var unsubscribeStatus = null;
+  if (typeof transport.onStatus === 'function') {
+    unsubscribeStatus = transport.onStatus(handleTransportStatus);
+  }
 
   // --- Resize wiring (dashboard.js:3194-3207): window resize listener
   // plus a typeof-guarded ResizeObserver on the container (jsdom lacks
@@ -518,6 +1320,12 @@ export function createViewer(options) {
     } catch (err) {
       logger.error('[Renderer] transport unsubscribe failed', err);
     }
+    try {
+      if (typeof unsubscribeStatus === 'function') unsubscribeStatus();
+    } catch (err) {
+      logger.error('[Renderer] transport status unsubscribe failed', err);
+    }
+    clearDisconnectTimer();
     if (win && typeof win.removeEventListener === 'function') {
       win.removeEventListener('resize', onWindowResize);
     }
@@ -538,6 +1346,10 @@ export function createViewer(options) {
     if (destroyed) return;
     destroyed = true;
     overlays.resetOverlays();
+    clearHighlight();
+    nodeHighlightEl = null;
+    clearIdentityIndex();
+    frameLoadHandlers = new WeakMap();
     lastSnapshotPayload = null;
     active.streamSessionId = '';
     active.snapshotId = 0;
@@ -550,14 +1362,23 @@ export function createViewer(options) {
     sanitizeCounters.droppedSubtrees = 0;
     sanitizeCounters.cssScrubs = 0;
     resyncPending = false;
+    pendingSubtreeRequests.clear();
+    receivedByType = {};
+    sentByType = {};
+    lastFrameAt = 0;
+    lastSnapshotAt = 0;
+    lastMutationAt = 0;
+    lastTransportStatus = {};
+    stateListeners.clear();
+    healthListeners.clear();
     viewerState = 'waiting';
   }
 
   /**
    * Register a custom overlay kind (delegates to the overlays registry --
-   * the host-facing extension seam, D-10). The handle stays minimal per
-   * D-01: no events, no addressing; this is THIS phase's locked overlay
-   * decision, not a later-phase surface. See overlays.register() for the
+   * the host-facing extension seam, D-10). Viewer state/health events live
+   * on on(); semantic node addressing lives on resolveNode/highlightNode.
+   * See overlays.register() for the
    * renderFn contract (raw payload, host rect or null, layer element).
    * @param {string} kind
    * @param {(payload: *, anchorRect: ?Object, layer: Element) => void} renderFn
@@ -569,12 +1390,18 @@ export function createViewer(options) {
   return {
     detach: detach,
     destroy: destroy,
-    registerOverlay: registerOverlay
+    clearHighlight: clearHighlight,
+    getViewportMapping: getViewportMapping,
+    highlightNode: highlightNode,
+    on: on,
+    registerOverlay: registerOverlay,
+    requestSubtree: requestSubtree,
+    resolveNode: resolveNode
   };
 }
 
 // Barrel re-exports: the renderer's full public surface through one module
 // (package exports map "./renderer" -> this file in plan 02-05).
-export { escapeAttribute, buildShellAttributeString, buildSnapshotHtml } from './snapshot.js';
+export { escapeAttribute, buildShellAttributeString, buildSnapshotHtml, buildFramePlaceholderHtml } from './snapshot.js';
 export { applyMutations } from './diff.js';
-export { createOverlays, mapRectToHost, OVERLAY_CSS } from './overlays.js';
+export { createOverlays, mapRectToHost, mapHostPointToViewport, OVERLAY_CSS } from './overlays.js';

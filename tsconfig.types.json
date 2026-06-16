@@ -1,0 +1,19 @@
+{
+  "include": ["src/**/*.js"],
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationMap": true,
+    "outDir": "dist/types",
+    "rootDir": "src",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2020",
+    "noCheck": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "noImplicitAny": false
+  }
+}

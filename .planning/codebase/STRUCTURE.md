@@ -15,8 +15,16 @@ managua/                          # Repo root
 │   │   └── index.js              # Re-exports all protocol symbols
 │   ├── capture/                  # STUB — page-side capture (README only)
 │   │   └── README.md
-│   ├── relay/                    # STUB — transport relay (README only)
-│   │   └── README.md
+│   ├── adapters/                 # ACTIVE — host adapters for browser automation contexts
+│   │   ├── playwright.js         # Playwright/CDP adapter and remote-control gate
+│   │   └── playwright-inject.js  # Single-file classic script capture artifact
+│   ├── relay/                    # ACTIVE — relay core, limits, ws backend
+│   │   ├── README.md
+│   │   ├── index.js              # Re-exports relay surfaces
+│   │   ├── limits.js             # Frame classification + 1 MiB cap checks
+│   │   ├── relay.js              # Transport-agnostic room fan-out core
+│   │   └── backends/
+│   │       └── ws.js             # ws-backed reference backend
 │   └── renderer/                 # STUB — viewer-side reconstruction (README only)
 │       └── README.md
 ├── reference/                    # Verbatim FSB source (provenance: commit 867d6f0c)
@@ -53,8 +61,10 @@ managua/                          # Repo root
 │   │       ├── 211-stream-reliability-diagnostic-logging/
 │   │       └── 276-dashboard-dom-streaming-diagnostic-minimum-patch/
 │   └── README.md                 # Reference provenance note
-├── tests/                        # Framework tests (protocol module)
-│   └── protocol.test.js          # Node built-in test runner; 7 tests
+├── tests/                        # Framework tests (protocol/capture/renderer/relay)
+│   ├── protocol.test.js          # Protocol envelope/constants tests
+│   ├── relay-core.test.js        # Relay routing, limits, diagnostics, backpressure
+│   └── relay-ws-backend.test.js  # Real ws backend admission and fan-out tests
 ├── docs/                         # Project documentation
 │   ├── ARCHITECTURE.md           # End-to-end shipped-system architecture
 │   ├── DESIGN-HISTORY.md         # Evolution, failures, known limitations
@@ -64,7 +74,7 @@ managua/                          # Repo root
 │   └── todos.md                  # Working task list
 ├── .planning/
 │   └── codebase/                 # GSD codebase map documents
-├── package.json                  # ESM package: @fullselfbrowsing/phantom-stream v0.1.0
+├── package.json                  # ESM package: @full-self-browsing/phantom-stream v0.1.0
 ├── README.md                     # Project overview
 ├── LICENSE                       # MIT
 └── .gitignore
@@ -85,11 +95,26 @@ managua/                          # Repo root
   that must be abstracted (`chrome.runtime.sendMessage`, `window.FSB` namespace)
 - Status: Stub only — no implementation yet
 
+**`src/adapters/`:**
+- Purpose: Host adapter surfaces that install capture into browser automation or other
+  injection contexts and bridge messages into PhantomStream transports
+- Contains: `playwright.js` first-class Playwright/CDP adapter and `playwright-inject.js`
+  checked-in classic script capture artifact
+- Status: Active implementation for ADPT-02 — package-exported at `./adapters/playwright`
+
 **`src/relay/`:**
-- Purpose: Placeholder for extraction of `reference/server/ws-handler.js`
-- Contains: `README.md` describing the transport-agnostic relay design with pluggable
-  backends
-- Status: Stub only — no implementation yet
+- Purpose: Transport-agnostic relay core and pluggable backend seam extracted from
+  `reference/server/ws-handler.js`
+- Contains: `relay.js` room fan-out core, `limits.js` frame classification and cap checks,
+  `backends/ws.js` self-hostable `ws` reference backend, and `index.js` barrel export
+- Status: Active implementation for RELY-01 — raw source/viewer fan-out, 1 MiB cap
+  diagnostics, and per-client backpressure drops are tested
+
+**`src/transport/`:**
+- Purpose: Endpoint transports that satisfy capture/viewer fire-and-forget contracts
+- Contains: `websocket.js` browser WebSocket transport, native deflate-raw codec seam,
+  legacy `_lz` decode compatibility, FIFO queues, and status/health telemetry
+- Status: Active implementation for RELY-02 — package-exported at `./transport/websocket`
 
 **`src/renderer/`:**
 - Purpose: Placeholder for extraction of the viewer code from `reference/dashboard/dashboard.js`
@@ -129,8 +154,9 @@ managua/                          # Repo root
 
 **`tests/`:**
 - Purpose: Framework-level tests for `src/`
-- Contains: `protocol.test.js` — 7 tests using Node built-in `node:test` runner, covering
-  envelope round-trip, staleness guard, session ID, and budget constants
+- Contains protocol, capture, renderer, security, differential, and relay tests using
+  Node built-in `node:test`; relay coverage includes core routing/cap/backpressure and
+  real `ws` backend admission/fan-out
 
 **`docs/`:**
 - Purpose: Project documentation read by humans and referenced by development agents
@@ -143,9 +169,30 @@ managua/                          # Repo root
 **Protocol entry point:**
 - `src/protocol/index.js` — single import target for all protocol symbols
 
+**Relay entry point:**
+- `src/relay/index.js` — package-exported at `./relay`; re-exports relay limits, relay core,
+  and the `ws` backend
+
 **Wire constants (must stay in sync between capture and relay):**
 - `src/protocol/constants.js` — `RELAY_PER_MESSAGE_LIMIT_BYTES`, `SNAPSHOT_BUDGET_BYTES`,
   throttle and watchdog intervals
+
+**Relay implementation:**
+- `src/relay/limits.js` — classifies raw relay frames and enforces the shared 1 MiB cap
+- `src/relay/relay.js` — transport-agnostic source/viewer room relay with diagnostics
+- `src/relay/backends/ws.js` — Node `ws` backend with `/ws` admission validation and
+  `perMessageDeflate: false`
+
+**Transport implementation:**
+- `src/transport/websocket.js` — browser WebSocket transport with `encodeWireMessage`,
+  `decodeWireMessage`, `createWebSocketTransport`, FIFO send/receive ordering, `flush()`,
+  `onMessage`, `onStatus`, `close`, and `getHealth`
+
+**Adapter implementation:**
+- `src/adapters/playwright.js` — package-exported at `./adapters/playwright`; exposes
+  `createPlaywrightAdapter` and `getPlaywrightInjectSource`
+- `src/adapters/playwright-inject.js` — single-file classic script artifact used by
+  Playwright `addInitScript` and CDP `Page.addScriptToEvaluateOnNewDocument`
 
 **Capture reference (authoritative for `src/capture/` extraction):**
 - `reference/extension/dom-stream.js` — full 1117-line content script
@@ -166,14 +213,17 @@ managua/                          # Repo root
 
 **Framework tests:**
 - `tests/protocol.test.js`
+- `tests/relay-core.test.js`
+- `tests/relay-ws-backend.test.js`
+- `tests/websocket-transport.test.js`
 
 **Reference tests:**
 - `reference/tests/` — 6 test files
 
 **Package manifest:**
 - `package.json` — `"type": "module"`, `"main": "src/protocol/index.js"`,
-  `"exports": { "./protocol": "./src/protocol/index.js" }`,
-  test command: `node --test tests/*.test.js`
+  exports for `./protocol`, `./capture`, `./adapters/playwright`, `./renderer`, `./relay`,
+  and `./transport/websocket`, test command: `node --test tests/*.test.js tests/differential/*.test.js`
 
 ## Naming Conventions
 
@@ -222,6 +272,11 @@ managua/                          # Repo root
 **New `src/relay/` module file:**
 - Place in `src/relay/<name>.js`; backend implementations in `src/relay/backends/<name>.js`
 - Entry point: `src/relay/index.js` → `createRelay({ backend, limits })`
+
+**New `src/transport/` module file:**
+- Place endpoint transports in `src/transport/<name>.js`
+- Keep endpoint compression/decompression in the transport layer, never in relay code
+- Use injected codecs or native runtime APIs; do not add browser-injected runtime dependencies
 
 **New `src/renderer/` module file:**
 - Place in `src/renderer/<name>.js`

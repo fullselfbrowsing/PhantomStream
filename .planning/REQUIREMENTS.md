@@ -15,7 +15,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **CAPT-04**: Extracted capture output is verified against `reference/` via a differential test harness on frozen fixtures, with an intentional-divergence ledger
 - [ ] **CAPT-05**: Typed text in form fields is mirrored — explicit input-event capture beyond MutationObserver (`value` property changes)
 - [ ] **CAPT-06**: Nodes added after the snapshot carry computed styles consistent with snapshot-era siblings
-- [ ] **CAPT-07**: Node identity is WeakMap-based — the observed page is no longer mutated with `data-fsb-nid` attributes, while the wire-addressing contract (diff ops, overlays, remote control) is preserved
+- [x] **CAPT-07**: Node identity is WeakMap-based — the observed page is no longer mutated with `data-fsb-nid` attributes, while the wire-addressing contract (diff ops, overlays, remote control) is preserved
 - [ ] **CAPT-08**: Open shadow DOM content is mirrored (serialization, diffs, and addressing extend into shadow roots)
 - [ ] **CAPT-09**: Same-origin iframe content is mirrored; cross-origin iframes render as labeled placeholders
 - [ ] **CAPT-10**: Stylesheet-centric (CSSOM) capture mode is available behind a config flag — handles cross-origin `cssRules` fallback, `insertRule`-injected styles, and `adoptedStyleSheets`
@@ -23,37 +23,37 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Security & Privacy (SEC)
 
-- [ ] **SEC-01**: All serialization paths (snapshot, `add`-op subtrees, `attr` ops) strip `on*` event-handler attributes and `javascript:` URLs
-- [ ] **SEC-02**: Viewer renders exclusively in a sandboxed iframe without `allow-scripts`; the embed security contract is documented
-- [ ] **SEC-03**: Capture-side privacy masking with rrweb-compatible vocabulary (`blockSelector`, `maskTextSelector`, `maskInputs`, custom mask fns) applied in all serialization paths — masked content never leaves the captured page
-- [ ] **SEC-04**: Remote control activation is gated by a host-provided consent/authorization hook
+- [x] **SEC-01**: All serialization paths (snapshot, `add`-op subtrees, `attr` ops) strip `on*` event-handler attributes and `javascript:` URLs
+- [x] **SEC-02**: Viewer renders exclusively in a sandboxed iframe without `allow-scripts`; the embed security contract is documented
+- [x] **SEC-03**: Capture-side privacy masking with rrweb-compatible vocabulary (`blockSelector`, `maskTextSelector`, `maskInputs`, custom mask fns) applied in all serialization paths — masked content never leaves the captured page
+- [x] **SEC-04**: Remote control activation is gated by a host-provided consent/authorization hook
 
 ### Viewer (VIEW)
 
 - [x] **VIEW-01**: Host can embed the viewer as a framework-agnostic component (`createViewer({ container, transport })`) with viewport-adaptive scaling
-- [ ] **VIEW-02**: Host can subscribe to lifecycle/connection-state events (`connecting`/`live`/`stale`/`disconnected`) and stream-health telemetry via `on()`
-- [ ] **VIEW-03**: Host can address mirrored elements semantically through a public node-identity API (e.g. highlight/query the node an agent is about to touch)
+- [x] **VIEW-02**: Host can subscribe to lifecycle/connection-state events (`connecting`/`live`/`stale`/`disconnected`) and stream-health telemetry via `on()`
+- [x] **VIEW-03**: Host can address mirrored elements semantically through a public node-identity API (e.g. highlight/query the node an agent is about to touch)
 - [x] **VIEW-04**: Overlay channel is a documented, extensible message type — action glow and progress ship as built-ins; hosts can define custom DOM-anchored overlays
-- [ ] **VIEW-05**: Remote control works through the mirror: click/type/scroll reverse-mapped from viewer coordinates and replayed in the real tab
+- [x] **VIEW-05**: Remote control works through the mirror: click/type/scroll reverse-mapped from viewer coordinates and replayed in the real tab
 - [x] **VIEW-06**: Scroll position and native `alert`/`confirm`/`prompt` dialogs are mirrored (parity with reference)
 
 ### Transport & Relay (RELY)
 
-- [ ] **RELY-01**: Relay is transport-agnostic with pluggable backends; a self-hostable WebSocket reference implementation ships with per-message size cap and oversize diagnostics
-- [ ] **RELY-02**: Compression envelope uses native `CompressionStream('deflate-raw')` by default with lz-string-compatible decode for FSB backward compatibility; async codec preserves message ordering
+- [x] **RELY-01**: Relay is transport-agnostic with pluggable backends; a self-hostable WebSocket reference implementation ships with per-message size cap and oversize diagnostics
+- [x] **RELY-02**: Compression envelope uses native `CompressionStream('deflate-raw')` by default with lz-string-compatible decode for FSB backward compatibility; async codec preserves message ordering
 
 ### Host Adapters (ADPT)
 
-- [ ] **ADPT-01**: Extension MV3 adapter — content-script injection + service-worker relay client including the `chrome.alarms` watchdog
-- [ ] **ADPT-02**: Playwright/CDP adapter — `addInitScript`/`Page.addScriptToEvaluateOnNewDocument` injection + binding bridge, shipped as a single-file inject artifact
-- [ ] **ADPT-03**: Bookmarklet adapter — loader stub that injects the capture bundle into the current page
+- [x] **ADPT-01**: Extension MV3 adapter — content-script injection + service-worker relay client including the `chrome.alarms` watchdog
+- [x] **ADPT-02**: Playwright/CDP adapter — `addInitScript`/`Page.addScriptToEvaluateOnNewDocument` injection + binding bridge, shipped as a single-file inject artifact
+- [x] **ADPT-03**: Bookmarklet adapter — loader stub that injects the capture bundle into the current page
 - [x] **ADPT-04**: Embedded-SDK adapter — first-party pages can import and run capture directly (script tag / module import)
 
 ### Demos & Packaging (PKG)
 
-- [ ] **PKG-01**: `npx phantom-stream demo` works end-to-end: capture a page in one tab, mirror it live in another through the bundled relay
-- [ ] **PKG-02**: Playwright-driven demo: a script drives a real page while the viewer mirrors it live with working remote control
-- [ ] **PKG-03**: npm package published as `@fullselfbrowsing/phantom-stream` — ESM-only subpath exports, JSDoc-generated `.d.ts`, `attw`/`publint` clean, provenance via trusted publishing
+- [x] **PKG-01**: `npx phantom-stream demo` works end-to-end: capture a page in one tab, mirror it live in another through the bundled relay
+- [x] **PKG-02**: Playwright-driven demo: a script drives a real page while the viewer mirrors it live with working remote control
+- [ ] **PKG-03**: npm package published as `@full-self-browsing/phantom-stream` — ESM-only subpath exports, JSDoc-generated `.d.ts`, `attw`/`publint` clean, provenance via trusted publishing
 - [ ] **PKG-04**: Quickstart docs cover each adapter with a < 5-minute path to a live mirror
 
 ### FSB Integration (FSB)
@@ -117,29 +117,29 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CAPT-04 | Phase 1 | Complete |
 | CAPT-05 | Phase 8 | Pending |
 | CAPT-06 | Phase 8 | Pending |
-| CAPT-07 | Phase 7 | Pending |
+| CAPT-07 | Phase 7 | Complete |
 | CAPT-08 | Phase 8 | Pending |
 | CAPT-09 | Phase 8 | Pending |
 | CAPT-10 | Phase 9 | Pending |
 | CAPT-11 | Phase 8 | Pending |
-| SEC-01 | Phase 3 | Pending |
-| SEC-02 | Phase 3 | Pending |
-| SEC-03 | Phase 3 | Pending |
-| SEC-04 | Phase 5 | Pending |
+| SEC-01 | Phase 3 | Complete |
+| SEC-02 | Phase 3 | Complete |
+| SEC-03 | Phase 3 | Complete |
+| SEC-04 | Phase 5 | Complete |
 | VIEW-01 | Phase 2 | Complete |
-| VIEW-02 | Phase 4 | Pending |
-| VIEW-03 | Phase 7 | Pending |
+| VIEW-02 | Phase 4 | Complete |
+| VIEW-03 | Phase 7 | Complete |
 | VIEW-04 | Phase 2 | Complete |
-| VIEW-05 | Phase 5 | Pending |
+| VIEW-05 | Phase 5 | Complete |
 | VIEW-06 | Phase 2 | Complete |
-| RELY-01 | Phase 4 | Pending |
-| RELY-02 | Phase 4 | Pending |
-| ADPT-01 | Phase 6 | Pending |
-| ADPT-02 | Phase 5 | Pending |
-| ADPT-03 | Phase 6 | Pending |
+| RELY-01 | Phase 4 | Complete |
+| RELY-02 | Phase 4 | Complete |
+| ADPT-01 | Phase 6 | Complete |
+| ADPT-02 | Phase 5 | Complete |
+| ADPT-03 | Phase 6 | Complete |
 | ADPT-04 | Phase 2 | Complete |
-| PKG-01 | Phase 4 | Pending |
-| PKG-02 | Phase 5 | Pending |
+| PKG-01 | Phase 4 | Complete |
+| PKG-02 | Phase 5 | Complete |
 | PKG-03 | Phase 10 | Pending |
 | PKG-04 | Phase 10 | Pending |
 | FSB-01 | Phase 11 | Pending |

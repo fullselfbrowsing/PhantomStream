@@ -146,7 +146,7 @@ test('sanitizeFragment strips the hostile corpus: on* attrs, srcdoc, script/nosc
     const iframeEl = frag.querySelector('iframe');
     assert.ok(iframeEl, 'the iframe element itself survives (only its srcdoc attr is stripped)');
     assert.equal(iframeEl.hasAttribute('srcdoc'), false, 'srcdoc attribute removed');
-    assert.equal(frag.querySelector('a').getAttribute('href'), '', 'javascript: href neutralized to empty');
+    assert.equal(frag.querySelector('a').hasAttribute('href'), false, 'javascript: href removed');
     assert.ok(frag.querySelector('button'), 'the button itself survives (only its handler is stripped)');
   } finally {
     env.teardown();
@@ -175,7 +175,7 @@ test('xlink:href javascript: inside an svg subtree is neutralized; srcset is neu
   try {
     const frag = env.makeFragment(
       '<svg><a xlink:href="javascript:alert(1)"><text>c</text></a></svg>'
-        + '<img srcset="javascript:alert(1) 1x, https://x.test/img.png 2x">'
+        + '<img srcset="javascript:alert(1) 1x, data:image/png;base64,AAAA 2x, https://x.test/img.png 3x">'
     );
     sanitizeFragment(frag, freshCounters(), recordingLogger());
     assert.deepEqual(
@@ -184,9 +184,31 @@ test('xlink:href javascript: inside an svg subtree is neutralized; srcset is neu
     );
     const img = frag.querySelector('img');
     assert.ok(
-      img.getAttribute('srcset').includes('https://x.test/img.png 2x'),
-      'benign srcset candidate preserved (neutralization is per-candidate)'
+      img.getAttribute('srcset').includes('data:image/png;base64,AAAA 2x'),
+      'data:image srcset candidate preserved without comma-splitting corruption'
     );
+    assert.ok(
+      img.getAttribute('srcset').includes('https://x.test/img.png 3x'),
+      'benign https srcset candidate preserved (neutralization is per-candidate)'
+    );
+    assert.ok(!/\/AAAA/.test(img.getAttribute('srcset')), 'data payload did not become a relative URL');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('sanitizeFragment scrubs hostile <style> element text', () => {
+  const env = setupEnv();
+  try {
+    const frag = env.makeFragment(
+      '<style>.x{background:url("javascript:alert(1)");width:expression(alert(2));}</style>'
+    );
+    const counters = freshCounters();
+    sanitizeFragment(frag, counters, recordingLogger());
+    const css = frag.querySelector('style').textContent;
+    assert.ok(!/url\(\s*javascript/i.test(css), 'style element text has no url(javascript:)');
+    assert.ok(!/expression\(/i.test(css), 'style element text has no expression()');
+    assert.equal(counters.cssScrubs, 1, 'style element text scrub counted');
   } finally {
     env.teardown();
   }
@@ -196,14 +218,13 @@ test('style="width:expression(alert(1))" is scrubbed; benign style values pass t
   const env = setupEnv();
   try {
     const frag = env.makeFragment(
-      '<div style="width:expression(alert(1))">x</div>'
+      '<div style="background:url(&quot;javascript:alert(1)&quot;);width:expression(alert(1))">x</div>'
         + '<p style="color: red">y</p>'
     );
     sanitizeFragment(frag, freshCounters(), recordingLogger());
-    assert.ok(
-      !/expression\(/i.test(frag.querySelector('div').getAttribute('style')),
-      'expression() neutralized in the style value'
-    );
+    const style = frag.querySelector('div').getAttribute('style');
+    assert.ok(!/javascript:/i.test(style), 'quoted url(javascript:) neutralized in the style value');
+    assert.ok(!/expression\(/i.test(style), 'expression() neutralized in the style value');
     assert.equal(
       frag.querySelector('p').getAttribute('style'), 'color: red',
       'benign style value byte-identical (no rewrite when nothing scrubbed)'
@@ -283,16 +304,16 @@ test('sanitizeAttrValue: on* and srcdoc drop; dangerous URL schemes neutralize; 
   assert.equal(sanitizeAttrValue('srcdoc', '<p>x</p>').drop, true, 'srcdoc dropped');
 
   const neutralized = sanitizeAttrValue('href', 'javascript:alert(1)');
-  assert.equal(neutralized.drop, false, 'dangerous URL is neutralized, not dropped (href existence parity)');
-  assert.equal(neutralized.value, '', 'javascript: href value cleared');
-  assert.equal(sanitizeAttrValue('src', 'vbscript:msgbox(1)').value, '', 'vbscript: cleared');
+  assert.equal(neutralized.drop, false, 'dangerous URL is neutralized by removing the attr value');
+  assert.equal(neutralized.value, null, 'javascript: href value removes attr');
+  assert.equal(sanitizeAttrValue('src', 'vbscript:msgbox(1)').value, null, 'vbscript: removes attr');
   assert.equal(
-    sanitizeAttrValue('href', 'data:text/html,<b>x</b>').value, '',
-    'data:text/html cleared'
+    sanitizeAttrValue('href', 'data:text/html,<b>x</b>').value, null,
+    'data:text/html removes attr'
   );
   assert.equal(
-    sanitizeAttrValue('href', ' java\tscript:alert(1)').value, '',
-    'control-char/whitespace obfuscated scheme still detected'
+    sanitizeAttrValue('href', ' java\tscript:alert(1)').value, null,
+    'control-char/whitespace obfuscated scheme still detected and removed'
   );
 
   const benign = sanitizeAttrValue('href', 'https://x.test');
@@ -308,6 +329,11 @@ test('sanitizeAttrValue: on* and srcdoc drop; dangerous URL schemes neutralize; 
   assert.equal(styled.drop, false);
   assert.ok(!/expression\(/i.test(styled.value), 'style value goes through scrubCssText');
 
+  const quotedUrlStyle = sanitizeAttrValue('style', 'background:url("javascript:alert(1)")');
+  assert.equal(quotedUrlStyle.drop, false);
+  assert.ok(!/javascript:/i.test(quotedUrlStyle.value), 'quoted style url() goes through scrubCssText');
+  assert.ok(quotedUrlStyle.value.includes('about:blank'), 'quoted style url() is replaced with about:blank');
+
   const plain = sanitizeAttrValue('title', 'hello');
   assert.equal(plain.drop, false);
   assert.equal(plain.value, 'hello', 'non-special attribute passes through');
@@ -319,6 +345,16 @@ test('scrubCssText neutralizes url(javascript:), expression(), -moz-binding, non
   const urlScrubbed = scrubCssText('background:url(javascript:alert(1))');
   assert.ok(!/url\(\s*javascript/i.test(urlScrubbed), 'url(javascript:) contents replaced');
   assert.ok(urlScrubbed.includes('about:blank'), 'replacement target is about:blank');
+
+  for (const css of [
+    'background:url("javascript:alert(1)")',
+    "background:url('javascript:alert(1)')",
+    'background:url("java\nscript:alert(1)")',
+  ]) {
+    const scrubbed = scrubCssText(css);
+    assert.ok(!/javascript:/i.test(scrubbed), 'quoted dangerous url() neutralized: ' + css);
+    assert.ok(scrubbed.includes('about:blank'), 'quoted dangerous url() replacement is about:blank: ' + css);
+  }
 
   assert.ok(!/expression\(/i.test(scrubCssText('width:expression(alert(1))')), 'expression() neutralized');
   assert.ok(!/-moz-binding/i.test(scrubCssText('-moz-binding:url(evil.xml#x)')), '-moz-binding neutralized');
@@ -368,21 +404,78 @@ function makeDoc(env, bodyHtml) {
 }
 
 /** Recording diff hooks carrying an injected sanitizeCounters object. */
-function diffHooks(sanitizeCounters) {
+function elementsInSubtree(root) {
+  const elements = [];
+  if (!root) return elements;
+  if (root.nodeType === 1) elements.push(root);
+  if (root.getElementsByTagName) {
+    for (const el of root.getElementsByTagName('*')) elements.push(el);
+  }
+  return elements;
+}
+
+function identityFromNidAttrs(doc) {
+  const nidToNode = new Map();
+  const nodeToNid = new WeakMap();
+
+  function indexAttrs(root) {
+    for (const el of elementsInSubtree(root)) {
+      if (!el.getAttribute) continue;
+      const nid = el.getAttribute(NID_ATTR);
+      if (!nid) continue;
+      nidToNode.set(String(nid), el);
+      nodeToNid.set(el, String(nid));
+    }
+  }
+
+  function pair(root, nodeIds) {
+    const elements = elementsInSubtree(root);
+    const ids = Array.isArray(nodeIds) ? nodeIds : [];
+    for (let i = 0; i < elements.length && i < ids.length; i++) {
+      const nid = String(ids[i]);
+      nidToNode.set(nid, elements[i]);
+      nodeToNid.set(elements[i], nid);
+    }
+  }
+
+  indexAttrs(doc.body);
+
+  return {
+    resolve(nid) { return nidToNode.get(String(nid)) || null; },
+    indexSubtree(root, nodeIds) {
+      if (Array.isArray(nodeIds) && nodeIds.length > 0) {
+        pair(root, nodeIds);
+      } else {
+        indexAttrs(root);
+      }
+    },
+    removeSubtree(root) {
+      for (const el of elementsInSubtree(root)) {
+        const nid = nodeToNid.get(el);
+        if (nid) nidToNode.delete(nid);
+        nodeToNid.delete(el);
+      }
+    },
+  };
+}
+
+function diffHooks(sanitizeCounters, doc) {
   const warns = [];
   const resyncs = [];
+  const hooks = {
+    logger: {
+      info() {},
+      warn(...args) { warns.push(args); },
+      error() {},
+    },
+    requestResync(reason, details) { resyncs.push({ reason, details }); },
+    sanitizeCounters,
+  };
+  if (doc) hooks.identity = identityFromNidAttrs(doc);
   return {
     warns,
     resyncs,
-    hooks: {
-      logger: {
-        info() {},
-        warn(...args) { warns.push(args); },
-        error() {},
-      },
-      requestResync(reason, details) { resyncs.push({ reason, details }); },
-      sanitizeCounters,
-    },
+    hooks,
   };
 }
 
@@ -395,7 +488,7 @@ test("chokepoint integration: a hostile 'add' op inserts a node with neither onc
   try {
     const doc = makeDoc(env, '<div ' + NID_ATTR + '="1"></div>');
     const sc = freshCounters();
-    const rec = diffHooks(sc);
+    const rec = diffHooks(sc, doc);
     applyMutations(doc, [
       {
         op: DIFF_OP.ADD,
@@ -410,11 +503,35 @@ test("chokepoint integration: a hostile 'add' op inserts a node with neither onc
     assert.ok(added, 'the hostile add op still inserts (sanitized, never silently dropped)');
     assert.deepEqual(onAttrsOf(added), [], 'sanitizeFragment ran on template content before importNode');
     assert.equal(
-      added.querySelector('a').getAttribute('href'), '',
-      'javascript: href neutralized inside the inserted subtree'
+      added.querySelector('a').hasAttribute('href'), false,
+      'javascript: href removed inside the inserted subtree'
     );
     assert.ok(sc.strippedHandlers >= 1, 'handler strip counted through hooks.sanitizeCounters');
     assert.ok(sc.blockedUrls >= 1, 'URL block counted through hooks.sanitizeCounters');
+  } finally {
+    env.teardown();
+  }
+});
+
+test("chokepoint integration: a hostile 'add' op scrubs <style> element text", () => {
+  const env = setupEnv();
+  try {
+    const doc = makeDoc(env, '<div ' + NID_ATTR + '="1"></div>');
+    const sc = freshCounters();
+    const rec = diffHooks(sc, doc);
+    applyMutations(doc, [
+      {
+        op: DIFF_OP.ADD,
+        parentNid: '1',
+        html: '<div ' + NID_ATTR + '="9">'
+          + '<style>.x{background:url("javascript:alert(1)");width:expression(alert(2));}</style>'
+          + '</div>',
+      },
+    ], freshDiffCounters(), rec.hooks);
+    const css = doc.querySelector('style').textContent;
+    assert.ok(!/url\(\s*javascript/i.test(css), 'add-op style text has no url(javascript:)');
+    assert.ok(!/expression\(/i.test(css), 'add-op style text has no expression()');
+    assert.ok(sc.cssScrubs >= 1, 'style text scrub counted through hooks.sanitizeCounters');
   } finally {
     env.teardown();
   }
@@ -425,7 +542,7 @@ test("chokepoint integration: an 'attr' op with an on* name is DROPPED -- no set
   try {
     const doc = makeDoc(env, '<div ' + NID_ATTR + '="1"></div>');
     const sc = freshCounters();
-    const rec = diffHooks(sc);
+    const rec = diffHooks(sc, doc);
     const counters = freshDiffCounters();
     applyMutations(doc, [
       { op: DIFF_OP.ATTR, nid: '1', attr: 'onclick', val: 'alert(1)' },
@@ -440,18 +557,18 @@ test("chokepoint integration: an 'attr' op with an on* name is DROPPED -- no set
   }
 });
 
-test("chokepoint integration: an 'attr' op href=javascript: sets ''; benign attr ops apply unchanged", () => {
+test("chokepoint integration: an 'attr' op href=javascript: removes href; benign attr ops apply unchanged", () => {
   const env = setupEnv();
   try {
     const doc = makeDoc(env, '<a ' + NID_ATTR + '="1">x</a>');
     const sc = freshCounters();
-    const rec = diffHooks(sc);
+    const rec = diffHooks(sc, doc);
     applyMutations(doc, [
       { op: DIFF_OP.ATTR, nid: '1', attr: 'href', val: 'javascript:alert(1)' },
       { op: DIFF_OP.ATTR, nid: '1', attr: 'title', val: 'tip' },
     ], freshDiffCounters(), rec.hooks);
     const target = doc.querySelector('[' + NID_ATTR + '="1"]');
-    assert.equal(target.getAttribute('href'), '', 'dangerous URL neutralized to empty value');
+    assert.equal(target.hasAttribute('href'), false, 'dangerous URL removed from the mirror');
     assert.equal(target.getAttribute('title'), 'tip', 'benign attr op applied unchanged');
     assert.equal(sc.blockedUrls, 1, 'URL neutralization counted');
   } finally {
@@ -464,7 +581,7 @@ test("chokepoint integration: an 'attr' op for srcdoc is dropped", () => {
   try {
     const doc = makeDoc(env, '<iframe ' + NID_ATTR + '="1"></iframe>');
     const sc = freshCounters();
-    const rec = diffHooks(sc);
+    const rec = diffHooks(sc, doc);
     applyMutations(doc, [
       { op: DIFF_OP.ATTR, nid: '1', attr: 'srcdoc', val: '<p>nested</p>' },
     ], freshDiffCounters(), rec.hooks);
@@ -480,7 +597,7 @@ test("chokepoint integration: 'text' ops still apply via textContent unchanged (
   const env = setupEnv();
   try {
     const doc = makeDoc(env, '<div ' + NID_ATTR + '="1">old</div>');
-    const rec = diffHooks(freshCounters());
+    const rec = diffHooks(freshCounters(), doc);
     const markupText = '<img src=x onerror=alert(1)> stays literal text';
     applyMutations(doc, [
       { op: DIFF_OP.TEXT, nid: '1', text: markupText },
@@ -589,6 +706,7 @@ test('post-parse scrub (behavioral): a hostile snapshot fed to the viewer yields
       html: '<div ' + NID_ATTR + '="1">'
         + '<button ' + NID_ATTR + '="2" onclick="alert(1)">x</button>'
         + '<a ' + NID_ATTR + '="3" href="javascript:alert(1)">y</a>'
+        + '<style>.x{background:url("javascript:alert(1)");width:expression(alert(2));}</style>'
         + '</div>',
     }));
 
@@ -615,6 +733,9 @@ test('post-parse scrub (behavioral): a hostile snapshot fed to the viewer yields
       attrValuesMatching(cd.body, /javascript:/i), [],
       'no javascript: URL anywhere in the mirror body'
     );
+    const css = cd.body.querySelector('style').textContent;
+    assert.ok(!/url\(\s*javascript/i.test(css), 'post-parse style text has no url(javascript:)');
+    assert.ok(!/expression\(/i.test(css), 'post-parse style text has no expression()');
     assert.ok(
       log.warns.some((args) => String(args[0]).startsWith('[Renderer] sanitization strips')),
       'the aggregated sanitization warn reached the injected logger'

@@ -4,7 +4,8 @@
 // Pins: factory-time validation throws ('viewer-container-required',
 // 'viewer-transport-required', 'viewer-sandbox-invalid' is creation-only),
 // the exact sandbox token list (phase criterion 3), viewer DOM structure,
-// the locked handle shape {detach, destroy, registerOverlay}, snapshot
+// the locked handle shape {detach, destroy, getViewportMapping, registerOverlay, on,
+// resolveNode, highlightNode, clearHighlight, requestSubtree}, snapshot
 // srcdoc write + identity adoption, staleness rejection, waiting-state
 // gating (02-RESEARCH Pitfall 4 parity), the latched CONTROL.START resync
 // path (one send per generation, latch released only by the next snapshot),
@@ -254,7 +255,7 @@ test('iframe sandbox is exactly allow-same-origin (token list length 1)', () => 
   }
 });
 
-test('handle has exactly detach, destroy, and registerOverlay functions', () => {
+test('handle has exactly detach, destroy, getViewportMapping, semantic addressing, subtree recovery, registerOverlay, and on functions', () => {
   const env = setupEnv();
   try {
     const transport = createRecordingTransport();
@@ -265,12 +266,28 @@ test('handle has exactly detach, destroy, and registerOverlay functions', () => 
     });
     assert.deepEqual(
       Object.keys(env.viewer).sort(),
-      ['destroy', 'detach', 'registerOverlay'],
-      'handle surface is locked to exactly three members'
+      [
+        'clearHighlight',
+        'destroy',
+        'detach',
+        'getViewportMapping',
+        'highlightNode',
+        'on',
+        'registerOverlay',
+        'requestSubtree',
+        'resolveNode',
+      ],
+      'handle surface is locked to exactly nine members'
     );
     assert.equal(typeof env.viewer.detach, 'function');
     assert.equal(typeof env.viewer.destroy, 'function');
+    assert.equal(typeof env.viewer.getViewportMapping, 'function');
+    assert.equal(typeof env.viewer.resolveNode, 'function');
+    assert.equal(typeof env.viewer.highlightNode, 'function');
+    assert.equal(typeof env.viewer.clearHighlight, 'function');
+    assert.equal(typeof env.viewer.requestSubtree, 'function');
     assert.equal(typeof env.viewer.registerOverlay, 'function');
+    assert.equal(typeof env.viewer.on, 'function');
   } finally {
     env.teardown();
   }
@@ -320,6 +337,31 @@ test('a snapshot missing payload.html logs an error and keeps the last srcdoc', 
       before,
       'last good frame kept: srcdoc unchanged'
     );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('empty-string snapshots are valid and replace the current mirror', async () => {
+  const env = setupEnv();
+  try {
+    const transport = createRecordingTransport();
+    const logger = recordingLogger();
+    env.viewer = createViewer({ container: env.container, transport, logger });
+
+    const payload = snapshotPayload({
+      html: '',
+      nodeIds: [],
+      truncated: true,
+      missingDescendants: 1,
+      streamSessionId: 'stream_empty_ok',
+      snapshotId: 77,
+    });
+    transport.emit(STREAM.SNAPSHOT, payload);
+
+    const iframe = env.container.querySelector('iframe');
+    assert.equal(iframe.getAttribute('srcdoc'), buildSnapshotHtml(payload));
+    assert.equal(logger.errors.length, 0, 'empty html is accepted, not logged as missing');
   } finally {
     env.teardown();
   }

@@ -15,6 +15,8 @@
 //    fixture scenario (D4, D5). They are exempt from stale-entry detection
 //    and ledgerCovers never consults them.
 
+import { isDeepStrictEqual } from 'node:util';
+import { JSDOM } from 'jsdom';
 import { STREAM, DIFF_OP } from '../../src/protocol/messages.js';
 
 /**
@@ -56,12 +58,187 @@ function placeholderOrdinal(value, prefix) {
   return Number.isInteger(ordinal) && ordinal > 0 ? ordinal : null;
 }
 
+const D7_HOSTILE_SNAPSHOT_MARKER = /on\w+\s*=|javascript:|<object\b|<embed\b|srcdoc=|expression\(/i;
+const D7_PASSWORD_PLAINTEXT = /hunter2/i;
+
+/**
+ * @param {*} msg
+ * @returns {string}
+ */
+function snapshotSanitizationText(msg) {
+  const payload = (msg && msg.payload) || {};
+  const html = typeof payload.html === 'string' ? payload.html : '';
+  const inlineStyles = Array.isArray(payload.inlineStyles)
+    ? payload.inlineStyles.join('\n')
+    : '';
+  return html + '\n' + inlineStyles;
+}
+
+/**
+ * @param {*} msg
+ * @returns {Array<*>}
+ */
+function mutationOps(msg) {
+  const ops = msg && msg.payload && msg.payload.mutations;
+  return Array.isArray(ops) ? ops : [];
+}
+
+/**
+ * @param {*} op
+ * @returns {boolean}
+ */
+function isAttrOp(op) {
+  return op && op.op === DIFF_OP.ATTR;
+}
+
+/**
+ * @param {*} value
+ * @returns {boolean}
+ */
+function hasDangerousAttrValue(value) {
+  return /(?:javascript|vbscript):|data:text\/html/i.test(String(value || ''));
+}
+
+/**
+ * @param {*} op
+ * @returns {boolean}
+ */
+function isHostileAttrOp(op) {
+  if (!isAttrOp(op)) return false;
+  const attr = String(op.attr || '');
+  return /^on/i.test(attr) || hasDangerousAttrValue(op.val);
+}
+
+/**
+ * @param {*[]} ops
+ * @returns {boolean}
+ */
+function hasBenignD7Anchor(ops) {
+  return ops.some((op) => isAttrOp(op) && op.attr === 'class' && op.val === 'after');
+}
+
+function nonEmptyArray(value) {
+  return Array.isArray(value) && value.length > 0;
+}
+
+function payloadHtml(msg) {
+  return String((msg && msg.payload && msg.payload.html) || '');
+}
+
+function phase8SnapshotPayload(msg) {
+  const payload = msg && msg.payload;
+  if (!payload || msg.type !== STREAM.SNAPSHOT) return null;
+  return payload;
+}
+
+function hasPhase8ShadowFrameSnapshot(payload) {
+  if (!payload) return false;
+  if (!nonEmptyArray(payload.shadowRoots) || !nonEmptyArray(payload.frames)) return false;
+  const shadow = payload.shadowRoots.find((entry) => entry
+    && typeof entry.hostNid === 'string'
+    && entry.mode === 'open'
+    && typeof entry.html === 'string'
+    && entry.html.includes('phase8-shadow-action')
+    && entry.html.includes('slot name="title"')
+    && Array.isArray(entry.nodeIds)
+    && entry.nodeIds.length > 0);
+  const frame = payload.frames.find((entry) => entry
+    && typeof entry.frameNid === 'string'
+    && entry.kind === 'same-origin'
+    && typeof entry.html === 'string'
+    && entry.html.includes('phase8-frame-button')
+    && Array.isArray(entry.nodeIds)
+    && entry.nodeIds.length > 0);
+  return Boolean(shadow && frame);
+}
+
+function isPhase8ShadowValueMutationBatch(msg) {
+  if (!msg || msg.type !== STREAM.MUTATIONS) return false;
+  const ops = mutationOps(msg);
+  if (ops.length === 0) return false;
+  const hasShadowRoot = ops.some((op) => op.op === DIFF_OP.SHADOW_ROOT
+    && typeof op.hostNid === 'string'
+    && typeof op.html === 'string'
+    && op.html.includes('phase8-shadow-live')
+    && Array.isArray(op.nodeIds));
+  const hasValue = ops.some((op) => op.op === DIFF_OP.VALUE
+    && typeof op.nid === 'string'
+    && op.value === 'after value drift'
+    && !Object.prototype.hasOwnProperty.call(op, 'html'));
+  return (hasShadowRoot || hasValue)
+    && ops.every((op) => op.op === DIFF_OP.SHADOW_ROOT || op.op === DIFF_OP.VALUE);
+}
+
+function hasCssomDocumentStyleSource(msg) {
+  if (!msg || msg.type !== STREAM.SNAPSHOT) return false;
+  const payload = msg.payload || {};
+  const strategy = payload.styleStrategy || {};
+  const sources = payload.styleSources || [];
+  return strategy.mode === 'cssom'
+    && Array.isArray(sources)
+    && sources.some((source) => source
+      && source.scope
+      && source.scope.kind === 'document'
+      && typeof source.cssText === 'string'
+      && source.cssText.includes('.cssom-card'));
+}
+
+function isCssomStyleSourceMutationBatch(msg) {
+  if (!msg || msg.type !== STREAM.MUTATIONS) return false;
+  const ops = mutationOps(msg);
+  return ops.length > 0
+    && ops.every((op) => op
+      && op.op === DIFF_OP.STYLE_SOURCE
+      && op.scope
+      && op.scope.kind === 'document'
+      && ['upsert', 'replace', 'remove'].includes(op.action));
+}
+
+function stripStyleAttributesFromHtml(html) {
+  const dom = new JSDOM('<!DOCTYPE html><template></template>');
+  const template = dom.window.document.querySelector('template');
+  template.innerHTML = String(html || '');
+  for (const el of template.content.querySelectorAll('[style]')) {
+    el.removeAttribute('style');
+  }
+  return template.innerHTML;
+}
+
+function normalizeAddStyleOp(op) {
+  if (!op || op.op !== DIFF_OP.ADD || typeof op.html !== 'string') return op;
+  return Object.assign({}, op, {
+    html: stripStyleAttributesFromHtml(op.html),
+  });
+}
+
+function isAddStyleOnlyMutationBatch(refMsg, extMsg, scenarioName) {
+  if (!['basic-mutations', 'mutation-burst', 'structural-ops'].includes(scenarioName)) {
+    return false;
+  }
+  if (!refMsg || !extMsg || refMsg.type !== STREAM.MUTATIONS || extMsg.type !== STREAM.MUTATIONS) {
+    return false;
+  }
+  const refOps = mutationOps(refMsg);
+  const extOps = mutationOps(extMsg);
+  if (refOps.length !== extOps.length || refOps.length === 0) return false;
+
+  let hasStyledAdd = false;
+  const normalizedExtOps = extOps.map((op) => {
+    if (op && op.op === DIFF_OP.ADD && typeof op.html === 'string' && /\sstyle=/.test(op.html)) {
+      hasStyledAdd = true;
+    }
+    return normalizeAddStyleOp(op);
+  });
+
+  return hasStyledAdd && isDeepStrictEqual(refOps, normalizedExtOps);
+}
+
 /**
  * Declared divergences between the reference capture and the extracted core.
- * Exactly TWO mismatch-kind entries exist (D1: resume semantics, scoped to
- * pause-resume; D6: text-node childList fidelity fix, scoped to
- * text-childlist); everything else the oracle compares is required to be
- * byte-equivalent after normalization.
+ * Mismatch-kind entries are scenario-pinned: D1 (resume semantics), D6
+ * (text-node childList fidelity fix), D7 (capture-side sanitization and
+ * masking), and D24 Phase 8 protocol extensions. Everything else the oracle
+ * compares is required to be byte-equivalent after normalization.
  * @type {DivergenceEntry[]}
  */
 export const DIVERGENCES = [
@@ -194,6 +371,228 @@ export const DIVERGENCES = [
     },
   },
   {
+    id: 'D7-capture-sanitization',
+    kind: 'mismatch',
+    description:
+      'The reference serializes raw hostile content -- on* handlers, javascript: '
+      + 'URLs, srcdoc, object/embed surfaces, hostile CSS, and password plaintext -- '
+      + 'through both SNAPSHOT and MUTATIONS messages. The extracted core routes wire '
+      + 'values through src/capture/index.js sanitizeForWire, which strips handlers, '
+      + 'drops object/embed surfaces, neutralizes dangerous URL attrs, scrubs hostile '
+      + 'CSS, and masks password values before transport.',
+    rationale:
+      'Deliberate security divergence (Phase 3): CONTEXT locks sanitizers and '
+      + 'password masking as always-on with no opt-out, and requires capture-side '
+      + 'sanitization to be ledgered like D6 -- tightly scoped, scenario-pinned, '
+      + 'and load-bearing. Pinned end-to-end by sanitize-corpus.html plus the '
+      + 'sanitize-divergence scenario.',
+    affectedMessages: [STREAM.SNAPSHOT, STREAM.MUTATIONS],
+    affectedScenarios: ['sanitize-divergence'],
+    appliesTo(refMsg, extMsg, scenarioName) {
+      if (scenarioName !== 'sanitize-divergence') return false;
+
+      // The scenario guard is load-bearing (same discipline as D1/D6): a
+      // sanitization-shaped mismatch surfacing in any OTHER scenario must
+      // still hard-fail as UNDECLARED DIVERGENCE.
+      // D7's exact shape is a SAME-INDEX mismatch. A trailing message,
+      // missing counterpart, or type mismatch is not a sanitization strip.
+      if (refMsg === undefined || extMsg === undefined) return false;
+      if (refMsg.type !== extMsg.type) return false;
+
+      if (refMsg.type === STREAM.SNAPSHOT) {
+        const refText = snapshotSanitizationText(refMsg);
+        const extText = snapshotSanitizationText(extMsg);
+        const refCarriesSanitizable =
+          D7_HOSTILE_SNAPSHOT_MARKER.test(refText) || D7_PASSWORD_PLAINTEXT.test(refText);
+        const extCarriesSanitizable =
+          D7_HOSTILE_SNAPSHOT_MARKER.test(extText) || D7_PASSWORD_PLAINTEXT.test(extText);
+        return refCarriesSanitizable && !extCarriesSanitizable;
+      }
+
+      if (refMsg.type === STREAM.MUTATIONS) {
+        const refOps = mutationOps(refMsg);
+        const extOps = mutationOps(extMsg);
+        const refHostileOps = refOps.filter(isHostileAttrOp);
+        if (refHostileOps.length === 0) return false;
+        if (!hasBenignD7Anchor(refOps) || !hasBenignD7Anchor(extOps)) return false;
+
+        const extHasHostileOps = extOps.some(isHostileAttrOp);
+        if (extHasHostileOps) return false;
+
+        return refHostileOps.every((refOp) => {
+          const attr = String(refOp.attr || '').toLowerCase();
+          if (/^on/i.test(attr)) {
+            return !extOps.some((extOp) => isAttrOp(extOp)
+              && String(extOp.attr || '').toLowerCase() === attr);
+          }
+          return extOps.some((extOp) => isAttrOp(extOp)
+            && String(extOp.attr || '').toLowerCase() === attr
+            && extOp.val === null);
+        });
+      }
+
+      return false;
+    },
+  },
+  {
+    id: 'D8-weakmap-node-identity-sidecar',
+    kind: 'documented-mapping',
+    description:
+      'Phase 7 removes PhantomStream-owned data-fsb-nid attributes from extracted '
+      + 'snapshot/add HTML and carries the same raw nid sequence in structured '
+      + 'nodeIds sidecars. The reference still serializes framework identity as '
+      + 'data-fsb-nid attributes. normalize.js removes only those reference identity '
+      + 'attrs for comparison when the extracted nodeIds sidecar exactly matches the '
+      + 'reference preorder nid sequence.',
+    rationale:
+      'Intentional identity transport migration (07-CONTEXT.md D-03/D-08/D-09): '
+      + 'capture must stop mutating the observed page while preserving opaque nid '
+      + 'diff fields, add-op parent/before ids, and preorder identity order. This '
+      + 'normalization does not cover unrelated attrs, text, styles, sanitization, '
+      + 'or mutation ordering.',
+    affectedMessages: [STREAM.SNAPSHOT, STREAM.MUTATIONS],
+    affectedScenarios: [
+      'basic-mutations',
+      'mutation-burst',
+      'structural-ops',
+      'scroll',
+      'pause-resume',
+      'text-childlist',
+      'sanitize-divergence',
+      'phase8-protocol-extensions',
+      'cssom-capture-mode',
+      'snapshot-only',
+      'dialog',
+    ],
+    appliesTo() {
+      return false;
+    },
+  },
+  {
+    id: 'D24-phase8-truncated-subtree-markers',
+    kind: 'mismatch',
+    description:
+      'Phase 8 preserves dropped subtree root identity by replacing truncated '
+      + 'snapshot regions with data-phantomstream-truncated markers and carrying '
+      + 'requestable marker nids in nodeIds. The FSB reference drops those subtrees '
+      + 'to whitespace only, so the extracted truncation snapshot intentionally has '
+      + 'marker elements and additional nodeIds for on-demand subtree recovery.',
+    rationale:
+      'D-19 through D-22 and CAPT-11 require targeted recovery for truncated '
+      + 'regions without waiting for a full replacement snapshot. The predicate is '
+      + 'pinned to the existing snapshot-only truncation scenario and only matches '
+      + 'actual truncated marker payloads.',
+    affectedMessages: [STREAM.SNAPSHOT],
+    affectedScenarios: ['snapshot-only'],
+    appliesTo(refMsg, extMsg, scenarioName) {
+      if (scenarioName !== 'snapshot-only') return false;
+      if (refMsg === undefined || extMsg === undefined) return false;
+      if (refMsg.type !== STREAM.SNAPSHOT || extMsg.type !== STREAM.SNAPSHOT) return false;
+      const refPayload = refMsg.payload || {};
+      const extPayload = extMsg.payload || {};
+      if (refPayload.truncated !== true || extPayload.truncated !== true) return false;
+      if (refPayload.missingDescendants !== extPayload.missingDescendants) return false;
+      if (!payloadHtml(extMsg).includes('data-phantomstream-truncated="true"')) return false;
+      if (payloadHtml(refMsg).includes('data-phantomstream-truncated="true"')) return false;
+      return Array.isArray(extPayload.nodeIds)
+        && extPayload.nodeIds.length > 0
+        && extPayload.nodeIds.length > (Array.isArray(refPayload.nodeIds) ? refPayload.nodeIds.length : 0);
+    },
+  },
+  {
+    id: 'D24-phase8-add-op-computed-styles',
+    kind: 'mismatch',
+    description:
+      'Phase 8 add ops include curated computed style attributes on newly added '
+      + 'elements so post-snapshot content matches snapshot-era siblings. The FSB '
+      + 'reference add-op HTML carries the raw new subtree without computed styles.',
+    rationale:
+      'D-16 through D-18 and CAPT-06 require late-added nodes to carry curated '
+      + 'computed styles while explicitly deferring full CSSOM capture to Phase 9. '
+      + 'The predicate is pinned to existing add-op scenarios and only matches '
+      + 'mutation batches that become reference-equivalent after removing style '
+      + 'attributes from extracted add-op HTML.',
+    affectedMessages: [STREAM.MUTATIONS],
+    affectedScenarios: ['basic-mutations', 'mutation-burst', 'structural-ops'],
+    appliesTo(refMsg, extMsg, scenarioName) {
+      return isAddStyleOnlyMutationBatch(refMsg, extMsg, scenarioName);
+    },
+  },
+  {
+    id: 'D24-phase8-shadow-frame-snapshot-sidecars',
+    kind: 'mismatch',
+    description:
+      'Phase 8 extracted snapshots carry non-empty shadowRoots[] and frames[] '
+      + 'sidecars for open shadow roots and same-origin iframe documents. The FSB '
+      + 'reference has no corresponding structured sidecar fields.',
+    rationale:
+      'D-04 through D-10 require structured host-nid/frame-nid sidecars rather '
+      + 'than flattening shadow DOM or loading live iframe content. The predicate '
+      + 'is pinned to the focused phase8-protocol-extensions fixture and checks '
+      + 'the exact fixture-specific sidecar content.',
+    affectedMessages: [STREAM.SNAPSHOT],
+    affectedScenarios: ['phase8-protocol-extensions'],
+    appliesTo(refMsg, extMsg, scenarioName) {
+      if (scenarioName !== 'phase8-protocol-extensions') return false;
+      if (refMsg === undefined || extMsg === undefined) return false;
+      if (refMsg.type !== STREAM.SNAPSHOT || extMsg.type !== STREAM.SNAPSHOT) return false;
+      const refPayload = phase8SnapshotPayload(refMsg);
+      const extPayload = phase8SnapshotPayload(extMsg);
+      if (!hasPhase8ShadowFrameSnapshot(extPayload)) return false;
+      return !hasPhase8ShadowFrameSnapshot(refPayload);
+    },
+  },
+  {
+    id: 'D24-phase8-shadow-value-mutations',
+    kind: 'mismatch',
+    description:
+      'Phase 8 extracted streams emit a shadow-root replacement op for live open '
+      + 'shadow root changes and a narrow DIFF_OP.VALUE op for property-only form '
+      + 'value drift. The FSB reference observes neither shadow-root internals nor '
+      + 'input/change value property changes.',
+    rationale:
+      'D-07 and D-12 through D-15 require live shadow and value drift to stream '
+      + 'as explicit narrow ops. The predicate is pinned to the focused '
+      + 'phase8-protocol-extensions scenario and accepts only an extracted-only '
+      + 'MUTATIONS batch composed of the expected shadow-root and value ops.',
+    affectedMessages: [STREAM.MUTATIONS],
+    affectedScenarios: ['phase8-protocol-extensions'],
+    appliesTo(refMsg, extMsg, scenarioName) {
+      if (scenarioName !== 'phase8-protocol-extensions') return false;
+      if (refMsg !== undefined || extMsg === undefined) return false;
+      return isPhase8ShadowValueMutationBatch(extMsg);
+    },
+  },
+  {
+    id: 'D25-cssom-mode-style-sources',
+    kind: 'mismatch',
+    description:
+      'Phase 9 CSSOM mode replaces generated computed inline style capture with '
+      + 'structured styleSources[] and styleStrategy metadata in snapshots, then '
+      + 'streams stylesheet changes as DIFF_OP.STYLE_SOURCE mutation ops. The FSB '
+      + 'reference has no structured style-source protocol surface and does not '
+      + 'observe document.head stylesheet text changes in the oracle fixture.',
+    rationale:
+      'CSSOM mode is an explicit opt-in (`styleMode: "cssom"`) so the legacy '
+      + 'computed-mode oracle matrix remains unchanged. This entry is pinned to '
+      + 'the focused cssom-capture-mode scenario and only covers snapshots with '
+      + 'document-scoped CSSOM sources plus extracted-only style-source mutation '
+      + 'batches.',
+    affectedMessages: [STREAM.SNAPSHOT, STREAM.MUTATIONS],
+    affectedScenarios: ['cssom-capture-mode'],
+    appliesTo(refMsg, extMsg, scenarioName) {
+      if (scenarioName !== 'cssom-capture-mode') return false;
+
+      if (refMsg !== undefined && extMsg !== undefined) {
+        if (refMsg.type !== STREAM.SNAPSHOT || extMsg.type !== STREAM.SNAPSHOT) return false;
+        return hasCssomDocumentStyleSource(extMsg) && !hasCssomDocumentStyleSource(refMsg);
+      }
+
+      if (refMsg !== undefined || extMsg === undefined) return false;
+      return isCssomStyleSourceMutationBatch(extMsg);
+    },
+  },
+  {
     id: 'D2-envelope-shape',
     kind: 'documented-mapping',
     description:
@@ -213,6 +612,7 @@ export const DIVERGENCES = [
     affectedScenarios: [
       'basic-mutations', 'mutation-burst', 'structural-ops', 'scroll',
       'pause-resume', 'snapshot-only', 'dialog', 'text-childlist',
+      'sanitize-divergence', 'phase8-protocol-extensions', 'cssom-capture-mode',
     ],
     // Never consulted: documented-mapping divergences are absorbed by
     // normalize.js BEFORE comparison, so no mismatch can reach the ledger.
@@ -234,6 +634,7 @@ export const DIVERGENCES = [
     affectedScenarios: [
       'basic-mutations', 'mutation-burst', 'structural-ops', 'scroll',
       'pause-resume', 'snapshot-only', 'dialog', 'text-childlist',
+      'sanitize-divergence', 'phase8-protocol-extensions', 'cssom-capture-mode',
     ],
     appliesTo() { return false; },
   },

@@ -63,20 +63,58 @@ Defensive hardening of the start-up handshake:
    valid document — just a shorter one.
 5. **Identity beats ordering.** Session/snapshot IDs on every message turned a class of
    ghost-mutation corruption bugs into silent, correct rejections.
+6. **Late-added styles follow the curated path.** Phase 8 fixed post-snapshot
+   added-node style drift by reusing the curated computed property list and
+   batching reads before clone mutation. It deliberately did not enumerate all
+   computed properties; Phase 9 adds stylesheet-centric CSSOM mode as an
+   opt-in path rather than replacing the computed-style default.
+
+## Standalone Phase 8 — Fidelity Completion (Jun 2026)
+
+Phase 8 closed the remaining high-value DOM fidelity gaps without changing the
+core architecture:
+
+- Open shadow roots are transported as `shadowRoots[]` sidecars tied to host
+  nids, then reconstructed as real mirror shadow roots. Slots stay slots; light
+  children are not duplicated.
+- Same-origin iframes are transported as scoped `frames[]` sidecars and rendered
+  as inert nested srcdoc mirrors. Cross-origin iframe content remains a
+  content-free placeholder.
+- Input/change events emit narrow, masked `DIFF_OP.VALUE` updates for form
+  property drift instead of replacing nodes.
+- Add ops use curated computed styles collected in batched reads. This preserves
+  the original "curate, don't enumerate" lesson while fixing late-added visual
+  drift.
+- Truncated snapshot regions now keep requestable placeholder nids and can be
+  recovered by bounded `requestSubtree` / `STREAM.SUBTREE_RESPONSE` flows.
+
+## Standalone Phase 9 — CSSOM Capture Mode (Jun 2026)
+
+Phase 9 added optional stylesheet-centric capture:
+
+- `styleMode: 'computed' | 'cssom'` keeps the historical computed path as the
+  default and makes CSSOM capture an explicit opt-in.
+- CSSOM snapshots carry scoped `styleSources[]` and `styleStrategy` metadata
+  for document, open-shadow-root, and same-origin-frame stylesheets.
+- `fetchStylesheet({ href, scope, ownerKind })` is a host-owned hook for
+  explicit stylesheet text supply; PhantomStream does not perform hidden
+  network fetches.
+- Live stylesheet edits stream as `DIFF_OP.STYLE_SOURCE` with
+  `action: 'upsert' | 'replace' | 'remove'`.
+- Fallback reasons (`cssRules-blocked`, `href-relinked`, `adapter-fetch`,
+  `computed-fallback`) and recovery diagnostics (`cssom-hook-unavailable`,
+  `cssom-style-source-stale`, `stale-style-scope`) keep CSSOM failures
+  visible instead of silently drifting.
 
 ## Where the standalone framework goes from here
 
-See `docs/ARCHITECTURE.md` §6 for the inherited limitations. The extraction roadmap, in
-order of research value:
+The standalone framework now has package quickstarts in
+`docs/QUICKSTARTS.md`. The remaining roadmap is publication and research
+work, not another capture fidelity pass:
 
-1. **Stylesheet-centric capture** — replace per-element computed-style inlining with CSSOM
-   capture + targeted inline overrides; expected to shrink snapshots enough to retire most
-   truncation machinery and fix style drift.
-2. **Decouple capture from `chrome.runtime`** — a transport interface so the capture core
-   runs in any injection context (extension, Playwright/CDP, bookmarklet, embedded SDK).
-3. **Sanitization as a first-class stage** — strip `on*`/`javascript:` on capture, enforce
-   sandboxed rendering on the viewer.
-4. **On-demand subtree fetch** — close the truncation gap interactively instead of waiting
-   for the next snapshot.
-5. **Evaluation harness** — bandwidth/latency/fidelity benchmarks vs. video streaming and
-   rrweb-style record/replay, for the paper.
+1. **0.x package release** — validated npm package, trusted publishing setup,
+   and quickstarts.
+2. **FSB swap-in** — consume the published package in the original downstream
+   app before freezing 1.0.
+3. **Evaluation harness** — bandwidth/latency/fidelity benchmarks vs. video
+   streaming and rrweb-style record/replay, for the paper.

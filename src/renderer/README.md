@@ -14,7 +14,7 @@ Module split (the seams jsdom forces — see Environment):
 
 ```
 snapshot.js   buildSnapshotHtml(payload) -> string   pure srcdoc builder
-diff.js       applyMutations(doc, ops, counters)     Document-parameterized applier
+diff.js       applyMutations(doc, ops, counters, hooks)     Document-parameterized applier
 overlays.js   createOverlays / mapRectToHost / OVERLAY_CSS
 index.js      createViewer factory + barrel re-exports of all of the above
 ```
@@ -22,10 +22,10 @@ index.js      createViewer factory + barrel re-exports of all of the above
 ## Factory
 
 ```js
-import { createViewer } from '@fullselfbrowsing/phantom-stream/renderer';
+import { createViewer } from '@full-self-browsing/phantom-stream/renderer';
 
 const viewer = createViewer({ container, transport, logger });
-// -> { detach, destroy, registerOverlay }
+// -> { detach, destroy, registerOverlay, on, resolveNode, highlightNode, clearHighlight, requestSubtree }
 ```
 
 Calling the factory auto-attaches a live mirror: the viewer root (stamped
@@ -104,9 +104,156 @@ streaming.
   resync latch, overlay registry dispatch of the null reset). Idempotent;
   safe after `detach()`.
 - `registerOverlay(kind, renderFn)` — register a custom overlay kind (the
-  host-facing extension seam, below). The handle surface is locked to
-  exactly these three members this phase; events (VIEW-02) arrive in
-  Phase 4, addressing in Phase 7.
+  host-facing extension seam, below).
+- `on(eventName, handler)` — subscribe to host-facing events. Supports
+  `state` and `health`, immediately calls the handler with the current
+  snapshot of that event, and returns an unsubscribe function. Unknown event
+  names throw `Error('viewer-event-unsupported')` at subscription time.
+  The viewer emits events only; visible badges, banners, logs, and status
+  UI belong to the host application.
+- `resolveNode(nid)` — resolve a PhantomStream nid through the viewer's
+  internal identity index. Returns a fresh geometry/identity object
+  (`nid`, `exists`, `rect`, `streamSessionId`, `snapshotId`) or `null` for
+  missing, stale, or inactive ids. It does not expose mirrored HTML, text,
+  attributes, payloads, URLs, titles, or DOM nodes.
+- `highlightNode(nid, options?)` — draw a local host-side highlight for a
+  resolved nid using the existing overlay layer. Optional labels are written
+  with `textContent`. Returns `false` for unresolved ids.
+- `clearHighlight()` — remove the local semantic highlight. Idempotent.
+- `requestSubtree(nid, options?)` — ask capture for one missing or truncated
+  subtree. Returns a generated request id when the nid is current and no
+  request for that nid is already in flight, otherwise `null`. Requests carry
+  the active `streamSessionId`/`snapshotId`; stale, miss, and mismatched
+  `STREAM.SUBTREE_RESPONSE` frames are ignored softly and clear only their
+  matching latch.
+
+## Node identity index and semantic addressing
+
+The renderer rebuilds a private `Map<nid, Node>` index from each accepted
+snapshot's `nodeIds` sidecar after post-parse sanitization. Add ops extend
+the index from their own `nodeIds` sidecars, and remove ops delete the removed
+subtree before it leaves the mirror. A paired `WeakMap<Node, nid>` is kept
+only for internal cleanup; neither map is exposed to hosts.
+
+Diff application receives identity hooks from `createViewer`. `diff.js` does
+not own an identity selector fallback, and normal nid-addressed ops do not use
+per-op `querySelector` lookup. Overlay anchor resolution, `resolveNode`, and
+`highlightNode` all route through the same index, so stale ids fail softly in
+one place with content-free diagnostics.
+
+The same index now spans Phase 8 scopes. Snapshot, add-op, and subtree payloads
+can carry `shadowRoots[]` and `frames[]` sidecars; the renderer indexes those
+descendants only after the mirror document, shadow fragment, or frame document
+has been parsed and sanitized.
+
+## Phase 8 reconstruction and recovery
+
+### Shadow roots
+
+`STREAM.SNAPSHOT`, add ops, and `DIFF_OP.SHADOW_ROOT` mutations can include
+open shadow root sidecars keyed by `hostNid`. The renderer resolves the host
+through the private identity index, calls `attachShadow({ mode: 'open' })`,
+parses the sidecar HTML in a template, runs `sanitizeFragment`, appends the
+fragment, and indexes the shadow `nodeIds`. Slotted light-DOM children are not
+duplicated into the shadow payload; the browser's real slot distribution owns
+projection.
+
+Closed shadow roots are not reconstructed because capture cannot read them.
+There is no selector fallback for shadow addressing.
+
+### Iframes
+
+Same-origin frame sidecars are rendered as inert nested `srcdoc` documents with
+the same CSP discipline and a sandbox that does not include `allow-scripts`.
+The renderer indexes frame-local `nodeIds` after the frame document loads.
+Cross-origin iframe content is not mirrored; cross-origin entries render as
+content-free labeled placeholders using safe src/origin metadata only.
+
+### Value diffs
+
+`DIFF_OP.VALUE` applies form-control property state without replacing the
+node. The applier resolves `nid` through the identity index and updates
+`value`, `checked`, and `selectedValues` as present. Missing nids follow the
+same stale-miss accounting as other diff ops. Capture masks value payloads
+before transport, so the renderer never receives raw password values when
+masking applies.
+
+### Subtree responses
+
+`requestSubtree` sends `CONTROL.SUBTREE_REQUEST` for a specific current nid and
+latches by nid until a matching response arrives. `STREAM.SUBTREE_RESPONSE`
+with `status: 'ok'` replaces only the matching
+`data-phantomstream-truncated="true"` marker after parsing and
+`sanitizeFragment`; response `nodeIds`, `shadowRoots[]`, and `frames[]` are
+then indexed through the same hooks used by snapshots and add ops.
+
+Stale, gone, skipped, blocked, untracked, or mismatched responses do not mutate
+the mirror. The latch is bounded so one missing region cannot create request
+storms.
+
+## Phase 9 CSSOM reconstruction
+
+When capture runs with `styleMode: 'cssom'`, snapshots and scoped sidecars may
+carry `styleSources[]` plus `styleStrategy` instead of generated computed
+inline styles. The renderer installs those sources as sanitized `<style>` or
+safe `<link rel="stylesheet">` nodes:
+
+- document-scope sources install into the mirror document head;
+- `{ kind: 'shadow', hostNid }` sources install inside the reconstructed open
+  shadow root for that host;
+- `{ kind: 'frame', frameNid }` sources install inside the same-origin mirror
+  frame document for that iframe.
+
+Each installed node is stamped with `data-ps-style-source-id`, so later
+`DIFF_OP.STYLE_SOURCE` ops can replace or remove the exact source without
+selector fallback. The op contract is
+`action: 'upsert' | 'replace' | 'remove'`; upsert/replace carry a sanitized
+`source`, while remove only needs the `sourceId` and `scope`.
+
+CSS text always routes through `scrubCssText` before insertion, matching the
+snapshot CSP and sandbox contract. If the scope cannot be resolved, or the
+viewer receives a style-source op before the matching document/shadow/frame is
+indexed, it increments stale-miss accounting and requests resync with
+`stale-style-scope`.
+
+## Event contract (VIEW-02)
+
+```js
+const offState = viewer.on('state', (event) => {
+  // event.state is exactly one of:
+  // 'connecting' | 'live' | 'stale' | 'disconnected'
+  // event.reason is a lowercase diagnostic string; event.ts is Date.now().
+});
+
+const offHealth = viewer.on('health', (health) => {
+  // counters, timestamps, and transport diagnostics only
+});
+
+offState();
+offHealth();
+```
+
+Lifecycle starts at `connecting`, moves to `live` on the first accepted
+snapshot/frame, moves to `stale` when resync is requested or transport
+status reports `closed`/`reconnecting`/`error`, and moves to
+`disconnected` after a closed transport remains stale past the short
+disconnect window. `STREAM.STATE` payloads with those same state names map
+into the same public event surface.
+
+Health snapshots are privacy-bounded telemetry. They include:
+
+- `state`, `ts`
+- `lastFrameAt`, `lastSnapshotAt`, `lastMutationAt`
+- `receivedByType`, `sentByType`
+- `staleMisses`, `applyFailures`, `resyncPending`
+- `sanitizer` counters: `strippedHandlers`, `blockedUrls`,
+  `droppedSubtrees`, `cssScrubs`
+- `transport` diagnostics when available: `state`, `reason`, `readyState`,
+  `bufferedAmount`, `drops`, `errors`, `lastCloseAt`, `lastSendAt`,
+  `lastReceiveAt`, `closeCode`, `closeReason`, and transport type counters
+
+Health snapshots never include mirrored `html`, text node contents, raw
+payload objects, page `url`, page `title`, or DOM nodes.
 
 ## Overlay channel contract (VIEW-04)
 
@@ -203,8 +350,9 @@ vendored.
 - **R6 — FSB 9-state preview machine → minimal `waiting`/`streaming` gate.**
   The reference's `previewState` sub-views (loading, disconnected, error,
   ...) are dashboard UI. The viewer gates mutation/scroll/overlay/dialog
-  application on `streaming` exactly like the reference did; the formal
-  state/event surface (VIEW-02) arrives in Phase 4.
+  application on `streaming` exactly like the reference did; Phase 4 adds
+  the host-facing `connecting`/`live`/`stale`/`disconnected` and health
+  event surface without adding viewer-owned chrome.
 - **R7 — Font Awesome → inline SVG icons.** A zero-dependency framework
   cannot ship an icon font; the dialog icons (warning-triangle,
   question-circle, keyboard) are equivalent inline SVGs.
@@ -239,40 +387,36 @@ vendored.
   (reference parity): mutations carrying the new identity apply without
   waiting for a new load event.
 
-## Behavioral changes queued for Phase 3+
+## Phase 3 security behavior
 
-Accepted, visible, owned — not forgotten:
+The Phase 3 security pipeline is always on and documented in
+`docs/SECURITY.md`:
 
-- **Raw inline-style insertion (Phase 3, SEC-02).** `payload.inlineStyles`
-  join into the srcdoc head as `'<style>' + css + '</style>'` with no
-  escaping (reference parity): a `</style>` inside captured CSS breaks out
-  into markup inside the mirror document. The sandbox (no `allow-scripts`)
-  keeps broken-out markup from executing script; `buildSnapshotHtml` is the
-  render-side sanitizer chokepoint Phase 3 owns.
-- **`on*` attributes survive capture (Phase 3, SEC-01/SEC-02).** The capture
-  shell-attribute path drops `on*`/`style`, but serialized body content can
-  still carry inline handlers. The `allow-same-origin`-only sandbox is the
-  backstop until both sanitization chokepoints land.
+- **Inline CSS is scrubbed and backed by CSP.** `payload.inlineStyles` route
+  through `scrubCssText` before srcdoc assembly, and the srcdoc head carries
+  the adopted Content-Security-Policy meta. `payload.html` intentionally
+  remains raw at the string layer because string-scrub-then-reparse is the
+  mutation-XSS anti-pattern; the capture chokepoint, post-parse
+  `sanitizeFragment` scrub, CSP, and sandbox form the defense chain.
+- **`on*` attributes and dangerous URLs are scrubbed at both chokepoints.**
+  Capture strips or neutralizes before transport, and render applies
+  `sanitizeFragment` / `sanitizeAttrValue` before reconstructed content
+  reaches the mirror document.
+- **Template-context add-op parsing is live.** The add op parses `m.html`
+  through `<template>`, then runs `sanitizeFragment` before `importNode`.
+  Context-dependent elements (`<tr>`, `<td>`, `<tbody>`, `<col>`, and
+  friends) no longer disappear through a div-context parser.
+- **Embed contract is explicit.** The mirror iframe sandbox is exactly
+  `allow-same-origin`; hosts must never add `allow-scripts` or render wire
+  payloads outside `createViewer`.
+
+## Known remaining behaviors
+
 - **Pre-onload mutation drop (parity, self-healing).** Mutations arriving
   between the srcdoc write and the load event are dropped (the reference
   gates on streaming state). The miss accounting + `CONTROL.START` resync
   self-heals any resulting drift; do not write tests that assume zero loss
   before the first load.
-- **Div-context add-op parsing drops context-dependent elements (Phase 3).**
-  The add op parses `m.html` through a `<div>` fragment (reference parity,
-  dashboard.js:3241-3244): `<tr>`, `<td>`, `<tbody>`, `<col>` and friends
-  parse to no element in that context, so a live table-row insertion never
-  reaches the mirror. Since review WR-02 the drop is no longer silent — a
-  dedicated `logger.warn` names the cause and the drop counts through the
-  stale-miss accounting, so the ≥ 3 `CONTROL.START` resync threshold
-  self-heals the missing subtree via a fresh snapshot. The queued proper
-  fix is `<template>`-context parsing (accepts any content context),
-  allowed only with the full renderer/loopback/oracle suite green and
-  unchanged behavior for currently-passing shapes.
-- **Per-op `querySelector` nid lookups (Phase 7).** Every diff op resolves
-  its target via `doc.querySelector('[data-fsb-nid="..."]')` (reference
-  parity). The planned `Map<nid, Node>` index replaces the hot path when the
-  addressing API lands.
 
 ## Environment
 
@@ -283,7 +427,8 @@ Accepted, visible, owned — not forgotten:
   fails loudly instead of weakening the sandbox silently. `allow-same-origin`
   keeps `contentDocument` parent-accessible for diff applies and overlay
   rect reads while the mirror cannot execute script. The full embed security
-  contract (CSP guidance, sanitization guarantees) is documented in Phase 3.
+  contract (CSP guidance, sanitization guarantees, and host must-nevers) is
+  documented in `docs/SECURITY.md`.
 - **jsdom srcdoc limitation:** jsdom 29 never parses the `srcdoc` attribute
   into `contentDocument` (the attribute round-trips; the document stays
   empty). Tests must never assert mirror content through `contentDocument`
