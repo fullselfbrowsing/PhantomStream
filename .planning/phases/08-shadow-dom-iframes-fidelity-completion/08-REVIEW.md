@@ -1,6 +1,6 @@
 ---
 phase: "08-shadow-dom-iframes-fidelity-completion"
-reviewed: "2026-06-15T21:05:40Z"
+reviewed: "2026-06-16T04:29:18Z"
 depth: standard
 files_reviewed: 34
 files_reviewed_list:
@@ -39,8 +39,8 @@ files_reviewed_list:
   - tests/security-chokepoint-purity.test.js
   - tests/semantic-addressing.test.js
 findings:
-  critical: 4
-  warning: 0
+  critical: 2
+  warning: 2
   info: 0
   total: 4
 status: issues_found
@@ -48,125 +48,112 @@ status: issues_found
 
 # Phase 8: Code Review Report
 
-**Reviewed:** 2026-06-15T21:05:40Z
+**Reviewed:** 2026-06-16T04:29:18Z
 **Depth:** standard
 **Files Reviewed:** 34
 **Status:** issues_found
 
 ## Summary
 
-Final re-review after commits `33ae99c`, `794e57a`, and `94ff5c6`.
+Re-reviewed Phase 08 after the final review-fix commit, focusing on relay byte budgeting, empty snapshots, event-driven value diffs, and same-origin iframe load refreshes.
 
-The prior iframe `src` attr mutation bypass is blocked at capture and renderer, frame/shadow sidecars are included in snapshot budgeting and become requestable placeholders when pruned, frame-local shadow roots and URL bases are handled, UTF-8 byte measurement is used, oversized add/subtree responses are bounded, aggregate inline styles are pruned, and `stop()` now routes pending mutation batches through the chunking helper.
-
-Four blockers remain. Two are still relay-cap failures under untested payload shapes, one makes the new empty fallback snapshot unrecoverable in the renderer, and one leaves navigated same-origin iframe documents unsynchronized. The full suite currently passes (`npm test`: 376 passed), so these cases need new regression coverage.
+The four previously reported fixes are present: oversized URLs are cleared from fallback snapshots, empty-string snapshots are accepted by the renderer, event-driven value diffs route through the mutation chunker, and same-origin iframe load emits a `DIFF_OP.FRAME` refresh. Two blockers remain: the Playwright page bridge is forgeable by page JavaScript, and over-cap frame/shadow refresh diffs are still silently dropped. Two warnings cover stale docs and a test that can pass while indexing the wrong subtree node.
 
 ## Critical Issues
 
-### CR-01: BLOCKER - Snapshot fallback still leaves `url` outside the relay budget
+### CR-01: BLOCKER - Playwright page scripts can forge bridge messages around the capture sanitizer
 
-**File:** `src/capture/index.js:2102`, `src/capture/index.js:2927`, `src/adapters/playwright-inject.js:2138`, `src/adapters/playwright-inject.js:2963`
+**File:** `src/adapters/playwright.js:151`, `src/adapters/playwright.js:163`, `src/adapters/playwright-inject.js:3813`
 
-**Issue:** `fitSnapshotPayloadForBudget()` strips html, sidecars, head styles, attrs, shell styles, and title in the hard fallback, but it never clears or truncates `next.url`. `serializeDOM()` always copies `location.href` into the same `STREAM.SNAPSHOT` payload. A long URL can therefore keep the final snapshot above `RELAY_PER_MESSAGE_LIMIT_BYTES` after the fallback has run. I reproduced `snapshotBytes=1049970` with `relayLimit=1048576`, `htmlLength=0`, and `urlLength=1049597`.
-
-**Fix:**
-
-```js
-if (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.url) {
-  next.url = '';
-  markSnapshotPayloadTruncated(next);
-}
-
-if (wireByteLength(next) > RELAY_PER_MESSAGE_LIMIT_BYTES) {
-  next.html = '';
-  next.nodeIds = [];
-  next.shadowRoots = [];
-  next.frames = [];
-  next.inlineStyles = [];
-  next.stylesheets = [];
-  next.htmlAttrs = {};
-  next.bodyAttrs = {};
-  next.htmlStyle = '';
-  next.bodyStyle = '';
-  next.title = '';
-  next.url = '';
-  next.missingDescendants = (next.missingDescendants || 0) + 1;
-  markSnapshotPayloadTruncated(next);
-}
-```
-
-Add a regression test with a long `location.href` that asserts the emitted snapshot payload is always `<= RELAY_PER_MESSAGE_LIMIT_BYTES`. Apply the same generated change to `src/adapters/playwright-inject.js`.
-
-### CR-02: BLOCKER - Renderer rejects the empty snapshots produced by the new hard fallback
-
-**File:** `src/renderer/index.js:941`, `tests/renderer-viewer.test.js:321`
-
-**Issue:** The capture fallback can intentionally emit a valid snapshot with `html: ''` after stripping payload fields to stay under the relay cap. The renderer treats any falsy `p.html` as missing and returns before adopting the new stream identity or writing `srcdoc`. This also rejects legitimate empty-body pages. The current renderer test codifies "missing payload.html" but does not distinguish an absent field from an empty string.
+**Issue:** `page.exposeBinding()` exposes `__phantomStreamBridge` to the page realm, and `bindingCallback()` forwards any main-frame `{ type, payload }` object directly to `transport.send()`. A page script can call `window.__phantomStreamBridge({ type: 'ext:dom-snapshot', payload: ... })` or another stream type itself, bypassing `sanitizeForWire`, password/value masking, byte budgeting, and the capture-owned protocol shape. The injected capture is not the only caller of the binding.
 
 **Fix:**
 
+Add an unguessable adapter-owned capability to bridge calls and reject messages without it; also allowlist capture-to-viewer stream types before forwarding.
+
 ```js
-function handleSnapshot(payload) {
-  var p = payload || {};
-  if (typeof p.html !== 'string') {
-    logger.error('[Renderer] snapshot missing html');
-    return;
+var bridgeToken = randomBytes(32).toString('base64url');
+var allowedBridgeTypes = new Set(Object.values(STREAM));
+
+async function bindingCallback(caller, msg) {
+  if (!msg || msg.token !== bridgeToken) {
+    return { ok: false, error: 'bridge-token-invalid' };
   }
-  active.streamSessionId = p.streamSessionId || '';
-  active.snapshotId = p.snapshotId || 0;
-  // existing reset + srcdoc write
+  if (!allowedBridgeTypes.has(msg.type)) {
+    return { ok: false, error: 'bridge-type-invalid' };
+  }
+  transport.send(msg.type, msg.payload || {});
+  return { ok: true };
 }
 ```
 
-Add coverage for `{ html: '', truncated: true, nodeIds: [] }` and for an ordinary empty body snapshot. Missing or non-string `html` should still be rejected.
+Generate/wrap `playwright-inject.js` so only the injected transport closure can add `token: bridgeToken`; do not place the token on `window`.
 
-### CR-03: BLOCKER - Event-driven value diffs bypass mutation byte budgeting
+### CR-02: BLOCKER - Over-cap iframe and shadow refresh diffs are still dropped instead of bounded
 
-**File:** `src/capture/index.js:1323`, `src/adapters/playwright-inject.js:1359`
+**File:** `src/capture/index.js:1193`, `src/capture/index.js:3353`, `src/capture/index.js:3381`, `src/capture/index.js:3400`, `src/adapters/playwright-inject.js:1230`, `src/adapters/playwright-inject.js:3440`
 
-**Issue:** Normal mutation flushes and stop flushes use `sendMutationDiffs()`, which chunks batches and drops single over-cap diffs. `handleValueEvent()` sends `STREAM.MUTATIONS` directly, so a large textarea/input/select value can exceed the relay cap. I reproduced an `input` event on a textarea with `mutationBytes=1049697` against `relayLimit=1048576`; the payload carried one `DIFF_OP.VALUE` with a 1,049,576-character value.
+**Issue:** `sendMutationDiffs()` drops any single diff whose payload exceeds `RELAY_PER_MESSAGE_LIMIT_BYTES`, but `boundMutationDiffForBudget()` only creates a placeholder for `DIFF_OP.ADD`. The new same-origin iframe `load` refresh uses `DIFF_OP.FRAME`, and live shadow updates use `DIFF_OP.SHADOW_ROOT`; both are non-ADD ops and are still dropped when their serialized content is large. I reproduced `frameOps: 0` with a warning for `op: "frame"` after loading a >1 MiB same-origin iframe, and `shadowOps: 0` with a warning for `op: "shadow-root"` after a >1 MiB shadow-root update. The renderer keeps stale old frame/shadow content with no requestable marker.
 
 **Fix:**
 
+Extend the budgeter to bound all large replacement-style diffs before the drop check, or fall back to a bounded full snapshot for those cases. Do not let `DIFF_OP.FRAME` or `DIFF_OP.SHADOW_ROOT` reach the generic drop path silently.
+
 ```js
-function handleValueEvent(event) {
-  if (!streaming || !event || !event.target) return;
-  var diff = buildValueDiff(event.target);
-  if (!diff) return;
-  sendMutationDiffs(
-    [scopeFrameDiff(diff, getMutationFrameRecord(event.target))],
-    { includeStaleFlushCount: false }
-  );
+function boundMutationDiffForBudget(diff, options) {
+  if (!diff) return null;
+  if (wireByteLength(mutationPayloadForBudget([diff], options)) <= RELAY_PER_MESSAGE_LIMIT_BYTES) {
+    return diff;
+  }
+  if (diff.op === DIFF_OP.ADD) return boundedAddPlaceholder(diff);
+  if (diff.op === DIFF_OP.FRAME) return boundedFramePlaceholder(diff);
+  if (diff.op === DIFF_OP.SHADOW_ROOT) return boundedShadowPlaceholder(diff);
+  return null;
 }
 ```
 
-Add a regression test with an over-1 MiB textarea value that asserts no emitted `STREAM.MUTATIONS` payload exceeds `RELAY_PER_MESSAGE_LIMIT_BYTES`. Apply the same generated change to `src/adapters/playwright-inject.js`.
+Apply the same generated change to `src/adapters/playwright-inject.js`, and add regression tests for oversized iframe load refreshes and oversized live shadow-root replacements.
 
-### CR-04: BLOCKER - Navigated same-origin iframe documents are registered but never sent to the renderer
+## Warnings
 
-**File:** `src/capture/index.js:1156`, `src/capture/index.js:1181`, `src/renderer/index.js:983`
+### WR-01: WARNING - Architecture docs still describe obsolete resume semantics
 
-**Issue:** On iframe `load`, the capture handler re-registers the new same-origin document, but `registerFrameDocument()` only calls `serializeFrameDocument()` for side effects and discards the returned frame payload. No snapshot, frame-refresh diff, add sidecar, or subtree response is sent for the new document. Later mutations inside that navigated frame are scoped with nids assigned from the new frame document, but the renderer never indexed those nids because it only installs frame payloads from snapshots, add ops, and subtree responses. Static content in the loaded frame is never mirrored, and later frame-local diffs become stale misses.
+**File:** `docs/ARCHITECTURE.md:135`
+
+**Issue:** The architecture document says `domStreamResume` creates a fresh session and snapshot. The implementation and capture README now explicitly keep the same `streamSessionId`/`snapshotId` and do not send a snapshot on `resume()`. This stale contract can cause host integrations to rely on a refresh that will never happen.
 
 **Fix:**
 
-Introduce an explicit frame-refresh path. Either add a `DIFF_OP.FRAME` op that carries the serialized frame payload and have the renderer call `installOneFrame()`, or trigger a bounded full snapshot when a registered same-origin frame loads.
+Replace the lifecycle bullet with the current contract:
 
-```js
-var payload = serializeFrameDocument(iframe, key, frameDoc);
-if (payload) {
-  sendMutationDiffs([{
-    op: DIFF_OP.FRAME,
-    frameNid: key,
-    frame: payload
-  }], { includeStaleFlushCount: false });
-}
+```markdown
+Control messages: `domStreamStart` (fresh session + snapshot + observers),
+`domStreamStop`, `domStreamPause` (observers off, session retained),
+`domStreamResume` (observers re-armed, same session/snapshot, no snapshot).
 ```
 
-The renderer side should handle the new op by installing the inert `srcdoc` frame and indexing `frame.nodeIds`, `frame.shadowRoots`, and nested `frame.frames`. Add an end-to-end test that changes an existing same-origin iframe document, fires `load`, and verifies the viewer can resolve and display a node from the new frame before any additional frame mutation occurs.
+### WR-02: WARNING - Subtree response test can pass while indexing the wrong node
+
+**File:** `tests/renderer-subtree-fetch.test.js:166`, `tests/renderer-subtree-fetch.test.js:195`
+
+**Issue:** The test installs HTML with four elements (`section`, `button`, `a`, `p`) but supplies only two `nodeIds`. The renderer pairs ids by element preorder, so `safe-child-nid` is assigned to the button, not the `<p id="safe-child">`. The assertion only checks that `viewer.resolveNode('safe-child-nid')` is truthy, so this test passes even when the indexed nid points at the wrong element.
+
+**Fix:**
+
+Keep the sidecar length aligned and assert the resolved nid maps to the intended element, for example by giving the safe child a distinctive mocked rect before calling `resolveNode()`.
+
+```js
+nodeIds: ['truncated-nid', 'unsafe-nid', 'bad-link-nid', 'safe-child-nid'];
+
+const safeChild = recovered.querySelector('#safe-child');
+safeChild.getBoundingClientRect = () => ({ left: 7, top: 11, width: 13, height: 17 });
+assert.deepEqual(viewer.resolveNode('safe-child-nid').rect, {
+  left: 7, top: 11, width: 13, height: 17
+});
+```
 
 ---
 
-_Reviewed: 2026-06-15T21:05:40Z_
+_Reviewed: 2026-06-16T04:29:18Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: standard_
