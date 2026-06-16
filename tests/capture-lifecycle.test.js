@@ -42,12 +42,12 @@ const BODY_HTML = '<div id="root"><div id="a">hello</div><p id="b">world</p></di
  * a live watchdog timer chain into other tests (Pitfalls 3 and 8).
  * @param {string} bodyHtml
  */
-function setupEnv(bodyHtml) {
+function setupEnv(bodyHtml, pageUrl = 'https://fixture.test/page') {
   const dom = new JSDOM(
     '<!DOCTYPE html><html><head><title>lifecycle fixture</title></head><body>'
       + bodyHtml + '</body></html>',
     {
-      url: 'https://fixture.test/page',
+      url: pageUrl,
       pretendToBeVisual: true, // enables requestAnimationFrame for the rAF flush
       virtualConsole: new VirtualConsole(), // quiet: swallows "Not implemented" noise
     }
@@ -177,6 +177,28 @@ test('snapshot head payloads are bounded under the relay cap', async () => {
       true,
       'aggregate inline styles were pruned to fit the relay cap'
     );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('snapshot fallback clears oversized URL payloads under the relay cap', async () => {
+  const longUrl = 'https://fixture.test/' + 'a'.repeat(RELAY_PER_MESSAGE_LIMIT_BYTES + 1024);
+  const env = setupEnv(BODY_HTML, longUrl);
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+
+    const snapshot = transport.sent.find((m) => m.type === STREAM.SNAPSHOT)?.payload;
+    assert.ok(snapshot, 'snapshot was emitted');
+    assert.equal(
+      wireByteLength(snapshot) <= RELAY_PER_MESSAGE_LIMIT_BYTES,
+      true,
+      'long-url snapshot payload stays under the UTF-8 relay cap'
+    );
+    assert.equal(snapshot.url, '', 'oversized URL metadata is dropped by fallback fitting');
+    assert.equal(snapshot.truncated, true, 'dropping URL metadata marks snapshot truncated');
   } finally {
     env.teardown();
   }

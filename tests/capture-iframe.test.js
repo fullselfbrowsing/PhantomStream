@@ -383,10 +383,24 @@ test('D-11 iframe load re-registers navigated same-origin frame documents', asyn
 
     const frameNid = env.capture.getNodeId(frame);
     const nextDoc = populateFrame(frame,
-      '<!DOCTYPE html><html><body><div id="after-load-root"></div></body></html>'
+      '<!DOCTYPE html><html><body><div id="after-load-root">'
+        + '<span id="after-load-static">After load static</span>'
+        + '</div></body></html>'
     );
+    const staticChild = nextDoc.getElementById('after-load-static');
     frame.dispatchEvent(new env.window.Event('load'));
     await settle(env.window);
+
+    const staticNid = env.capture.getNodeId(staticChild);
+    const frameRefresh = mutationOps(transport).find((op) => (
+      op.op === DIFF_OP.FRAME
+      && op.frameNid === frameNid
+      && op.frame
+    ));
+    assert.ok(frameRefresh, 'iframe load emits a frame refresh op for the navigated document');
+    assert.equal(frameRefresh.frame.kind, 'same-origin');
+    assert.ok(frameRefresh.frame.html.includes('after-load-static'), 'frame refresh carries static loaded content');
+    assert.ok(frameRefresh.frame.nodeIds.includes(staticNid), 'frame refresh indexes static loaded content');
 
     const child = nextDoc.createElement('strong');
     child.id = 'after-load-child';

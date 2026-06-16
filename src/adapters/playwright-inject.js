@@ -39,7 +39,8 @@
     ATTR: "attr",
     TEXT: "text",
     VALUE: "value",
-    SHADOW_ROOT: "shadow-root"
+    SHADOW_ROOT: "shadow-root",
+    FRAME: "frame"
   };
 
   function createStreamSessionId(nowMs, rand) {
@@ -1192,7 +1193,7 @@ function createCapture(config) {
     var handler = function() {
       var classification = classifyFrame(iframe);
       if (classification.kind === 'same-origin') {
-        registerFrameDocument(iframe, key, classification.document);
+        registerFrameDocument(iframe, key, classification.document, true);
       } else {
         observedFrameDocuments.delete(key);
       }
@@ -1201,7 +1202,7 @@ function createCapture(config) {
     frameLoadListeners.set(key, { iframe: iframe, handler: handler });
   }
 
-  function registerFrameDocument(iframe, frameNid, frameDoc) {
+  function registerFrameDocument(iframe, frameNid, frameDoc, emitRefresh) {
     if (!mutationObserver || !iframe || !frameNid || !frameDoc || !frameDoc.body) return null;
     var key = String(frameNid);
     var record = {
@@ -1214,7 +1215,7 @@ function createCapture(config) {
     frameDocumentToNid.set(frameDoc, key);
     addValueListenerRoot(frameDoc);
     registerFrameLoadListener(iframe, key);
-    serializeFrameDocument(iframe, key, frameDoc);
+    var framePayload = serializeFrameDocument(iframe, key, frameDoc);
     try {
       mutationObserver.observe(frameDoc, mutationObserverOptions());
     } catch (err) {
@@ -1225,6 +1226,13 @@ function createCapture(config) {
     }
     observeOpenShadowRoots(frameDoc.body);
     observeSameOriginFrameDocuments(frameDoc.body);
+    if (emitRefresh && framePayload) {
+      sendMutationDiffs([{
+        op: DIFF_OP.FRAME,
+        frameNid: key,
+        frame: framePayload
+      }], { includeStaleFlushCount: false });
+    }
     return record;
   }
 
@@ -1241,7 +1249,7 @@ function createCapture(config) {
       if (!frameNid) continue;
       var classification = classifyFrame(iframe);
       if (classification.kind === 'same-origin') {
-        registerFrameDocument(iframe, frameNid, classification.document);
+        registerFrameDocument(iframe, frameNid, classification.document, false);
       } else {
         registerFrameLoadListener(iframe, frameNid);
       }
@@ -1356,11 +1364,10 @@ function createCapture(config) {
     if (!streaming || !event || !event.target) return;
     var diff = buildValueDiff(event.target);
     if (!diff) return;
-    safeSend(STREAM.MUTATIONS, {
-      mutations: [scopeFrameDiff(diff, getMutationFrameRecord(event.target))],
-      streamSessionId: streamSessionId || '',
-      snapshotId: currentSnapshotId || 0
-    });
+    sendMutationDiffs(
+      [scopeFrameDiff(diff, getMutationFrameRecord(event.target))],
+      { includeStaleFlushCount: false }
+    );
   }
 
   function addValueListenerRoot(root) {
@@ -2119,6 +2126,10 @@ function createCapture(config) {
       next.title = '';
       markSnapshotPayloadTruncated(next);
     }
+    if (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.url) {
+      next.url = '';
+      markSnapshotPayloadTruncated(next);
+    }
 
     if (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && clone && cloneToNid) {
       var cloneEls = cloneElementsWithNodeIds(clone, cloneToNid);
@@ -2147,6 +2158,7 @@ function createCapture(config) {
       next.htmlStyle = '';
       next.bodyStyle = '';
       next.title = '';
+      next.url = '';
       next.missingDescendants = (next.missingDescendants || 0) + 1;
       markSnapshotPayloadTruncated(next);
     }

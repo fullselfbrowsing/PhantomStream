@@ -166,6 +166,64 @@ test('D-08/D-10 same-origin frame payload installs as inert nested iframe srcdoc
   }
 });
 
+test('D-11 frame refresh mutations replace navigated same-origin frame content', () => {
+  const env = setupEnv('<div id="viewer" style="width:900px;height:700px"></div>');
+  try {
+    const wire = createManualTransport();
+    env.viewer = createViewer({
+      container: env.document.getElementById('viewer'),
+      transport: wire.transport,
+      logger: silentLogger(),
+    });
+
+    wire.emit(STREAM.SNAPSHOT, baseSnapshot());
+    const mirrorDoc = glueIframe(viewerIframe(env));
+    const sameFrame = mirrorDoc.getElementById('same-frame');
+    const initialDoc = glueIframe(sameFrame);
+    assert.equal(initialDoc.getElementById('inside-frame').textContent, 'Frame button');
+
+    wire.emit(STREAM.MUTATIONS, {
+      streamSessionId: 'stream-frames',
+      snapshotId: 1,
+      mutations: [{
+        op: DIFF_OP.FRAME,
+        frameNid: 'same-frame-nid',
+        frame: {
+          frameNid: 'same-frame-nid',
+          kind: 'same-origin',
+          html: '<section id="after-load-static">'
+            + '<button id="after-load-button" onclick="alert(1)">After load button</button>'
+            + '</section>',
+          nodeIds: ['after-load-static-nid', 'after-load-button-nid'],
+          shadowRoots: [],
+          frames: [],
+          stylesheets: [],
+          inlineStyles: [],
+          htmlAttrs: { lang: 'en' },
+          bodyAttrs: { 'data-frame-body': 'after-load' },
+        },
+      }],
+    });
+
+    const refreshedDoc = glueIframe(sameFrame);
+    assert.equal(refreshedDoc.getElementById('inside-frame'), null, 'old frame document content is replaced');
+    assert.equal(
+      refreshedDoc.getElementById('after-load-button').textContent,
+      'After load button',
+      'new static frame content is visible before later frame mutations'
+    );
+    assert.equal(
+      refreshedDoc.getElementById('after-load-button').hasAttribute('onclick'),
+      false,
+      'refreshed frame srcdoc is sanitized'
+    );
+    assert.ok(env.viewer.resolveNode('after-load-button-nid'), 'refreshed frame descendant nid resolves');
+    assert.equal(env.viewer.resolveNode('frame-button-nid'), null, 'old frame descendant nid is removed from the index');
+  } finally {
+    env.teardown();
+  }
+});
+
 test('D-09 iframe src attr mutations are ignored by the renderer defense layer', () => {
   const env = setupEnv('<div id="viewer" style="width:900px;height:700px"></div>');
   try {

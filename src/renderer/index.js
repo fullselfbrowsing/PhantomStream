@@ -938,7 +938,7 @@ export function createViewer(options) {
    */
   function handleSnapshot(payload) {
     var p = payload || {};
-    if (!p.html) {
+    if (typeof p.html !== 'string') {
       logger.error('[Renderer] snapshot missing html');
       return;
     }

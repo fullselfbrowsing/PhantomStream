@@ -71,6 +71,8 @@ export const DIFF_OP = {
   VALUE: 'value',
   /** ShadowRootPayload plus op:'shadow-root' — replace/open an observed shadow root */
   SHADOW_ROOT: 'shadow-root',
+  /** { op:'frame', frameNid, frame:FramePayload } — refresh an inert iframe mirror */
+  FRAME: 'frame',
 };
 
 /**

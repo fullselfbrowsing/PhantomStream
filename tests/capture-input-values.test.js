@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { createCapture } from '../src/capture/index.js';
+import { RELAY_PER_MESSAGE_LIMIT_BYTES } from '../src/protocol/constants.js';
 import { STREAM, DIFF_OP } from '../src/protocol/messages.js';
 
 const AUDITED_GLOBALS = [
@@ -92,6 +93,10 @@ function silentLogger() {
 
 function wireText(transport) {
   return transport.sent.map((m) => JSON.stringify(m)).join('\n');
+}
+
+function wireByteLength(value) {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
 function expectMask(text) {
@@ -342,6 +347,39 @@ test('same-origin iframe input events emit frame-scoped DIFF_OP.VALUE diffs', as
         && !Object.prototype.hasOwnProperty.call(op, 'html')
       )),
       'same-origin iframe input emitted a frame-scoped narrow value op'
+    );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('oversized value diffs are bounded by the relay cap', async () => {
+  const env = setupEnv('<main><textarea id="huge-value"></textarea></main>');
+  try {
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const textarea = env.document.getElementById('huge-value');
+    textarea.value = 'v'.repeat(RELAY_PER_MESSAGE_LIMIT_BYTES + 1024);
+    dispatchValueEvent(env, textarea, 'input');
+    await settle(env.window);
+
+    const mutationPayloads = transport.sent
+      .filter((m) => m.type === STREAM.MUTATIONS)
+      .map((m) => m.payload);
+    assert.equal(
+      mutationPayloads.every((payload) => wireByteLength(payload) <= RELAY_PER_MESSAGE_LIMIT_BYTES),
+      true,
+      'every value mutation payload stays under the UTF-8 relay cap'
+    );
+    assert.equal(
+      mutationPayloads.some((payload) => (
+        (payload.mutations || []).some((op) => op.op === VALUE_OP && op.value === textarea.value)
+      )),
+      false,
+      'over-cap value diff is not sent raw'
     );
   } finally {
     env.teardown();

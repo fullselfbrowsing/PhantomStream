@@ -342,6 +342,31 @@ test('a snapshot missing payload.html logs an error and keeps the last srcdoc', 
   }
 });
 
+test('empty-string snapshots are valid and replace the current mirror', async () => {
+  const env = setupEnv();
+  try {
+    const transport = createRecordingTransport();
+    const logger = recordingLogger();
+    env.viewer = createViewer({ container: env.container, transport, logger });
+
+    const payload = snapshotPayload({
+      html: '',
+      nodeIds: [],
+      truncated: true,
+      missingDescendants: 1,
+      streamSessionId: 'stream_empty_ok',
+      snapshotId: 77,
+    });
+    transport.emit(STREAM.SNAPSHOT, payload);
+
+    const iframe = env.container.querySelector('iframe');
+    assert.equal(iframe.getAttribute('srcdoc'), buildSnapshotHtml(payload));
+    assert.equal(logger.errors.length, 0, 'empty html is accepted, not logged as missing');
+  } finally {
+    env.teardown();
+  }
+});
+
 // --- Staleness + waiting-state gating ----------------------------------------
 
 test('MUTATIONS with a mismatched streamSessionId are rejected (no resync ever fires)', async () => {

@@ -80,6 +80,7 @@ test('snapshot budget stays inside the relay cap with headroom', () => {
 test('Phase 8 protocol constants are exported for fidelity sidecars and recovery', () => {
   assert.equal(DIFF_OP.VALUE, 'value');
   assert.equal(DIFF_OP.SHADOW_ROOT, 'shadow-root');
+  assert.equal(DIFF_OP.FRAME, 'frame');
   assert.equal(CONTROL.SUBTREE_REQUEST, 'dash:ps-subtree-request');
   assert.equal(STREAM.SUBTREE_RESPONSE, 'ext:ps-subtree-response');
 });

@@ -220,6 +220,12 @@ export function applyMutations(doc, mutations, counters, hooks) {
             applyShadowRoot(m);
             break;
           }
+          case DIFF_OP.FRAME: {
+            if (installFrames && m.frame) {
+              installFrames([m.frame]);
+            }
+            break;
+          }
           case DIFF_OP.REMOVE: {
             var el = resolve(m.nid);
             if (!el) {
