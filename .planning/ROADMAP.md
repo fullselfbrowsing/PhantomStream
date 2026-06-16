@@ -178,7 +178,7 @@ Plans:
 
 Plans:
 **Wave 0**
-- [ ] 10-01-PLAN.md — RED package validation tests for exports, types, tarball contents, docs, and release workflow
+- [x] 10-01-PLAN.md — RED package validation tests for exports, types, tarball contents, docs, and release workflow
 
 **Wave 1** *(blocked on 10-01)*
 - [ ] 10-02-PLAN.md — JSDoc declaration generation, root export, and typed export map
@@ -335,7 +335,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 7. WeakMap Node Identity + Semantic Addressing API | 4/4 | Complete   | 2026-06-15 |
 | 8. Shadow DOM, Iframes & Fidelity Completion | 9/9 | Complete   | 2026-06-15 |
 | 9. CSSOM Capture Mode | 8/8 | Complete | 2026-06-16 |
-| 10. npm Packaging & 0.x Publish | 0/5 | Planned | - |
+| 10. npm Packaging & 0.x Publish | 1/5 | In progress | - |
 | 11. FSB Swap-In → 1.0 | 0/TBD | Not started | - |
 | 12. Evaluation Corpus & Harness | 0/TBD | Not started | - |
 | 13. Research Paper | 0/TBD | Not started | - |
