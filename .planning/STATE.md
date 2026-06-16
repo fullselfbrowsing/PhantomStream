@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 9 context gathered
-last_updated: "2026-06-16T06:19:52.856Z"
-last_activity: 2026-06-16 -- Phase 09 planning complete
+stopped_at: Phase 9 completed; next phase is Phase 10
+last_updated: "2026-06-16T07:22:02Z"
+last_activity: 2026-06-16 -- Phase 09 completed, npm test green
 progress:
   total_phases: 13
-  completed_phases: 8
+  completed_phases: 9
   total_plans: 52
-  completed_plans: 44
-  percent: 62
+  completed_plans: 52
+  percent: 69
 ---
 
 # Project State
@@ -21,22 +21,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-16)
 
 **Core value:** A live, trustworthy, low-bandwidth, semantically addressable mirror of a real browser tab — capture → relay → render → remote-control must work end-to-end as a standalone framework.
-**Current focus:** Phase 9 — cssom capture mode
+**Current focus:** Phase 10 — npm packaging & 0.x publish
 
 ## Current Position
 
-Phase: 9
+Phase: 10
 Plan: Not started
-Status: Ready to execute
-Last activity: 2026-06-16 -- Phase 09 planning complete
+Status: Ready to discuss/plan
+Last activity: 2026-06-16 -- Phase 09 completed, npm test green
 
-Progress: [██████████] 100%
+Progress: [███████░░░] 69%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 39
+- Total plans completed: 52
 - Average duration: -
 - Total execution time: 0 hours
 
@@ -51,6 +51,7 @@ Progress: [██████████] 100%
 | 05 | 6 | - | - |
 | 07 | 4 | - | - |
 | 08 | 9 | - | - |
+| 09 | 8 | - | - |
 
 **Recent Trend:**
 
@@ -79,6 +80,7 @@ Progress: [██████████] 100%
 | Phase 07 P02 | 14 min | 3 tasks | 8 files |
 | Phase 07 P03 | 7min | 3 tasks | 6 files |
 | Phase 07 P04 | 9min | 4 tasks | 6 files |
+| Phase 09 | 2h 20min | 8 plans | 32 files |
 
 ## Accumulated Context
 
@@ -129,6 +131,10 @@ Recent decisions affecting current work:
 - [Phase 07]: Capture getNodeId is live-public while internal removed-node identity remains available. — Public hosts get null for detached or inactive nodes, but capture internals can still emit correct removal diffs during mutation batching.
 - [Phase 07]: Checked-in browser inject artifacts carry the same WeakMap/nodeIds identity behavior as the ESM capture core while remaining classic scripts with bridge globals.
 - [Phase 07]: Documentation now treats data-fsb-nid stamping as the former FSB reference design; standalone identity is WeakMap capture state plus nodeIds sidecars and a renderer Map index.
+- [Phase 09]: CSSOM mode is opt-in through `styleMode: 'cssom'`; default computed mode omits `styleSources[]` and `styleStrategy` to preserve existing oracle compatibility.
+- [Phase 09]: CSSOM source capture uses explicit fallback reasons (`cssRules-blocked`, `href-relinked`, `adapter-fetch`, `computed-fallback`) and never performs hidden network fetches; `fetchStylesheet({ href, scope, ownerKind })` is host-owned.
+- [Phase 09]: Dynamic stylesheet edits stream as `DIFF_OP.STYLE_SOURCE` with `action: 'upsert' | 'replace' | 'remove'`; hook/scope failures surface as `cssom-hook-unavailable`, `cssom-style-source-stale`, or `stale-style-scope`.
+- [Phase 09]: D25 is scenario-pinned to `cssom-capture-mode`; default computed-mode oracle rows still require zero CSSOM ledger consultation.
 
 ### Pending Todos
 
@@ -136,7 +142,6 @@ None yet.
 
 ### Blockers/Concerns
 
-- [Phase 9]: CSSOM mutation tracking scope (style-ops channel vs documented snapshot-only limitation) is a deliberate Phase 9 planning decision
 - [Phase 12]: Baseline-fairness protocol details and the semantic-fidelity metric definition need a dedicated research pass before harness implementation
 - [Requirements]: REQUIREMENTS.md previously stated "32 total" v1 requirements; actual count is 39 — corrected during roadmap creation
 
@@ -151,6 +156,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-16T05:19:41.336Z
-Stopped at: Phase 9 context gathered
-Resume file: .planning/phases/09-cssom-capture-mode/09-CONTEXT.md
+Last session: 2026-06-16T07:22:02Z
+Stopped at: Phase 9 completed; next phase is Phase 10
+Resume file: .planning/phases/09-cssom-capture-mode/09-08-SUMMARY.md

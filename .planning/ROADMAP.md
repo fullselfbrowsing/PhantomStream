@@ -15,12 +15,12 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Capture Core Extraction + Differential Oracle** - Oracle-anchored extraction of the capture core behind the Transport seam (completed 2026-06-10)
 - [x] **Phase 2: Renderer Core + Embedded Loopback Mirror** - Embeddable viewer + first end-to-end mirror with zero infrastructure (completed 2026-06-11)
 - [x] **Phase 3: Security Pipeline — Sanitization + Privacy Masking** - Both-ends sanitization, sandbox contract, capture-side masking (publishing gate) (completed 2026-06-14)
-- [ ] **Phase 4: Relay, WS Transport & Two-Tab Demo** - Networked mirror: relay core, ws backend, CompressionStream codec, `npx phantom-stream demo`
+- [x] **Phase 4: Relay, WS Transport & Two-Tab Demo** - Networked mirror: relay core, ws backend, CompressionStream codec, `npx phantom-stream demo` (completed 2026-06-15)
 - [x] **Phase 5: Playwright/CDP Adapter, Remote Control & Agent Demo** - Script-driven page mirrored live with consent-gated remote control (completed 2026-06-15)
 - [x] **Phase 6: Extension MV3 + Bookmarklet Adapters** - Remaining injection contexts incl. the FSB swap-in surface and eviction recovery (completed 2026-06-15)
 - [x] **Phase 7: WeakMap Node Identity + Semantic Addressing API** - Stop mutating the observed page; expose node identity as public API (completed 2026-06-15)
 - [x] **Phase 8: Shadow DOM, Iframes & Fidelity Completion** - Shadow roots, same-origin iframes, input mirroring, added-node styles, subtree fetch (completed 2026-06-15)
-- [ ] **Phase 9: CSSOM Capture Mode** - Flag-enabled stylesheet-centric capture (last limitation fix; the paper's ablation arm)
+- [x] **Phase 9: CSSOM Capture Mode** - Flag-enabled stylesheet-centric capture (last limitation fix; the paper's ablation arm) (completed 2026-06-16)
 - [ ] **Phase 10: npm Packaging & 0.x Publish** - `@fullselfbrowsing/phantom-stream` published with clean types and quickstarts
 - [ ] **Phase 11: FSB Swap-In → 1.0** - FSB runs on the published package; API freezes at 1.0
 - [ ] **Phase 12: Evaluation Corpus & Harness** - Frozen corpus, fair baselines, fidelity metrics; doubles as the regression suite
@@ -238,24 +238,24 @@ Plans:
 
 Plans:
 **Wave 0**
-- [ ] 09-01-PLAN.md — RED capture/protocol/security CSSOM tests
-- [ ] 09-02-PLAN.md — RED renderer/browser/oracle CSSOM tests
+- [x] 09-01-PLAN.md — RED capture/protocol/security CSSOM tests
+- [x] 09-02-PLAN.md — RED renderer/browser/oracle CSSOM tests
 
 **Wave 1** *(blocked on Wave 0 capture/security tests)*
-- [ ] 09-03-PLAN.md — Protocol contract and CSSOM snapshot/fallback capture
+- [x] 09-03-PLAN.md — Protocol contract and CSSOM snapshot/fallback capture
 
 **Wave 2** *(blocked on 09-03; 09-04 also requires 09-02)*
-- [ ] 09-04-PLAN.md — Renderer CSSOM snapshot replay for document, shadow, and frame scopes
-- [ ] 09-05-PLAN.md — Capture dynamic style-source op producer
+- [x] 09-04-PLAN.md — Renderer CSSOM snapshot replay for document, shadow, and frame scopes
+- [x] 09-05-PLAN.md — Capture dynamic style-source op producer
 
 **Wave 3** *(blocked on 09-04 and 09-05)*
-- [ ] 09-06-PLAN.md — Renderer style-source op application
+- [x] 09-06-PLAN.md — Renderer style-source op application
 
 **Wave 4** *(blocked on 09-05 and 09-06)*
-- [ ] 09-07-PLAN.md — Playwright/browser inject artifact CSSOM sync
+- [x] 09-07-PLAN.md — Playwright/browser inject artifact CSSOM sync
 
 **Wave 5** *(blocked on 09-07)*
-- [ ] 09-08-PLAN.md — CSSOM oracle, docs, and final automated gate
+- [x] 09-08-PLAN.md — CSSOM oracle, docs, and final automated gate
 
 ### Phase 10: npm Packaging & 0.x Publish
 **Goal**: `@fullselfbrowsing/phantom-stream` is installable from npm with clean ESM exports, generated types, and < 5-minute quickstarts
@@ -313,12 +313,12 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 1. Capture Core Extraction + Differential Oracle | 5/5 | Complete    | 2026-06-10 |
 | 2. Renderer Core + Embedded Loopback Mirror | 6/6 | Complete    | 2026-06-11 |
 | 3. Security Pipeline — Sanitization + Privacy Masking | 5/5 | Complete    | 2026-06-14 |
-| 4. Relay, WS Transport & Two-Tab Demo | 0/TBD | Not started | - |
+| 4. Relay, WS Transport & Two-Tab Demo | 4/4 | Complete | 2026-06-15 |
 | 5. Playwright/CDP Adapter, Remote Control & Agent Demo | 6/6 | Complete    | 2026-06-15 |
 | 6. Extension MV3 + Bookmarklet Adapters | 5/5 | Complete   | 2026-06-15 |
 | 7. WeakMap Node Identity + Semantic Addressing API | 4/4 | Complete   | 2026-06-15 |
 | 8. Shadow DOM, Iframes & Fidelity Completion | 9/9 | Complete   | 2026-06-15 |
-| 9. CSSOM Capture Mode | 0/TBD | Not started | - |
+| 9. CSSOM Capture Mode | 8/8 | Complete | 2026-06-16 |
 | 10. npm Packaging & 0.x Publish | 0/TBD | Not started | - |
 | 11. FSB Swap-In → 1.0 | 0/TBD | Not started | - |
 | 12. Evaluation Corpus & Harness | 0/TBD | Not started | - |
