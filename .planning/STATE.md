@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 9 completed; next phase is Phase 10
-last_updated: "2026-06-16T07:22:02Z"
-last_activity: 2026-06-16 -- Phase 09 completed, npm test green
+stopped_at: Phase 10 planned; ready to execute 10-01
+last_updated: "2026-06-16T07:34:00Z"
+last_activity: 2026-06-16 -- Phase 10 planning complete
 progress:
   total_phases: 13
   completed_phases: 9
-  total_plans: 52
+  total_plans: 57
   completed_plans: 52
-  percent: 69
+  percent: 91
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-06-16)
 ## Current Position
 
 Phase: 10
-Plan: Not started
-Status: Ready to discuss/plan
-Last activity: 2026-06-16 -- Phase 09 completed, npm test green
+Plan: 10-01
+Status: Ready to execute
+Last activity: 2026-06-16 -- Phase 10 planning complete
 
-Progress: [███████░░░] 69%
+Progress: [█████████░] 91%
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Progress: [███████░░░] 69%
 | 07 | 4 | - | - |
 | 08 | 9 | - | - |
 | 09 | 8 | - | - |
+| 10 | 5 | - | - |
 
 **Recent Trend:**
 
@@ -81,6 +82,7 @@ Progress: [███████░░░] 69%
 | Phase 07 P03 | 7min | 3 tasks | 6 files |
 | Phase 07 P04 | 9min | 4 tasks | 6 files |
 | Phase 09 | 2h 20min | 8 plans | 32 files |
+| Phase 10 planning | 25min | 5 plans | 9 files |
 
 ## Accumulated Context
 
@@ -135,6 +137,9 @@ Recent decisions affecting current work:
 - [Phase 09]: CSSOM source capture uses explicit fallback reasons (`cssRules-blocked`, `href-relinked`, `adapter-fetch`, `computed-fallback`) and never performs hidden network fetches; `fetchStylesheet({ href, scope, ownerKind })` is host-owned.
 - [Phase 09]: Dynamic stylesheet edits stream as `DIFF_OP.STYLE_SOURCE` with `action: 'upsert' | 'replace' | 'remove'`; hook/scope failures surface as `cssom-hook-unavailable`, `cssom-style-source-stale`, or `stale-style-scope`.
 - [Phase 09]: D25 is scenario-pinned to `cssom-capture-mode`; default computed-mode oracle rows still require zero CSSOM ledger consultation.
+- [Phase 10]: Package remains source-first ESM; TypeScript is used only to generate `.d.ts` from JSDoc.
+- [Phase 10]: Real `npm publish` is an authentication/user-approval gate. Autonomous work may prepare/dry-run trusted publishing, tarball validation, and docs, but must not publish without explicit approval.
+- [Phase 10]: Trusted publishing/provenance should use GitHub-hosted Actions with OIDC (`id-token: write`) and no long-lived `NPM_TOKEN` by default.
 
 ### Pending Todos
 
@@ -156,6 +161,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-16T07:22:02Z
-Stopped at: Phase 9 completed; next phase is Phase 10
-Resume file: .planning/phases/09-cssom-capture-mode/09-08-SUMMARY.md
+Last session: 2026-06-16T07:34:00Z
+Stopped at: Phase 10 planned; ready to execute 10-01
+Resume file: .planning/phases/10-npm-packaging-0-x-publish/10-01-PLAN.md

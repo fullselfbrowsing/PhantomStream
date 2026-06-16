@@ -174,7 +174,23 @@ Plans:
   1. MV3 adapter delivers a live mirror from a real loaded extension: content-script injection + service-worker relay client with the `chrome.alarms` watchdog, state in `chrome.storage.session` (never SW globals)
   2. A mid-stream forced service-worker eviction recovers automatically (watchdog-triggered re-snapshot) — covered by a test
   3. Bookmarklet loader stub injects the capture bundle into the current page and a live mirror appears in a connected viewer
-**Plans**: TBD
+**Plans**: 5 plans (5 waves)
+
+Plans:
+**Wave 0**
+- [ ] 10-01-PLAN.md — RED package validation tests for exports, types, tarball contents, docs, and release workflow
+
+**Wave 1** *(blocked on 10-01)*
+- [ ] 10-02-PLAN.md — JSDoc declaration generation, root export, and typed export map
+
+**Wave 2** *(blocked on 10-02)*
+- [ ] 10-03-PLAN.md — Package validation tooling, tarball smoke, and CI package gate
+
+**Wave 3** *(blocked on 10-03)*
+- [ ] 10-04-PLAN.md — Quickstarts and README/package docs refresh
+
+**Wave 4** *(blocked on 10-04)*
+- [ ] 10-05-PLAN.md — Trusted-publishing release workflow, release docs, dry-run, and real publish auth gate
 
 ### Phase 7: WeakMap Node Identity + Semantic Addressing API
 **Goal**: The observed page is no longer mutated by capture, and hosts can address mirrored elements semantically through a public API
@@ -319,7 +335,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 7. WeakMap Node Identity + Semantic Addressing API | 4/4 | Complete   | 2026-06-15 |
 | 8. Shadow DOM, Iframes & Fidelity Completion | 9/9 | Complete   | 2026-06-15 |
 | 9. CSSOM Capture Mode | 8/8 | Complete | 2026-06-16 |
-| 10. npm Packaging & 0.x Publish | 0/TBD | Not started | - |
+| 10. npm Packaging & 0.x Publish | 0/5 | Planned | - |
 | 11. FSB Swap-In → 1.0 | 0/TBD | Not started | - |
 | 12. Evaluation Corpus & Harness | 0/TBD | Not started | - |
 | 13. Research Paper | 0/TBD | Not started | - |
