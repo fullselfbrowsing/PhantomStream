@@ -312,6 +312,74 @@ test('flush resolves only after queued sends are on the socket', async () => {
   assert.equal(ws.sent.length, 1);
 });
 
+test('frames sent before open are buffered and flushed in FIFO order once open fires', async () => {
+  const FakeWebSocket = createFakeWebSocketClass();
+  // ext:b encodes slowly so the open boundary is crossed mid-encode, proving
+  // pre-open buffering preserves FIFO across the async codec step.
+  const codec = {
+    async compress(raw) {
+      if (JSON.parse(raw).type === 'ext:b') {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      return new TextEncoder().encode(raw);
+    },
+    async decompress(bytes) {
+      return new TextDecoder().decode(bytes);
+    }
+  };
+  const transport = createWebSocketTransport({
+    url: 'ws://example.test/ws',
+    WebSocket: FakeWebSocket,
+    codec,
+    compressionThresholdBytes: 0
+  });
+  const ws = FakeWebSocket.instances[0];
+
+  // Mirror the README quickstart: send immediately, while still CONNECTING.
+  assert.equal(ws.readyState, FakeWebSocket.CONNECTING);
+  transport.send('ext:a', { n: 1 });
+  transport.send('ext:b', { n: 2 });
+  transport.send('ext:c', { n: 3 });
+
+  // Pre-open: nothing on the socket yet and, critically, nothing dropped.
+  await tick();
+  assert.equal(ws.sent.length, 0);
+  assert.equal(transport.getHealth().drops, 0);
+
+  ws.open();
+  await transport.flush();
+
+  // All three delivered, none dropped, original FIFO order preserved.
+  assert.equal(ws.sent.length, 3);
+  assert.equal(transport.getHealth().drops, 0);
+  const decoded = await Promise.all(ws.sent.map((raw) => decodeWireMessage(raw, { codec })));
+  assert.deepEqual(decoded.map((result) => result.msg.type), ['ext:a', 'ext:b', 'ext:c']);
+  assert.deepEqual(decoded.map((result) => result.msg.payload), [{ n: 1 }, { n: 2 }, { n: 3 }]);
+  assert.ok(transport.getHealth().errors.every((entry) => entry.code !== 'websocket-not-open'));
+});
+
+test('pre-open frames drop without hanging when the socket closes before opening', async () => {
+  const FakeWebSocket = createFakeWebSocketClass();
+  const transport = createWebSocketTransport({
+    url: 'ws://example.test/ws',
+    WebSocket: FakeWebSocket,
+    codec: utf8Codec(),
+    compressionThresholdBytes: 0
+  });
+  const ws = FakeWebSocket.instances[0];
+
+  assert.equal(ws.readyState, FakeWebSocket.CONNECTING);
+  transport.send('ext:a', { n: 1 });
+
+  // Socket dies before it ever opens; the parked send must drain (as a drop)
+  // rather than leave flush() pending forever.
+  ws.close(1006, 'down');
+  await transport.flush();
+
+  assert.equal(ws.sent.length, 0);
+  assert.equal(transport.getHealth().drops, 1);
+});
+
 test('inbound plain native and legacy frames fan out to subscribers', async () => {
   const FakeWebSocket = createFakeWebSocketClass();
   const transport = createWebSocketTransport({

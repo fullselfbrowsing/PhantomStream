@@ -338,6 +338,7 @@ export function createWebSocketTransport(options) {
   };
   var now = typeof cfg.now === 'function' ? cfg.now : defaultNow;
   var openState = typeof WebSocketCtor.OPEN === 'number' ? WebSocketCtor.OPEN : 1;
+  var connectingState = typeof WebSocketCtor.CONNECTING === 'number' ? WebSocketCtor.CONNECTING : 0;
   var statusState = 'connecting';
   var messageHandlers = new Set();
   var statusHandlers = new Set();
@@ -350,6 +351,21 @@ export function createWebSocketTransport(options) {
   var sendQueue = Promise.resolve();
   var receiveQueue = Promise.resolve();
   var unsubscribers = [];
+  // Pre-open gate: frames queued before the socket reaches OPEN park on this
+  // promise instead of being dropped, so the README quickstart (construct
+  // transport then immediately capture.start()) does not lose the initial
+  // READY/SNAPSHOT. The gate resolves once on the first terminal lifecycle
+  // event (open, error, or close) and is never re-armed afterward; settling it
+  // on error/close guarantees parked sends drain (and report a drop) rather
+  // than leaking pending tasks if the socket never opens.
+  var openGateSettled = false;
+  var resolveOpenGate = null;
+  var openGate = new Promise(function (resolve) { resolveOpenGate = resolve; });
+  function settleOpenGate() {
+    if (openGateSettled) return;
+    openGateSettled = true;
+    if (typeof resolveOpenGate === 'function') resolveOpenGate();
+  }
   var ws = new WebSocketCtor(url);
   if (ws && Object.prototype.hasOwnProperty.call(ws, 'binaryType')) {
     try {
@@ -423,9 +439,19 @@ export function createWebSocketTransport(options) {
     return ws && ws.readyState === openState;
   }
 
+  function isConnecting() {
+    return ws && ws.readyState === connectingState;
+  }
+
   function send(type, payload) {
     var msg = { type: type, payload: payload || {}, ts: now() };
     sendQueue = sendQueue.then(async function () {
+      // Park frames issued while the socket is still CONNECTING until the
+      // open gate settles, preserving FIFO order (this stays on the single
+      // chained queue) instead of dropping the initial READY/SNAPSHOT.
+      if (isConnecting() && !openGateSettled) {
+        await openGate;
+      }
       if (!isOpen()) {
         drops += 1;
         recordError('websocket-not-open');
@@ -508,6 +534,7 @@ export function createWebSocketTransport(options) {
   }
 
   unsubscribers.push(addSocketListener(ws, 'open', function () {
+    settleOpenGate();
     emitStatus('open');
   }));
   unsubscribers.push(addSocketListener(ws, 'message', function (event) {
@@ -520,10 +547,15 @@ export function createWebSocketTransport(options) {
     });
   }));
   unsubscribers.push(addSocketListener(ws, 'error', function () {
+    // Release any parked pre-open frames; the !isOpen() guard then records a
+    // drop for each instead of hanging the send queue on a socket that never
+    // reaches OPEN.
+    settleOpenGate();
     recordError('websocket-error');
     emitStatus('error', { reason: 'websocket-error' });
   }));
   unsubscribers.push(addSocketListener(ws, 'close', function (event) {
+    settleOpenGate();
     emitStatus('closed', {
       closeCode: event && typeof event.code === 'number' ? event.code : null,
       closeReason: event && typeof event.reason === 'string' ? event.reason : ''
@@ -534,6 +566,10 @@ export function createWebSocketTransport(options) {
     try {
       unsubscribers.forEach(function (unsubscribe) { unsubscribe(); });
       unsubscribers = [];
+      // close() detaches listeners above, so the socket's own close event can
+      // no longer settle the gate -- release parked sends here too so a
+      // pre-open close() does not leave queued tasks pending forever.
+      settleOpenGate();
       if (ws && typeof ws.close === 'function') ws.close();
     } catch (err) {
       recordError('websocket-close-failed');
