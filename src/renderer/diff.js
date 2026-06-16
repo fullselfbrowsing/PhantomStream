@@ -333,7 +333,19 @@ export function applyMutations(doc, mutations, counters, hooks) {
             if (Object.prototype.hasOwnProperty.call(m, 'checked')) {
               valueTarget.checked = !!m.checked;
             }
-            if (Array.isArray(m.selectedValues) && valueTarget.options) {
+            if (Array.isArray(m.selectedIndexes) && valueTarget.options) {
+              // Index-addressed selection is unambiguous even when masking
+              // collapses distinct option values to the same masked string
+              // (capture omits the raw values from the wire), so it wins over
+              // selectedValues whenever the capture side provides it.
+              var selectedIndexes = new Set();
+              for (var si = 0; si < m.selectedIndexes.length; si++) {
+                selectedIndexes.add(Number(m.selectedIndexes[si]));
+              }
+              for (var ix = 0; ix < valueTarget.options.length; ix++) {
+                valueTarget.options[ix].selected = selectedIndexes.has(ix);
+              }
+            } else if (Array.isArray(m.selectedValues) && valueTarget.options) {
               var selectedValues = new Set();
               for (var sv = 0; sv < m.selectedValues.length; sv++) {
                 selectedValues.add(String(m.selectedValues[sv]));

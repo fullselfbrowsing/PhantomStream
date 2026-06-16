@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { createCapture } from '../src/capture/index.js';
+import { applyMutations } from '../src/renderer/diff.js';
 import { RELAY_PER_MESSAGE_LIMIT_BYTES } from '../src/protocol/constants.js';
 import { STREAM, DIFF_OP } from '../src/protocol/messages.js';
 
@@ -381,6 +382,78 @@ test('oversized value diffs are bounded by the relay cap', async () => {
       false,
       'over-cap value diff is not sent raw'
     );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('masked <select> with colliding option masks selects the exact option by index, not value', async () => {
+  // 'aa' and 'bb' both collapse to '**' under the default mask. A value-keyed
+  // renderer would match the masked selectedValue ('**') against the masked
+  // mirror option values ('**') and select the WRONG option -- or both. The
+  // selectedIndexes sidecar pins the exact selected option without putting any
+  // raw value on the wire (SEC-03).
+  const env = setupEnv(
+    '<select id="sel">'
+    + '<option value="aa">First</option>'
+    + '<option value="bb">Second</option>'
+    + '</select>'
+  );
+  try {
+    const transport = createRecordingTransport();
+    env.capture = createCapture({
+      transport,
+      logger: silentLogger(),
+      maskInputs: true,
+    });
+    env.capture.start();
+    await settle(env.window);
+
+    const select = env.document.getElementById('sel');
+    const nid = env.capture.getNodeId(select);
+    // Select the SECOND option (index 1, raw value 'bb').
+    select.options[0].selected = false;
+    select.options[1].selected = true;
+    dispatchValueEvent(env, select, 'change');
+    await settle(env.window);
+
+    const selectOp = valueOps(transport).find((op) => op.nid === nid);
+    assert.ok(selectOp, 'a value op for the masked select reached the wire');
+
+    // selectedIndexes carries the unambiguous positional identity.
+    assert.deepEqual(
+      selectOp.selectedIndexes,
+      [1],
+      'selectedIndexes pins the exact selected option index'
+    );
+    // selectedValues are masked and now collide -- proving they cannot
+    // disambiguate the selection on their own.
+    assert.deepEqual(
+      selectOp.selectedValues,
+      [expectMask('bb')],
+      'selectedValues are masked (and collide with the other option mask)'
+    );
+    // SEC-03: no raw option value ever leaves the page.
+    assert.ok(!wireText(transport).includes('"aa"'), 'raw option value aa never on the wire');
+    assert.ok(!wireText(transport).includes('"bb"'), 'raw option value bb never on the wire');
+
+    // Build the masked MIRROR the snapshot path would produce: both option
+    // values are masked to '**', so the values alone are indistinguishable.
+    const mirror = env.document.implementation.createHTMLDocument('mirror');
+    mirror.body.innerHTML = '<select id="sel">'
+      + '<option value="' + expectMask('aa') + '">First</option>'
+      + '<option value="' + expectMask('bb') + '">Second</option>'
+      + '</select>';
+    const mirrorSelect = mirror.getElementById('sel');
+    const identity = {
+      resolve(targetNid) { return String(targetNid) === String(nid) ? mirrorSelect : null; },
+    };
+
+    applyMutations(mirror, [selectOp], { staleMisses: 0, applyFailures: 0 }, { identity });
+
+    assert.equal(mirrorSelect.options[0].selected, false, 'first option is NOT selected');
+    assert.equal(mirrorSelect.options[1].selected, true, 'second option IS selected by index');
+    assert.equal(mirrorSelect.selectedIndex, 1, 'renderer selected exactly the captured option');
   } finally {
     env.teardown();
   }

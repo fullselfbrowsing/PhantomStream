@@ -1712,6 +1712,20 @@ export function createCapture(config) {
     return values;
   }
 
+  // Positional identity for the selected options. selectedValues carry the
+  // masked option text, so colliding masks (default mask turns 'aa' and 'bb'
+  // both into '**') make value-based selection ambiguous on the renderer.
+  // Option indexes contain no page content, survive masking unchanged, and
+  // pin the exact option(s) the renderer must select.
+  function selectedOptionIndexes(select) {
+    var indexes = [];
+    var options = select && select.options ? select.options : [];
+    for (var i = 0; i < options.length; i++) {
+      if (options[i].selected) indexes.push(i);
+    }
+    return indexes;
+  }
+
   function sanitizeInputValue(value, owner) {
     return sanitizeForWire('input', {
       value: value == null ? '' : String(value),
@@ -1748,6 +1762,10 @@ export function createCapture(config) {
       for (var s = 0; s < selected.length; s++) {
         diff.selectedValues.push(sanitizeInputValue(selected[s], control));
       }
+      // Authoritative selection identity (the renderer prefers this over the
+      // maskable selectedValues): option indexes never carry page content and
+      // stay unambiguous even when masked option values collide.
+      diff.selectedIndexes = selectedOptionIndexes(control);
       return diff;
     }
 

@@ -67,7 +67,7 @@ export const DIFF_OP = {
   ATTR: 'attr',
   /** { op:'text', nid, text } — character data change, addressed via parent nid */
   TEXT: 'text',
-  /** { op:'value', nid, value?, checked?, selectedValues? } — live form state change */
+  /** { op:'value', nid, value?, checked?, selectedValues?, selectedIndexes? } — live form state change */
   VALUE: 'value',
   /** ShadowRootPayload plus op:'shadow-root' — replace/open an observed shadow root */
   SHADOW_ROOT: 'shadow-root',
@@ -171,7 +171,8 @@ export const NID_ATTR = 'data-fsb-nid';
  * @property {string} nid
  * @property {string} [value]           Textual value for input/textarea/select-like controls
  * @property {boolean} [checked]        Checked state for checkbox/radio controls
- * @property {string[]} [selectedValues] Selected option values for multi-select controls
+ * @property {string[]} [selectedValues] Selected option values for select controls (masked when maskInputs is on, so renderers must not treat these as a selection key)
+ * @property {number[]} [selectedIndexes] Authoritative positional identity of selected options; preferred over selectedValues because option indexes never carry page content and stay unambiguous under masking
  */
 
 /**
