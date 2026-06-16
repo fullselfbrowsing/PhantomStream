@@ -1,14 +1,14 @@
 ---
 phase: 08-shadow-dom-iframes-fidelity-completion
 review: 08-REVIEW.md
-fixed: 2026-06-16T04:38:36Z
+fixed: 2026-06-16T04:50:17Z
 status: fixed
 fix_scope: critical_warning
 findings_fixed:
-  critical: 14
+  critical: 15
   warning: 3
   info: 0
-  total: 17
+  total: 18
 commits:
   - 33ae99c
   - 794e57a
@@ -16,6 +16,8 @@ commits:
   - 907e5ed
   - 7df67a2
   - 7022b15
+  - 17a7cde
+  - fe83c0c
 ---
 
 # Phase 08: Code Review Fix Report
@@ -43,6 +45,7 @@ Fixed all Critical and Warning findings from all `08-REVIEW.md` passes.
 - **Post-final CR-02:** Oversized `DIFF_OP.FRAME` and `DIFF_OP.SHADOW_ROOT` replacements now degrade to bounded, requestable truncated placeholders instead of falling through to the generic over-budget drop path.
 - **Post-final WR-01:** Architecture lifecycle docs now state that `domStreamResume` re-arms observers with the same stream identity and sends no snapshot.
 - **Post-final WR-02:** The subtree response recovery test now supplies complete preorder node ids and verifies `safe-child-nid` resolves to the intended recovered element.
+- **Bridge closure CR-01:** The Playwright inject transport now closes over the original exposed binding during init and never re-reads `window.__phantomStreamBridge` at send time, so later page wrappers cannot observe or steal the bridge token.
 
 ## Verification
 
@@ -53,6 +56,7 @@ node --test tests/capture-shadow-dom.test.js tests/capture-iframe.test.js tests/
 node --test tests/capture-lifecycle.test.js --test-name-pattern "snapshot head payloads|stop flush chunks"
 node --test tests/playwright-adapter.test.js tests/capture-iframe.test.js tests/capture-shadow-dom.test.js tests/renderer-subtree-fetch.test.js
 node --test tests/playwright-adapter.test.js tests/playwright-adapter-cdp.test.js
+node --test tests/capture-shadow-dom.test.js tests/renderer-shadow-dom.test.js tests/capture-iframe.test.js tests/renderer-iframe.test.js tests/capture-input-values.test.js tests/renderer-value-diff.test.js tests/capture-added-styles.test.js tests/capture-subtree-fetch.test.js tests/renderer-subtree-fetch.test.js tests/playwright-fidelity-phase8.test.js tests/playwright-adapter.test.js tests/playwright-adapter-cdp.test.js tests/capture-lifecycle.test.js tests/renderer-viewer.test.js tests/protocol.test.js
 npm test
 rg -n "import |export |require\\(|document\\.dispatchEvent" src/adapters/playwright-inject.js
 ```
@@ -63,8 +67,8 @@ Results:
 - Final lifecycle budget regression gate: 8 tests, 8 pass.
 - Latest targeted blocker gate: 58 tests, 58 pass.
 - Post-final targeted gate: 27 tests, 27 pass.
-- Adapter/CDP gate: 11 tests, 11 pass.
-- Phase 8 focused gate: 94 tests, 94 pass.
+- Adapter/CDP gate: 12 tests, 12 pass.
+- Phase 8 focused gate: 97 tests, 97 pass.
 - Loopback recovery regression gate: included in focused cap check and full suite.
-- Full suite: 382 tests, 382 pass.
+- Full suite: 383 tests, 383 pass.
 - Playwright inject static forbidden grep returned no `import`, `export`, `require()`, or `document.dispatchEvent` matches.
