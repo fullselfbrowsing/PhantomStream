@@ -169,6 +169,31 @@ function isPhase8ShadowValueMutationBatch(msg) {
     && ops.every((op) => op.op === DIFF_OP.SHADOW_ROOT || op.op === DIFF_OP.VALUE);
 }
 
+function hasCssomDocumentStyleSource(msg) {
+  if (!msg || msg.type !== STREAM.SNAPSHOT) return false;
+  const payload = msg.payload || {};
+  const strategy = payload.styleStrategy || {};
+  const sources = payload.styleSources || [];
+  return strategy.mode === 'cssom'
+    && Array.isArray(sources)
+    && sources.some((source) => source
+      && source.scope
+      && source.scope.kind === 'document'
+      && typeof source.cssText === 'string'
+      && source.cssText.includes('.cssom-card'));
+}
+
+function isCssomStyleSourceMutationBatch(msg) {
+  if (!msg || msg.type !== STREAM.MUTATIONS) return false;
+  const ops = mutationOps(msg);
+  return ops.length > 0
+    && ops.every((op) => op
+      && op.op === DIFF_OP.STYLE_SOURCE
+      && op.scope
+      && op.scope.kind === 'document'
+      && ['upsert', 'replace', 'remove'].includes(op.action));
+}
+
 function stripStyleAttributesFromHtml(html) {
   const dom = new JSDOM('<!DOCTYPE html><template></template>');
   const template = dom.window.document.querySelector('template');
@@ -435,6 +460,7 @@ export const DIVERGENCES = [
       'text-childlist',
       'sanitize-divergence',
       'phase8-protocol-extensions',
+      'cssom-capture-mode',
       'snapshot-only',
       'dialog',
     ],
@@ -538,6 +564,35 @@ export const DIVERGENCES = [
     },
   },
   {
+    id: 'D25-cssom-mode-style-sources',
+    kind: 'mismatch',
+    description:
+      'Phase 9 CSSOM mode replaces generated computed inline style capture with '
+      + 'structured styleSources[] and styleStrategy metadata in snapshots, then '
+      + 'streams stylesheet changes as DIFF_OP.STYLE_SOURCE mutation ops. The FSB '
+      + 'reference has no structured style-source protocol surface and does not '
+      + 'observe document.head stylesheet text changes in the oracle fixture.',
+    rationale:
+      'CSSOM mode is an explicit opt-in (`styleMode: "cssom"`) so the legacy '
+      + 'computed-mode oracle matrix remains unchanged. This entry is pinned to '
+      + 'the focused cssom-capture-mode scenario and only covers snapshots with '
+      + 'document-scoped CSSOM sources plus extracted-only style-source mutation '
+      + 'batches.',
+    affectedMessages: [STREAM.SNAPSHOT, STREAM.MUTATIONS],
+    affectedScenarios: ['cssom-capture-mode'],
+    appliesTo(refMsg, extMsg, scenarioName) {
+      if (scenarioName !== 'cssom-capture-mode') return false;
+
+      if (refMsg !== undefined && extMsg !== undefined) {
+        if (refMsg.type !== STREAM.SNAPSHOT || extMsg.type !== STREAM.SNAPSHOT) return false;
+        return hasCssomDocumentStyleSource(extMsg) && !hasCssomDocumentStyleSource(refMsg);
+      }
+
+      if (refMsg !== undefined || extMsg === undefined) return false;
+      return isCssomStyleSourceMutationBatch(extMsg);
+    },
+  },
+  {
     id: 'D2-envelope-shape',
     kind: 'documented-mapping',
     description:
@@ -557,7 +612,7 @@ export const DIVERGENCES = [
     affectedScenarios: [
       'basic-mutations', 'mutation-burst', 'structural-ops', 'scroll',
       'pause-resume', 'snapshot-only', 'dialog', 'text-childlist',
-      'sanitize-divergence', 'phase8-protocol-extensions',
+      'sanitize-divergence', 'phase8-protocol-extensions', 'cssom-capture-mode',
     ],
     // Never consulted: documented-mapping divergences are absorbed by
     // normalize.js BEFORE comparison, so no mismatch can reach the ledger.
@@ -579,7 +634,7 @@ export const DIVERGENCES = [
     affectedScenarios: [
       'basic-mutations', 'mutation-burst', 'structural-ops', 'scroll',
       'pause-resume', 'snapshot-only', 'dialog', 'text-childlist',
-      'sanitize-divergence', 'phase8-protocol-extensions',
+      'sanitize-divergence', 'phase8-protocol-extensions', 'cssom-capture-mode',
     ],
     appliesTo() { return false; },
   },

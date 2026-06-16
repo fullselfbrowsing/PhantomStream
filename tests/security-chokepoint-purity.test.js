@@ -179,6 +179,35 @@ test('render chokepoint wiring remains present at every insertion layer', () => 
   );
 });
 
+test('CSSOM style-source chokepoints route through capture and renderer CSS scrub helpers', () => {
+  const index = strippedRendererModule('index.js');
+  const snapshot = strippedRendererModule('snapshot.js');
+
+  for (const marker of [
+    'collectCssomStyleSourcesForScope',
+    'sanitizeCssTextForSource',
+    'sanitizeForWire(\'css\'',
+    'styleSources',
+    'styleStrategy',
+  ]) {
+    assert.ok(CAPTURE_CODE.includes(marker), `capture CSSOM path must contain ${marker}`);
+  }
+
+  for (const marker of [
+    'installStyleSources',
+    'installOneStyleSource',
+    'setScopedStyleText',
+    'scrubCssText',
+    'textContent',
+  ]) {
+    assert.ok(index.includes(marker), `renderer scoped CSSOM installer must contain ${marker}`);
+  }
+
+  assert.ok(snapshot.includes('styleSourceTagsForDocument'), 'snapshot CSSOM document installer must exist');
+  assert.ok(snapshot.includes('scrubCssText'), 'snapshot CSSOM document CSS must be scrubbed');
+  assert.equal(/innerHTML\s*=.*css/i.test(index + snapshot), false, 'CSSOM text must not be inserted via innerHTML');
+});
+
 test('docs/SECURITY.md exists and carries the embed security contract markers', () => {
   assert.ok(
     existsSync(SECURITY_MD),

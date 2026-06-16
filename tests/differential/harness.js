@@ -228,15 +228,23 @@ export function createExtractedSide(fixtureHtml, config) {
     },
   };
 
+  const captureConfig = {
+    transport: loopback,
+    // No-op logger mirrors the reference side's FSB logger stub: identical
+    // quiet test conditions on both sides. Wire-invisible -- only
+    // transport.send output is compared.
+    logger: { info() {}, warn() {}, error() {} },
+  };
+  if (config && config.styleMode) {
+    captureConfig.styleMode = config.styleMode;
+  }
+  if (config && typeof config.fetchStylesheet === 'function') {
+    captureConfig.fetchStylesheet = config.fetchStylesheet;
+  }
+
   let capture;
   try {
-    capture = createCapture({
-      transport: loopback,
-      // No-op logger mirrors the reference side's FSB logger stub: identical
-      // quiet test conditions on both sides. Wire-invisible -- only
-      // transport.send output is compared.
-      logger: { info() {}, warn() {}, error() {} },
-    });
+    capture = createCapture(captureConfig);
   } catch (err) {
     // Factory failure happens AFTER the swap but BEFORE a close() handle
     // exists -- restore here or the globals leak (Pitfall 8).

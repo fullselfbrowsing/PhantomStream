@@ -20,14 +20,15 @@ import {
 
 var DEFAULT_BINDING_NAME = '__phantomStreamBridge';
 var INJECT_TOKEN_DECLARATION = 'var PHANTOM_STREAM_BRIDGE_TOKEN = "";';
+var INJECT_CAPTURE_OPTIONS_DECLARATION = 'var PHANTOM_STREAM_CAPTURE_OPTIONS = {};';
 
 /**
  * Read the checked-in classic-script inject artifact.
  *
  * @returns {string}
  */
-export function getPlaywrightInjectSource() {
-  return buildPlaywrightInjectSource();
+export function getPlaywrightInjectSource(options) {
+  return buildPlaywrightInjectSource(options);
 }
 
 function buildPlaywrightInjectSource(options) {
@@ -36,11 +37,25 @@ function buildPlaywrightInjectSource(options) {
     'utf8'
   );
   var opts = options || {};
-  if (!Object.prototype.hasOwnProperty.call(opts, 'bridgeToken')) return source;
-  return source.replace(
+  var captureOptions = normalizeCaptureOptions(opts);
+  var out = source.replace(
+    INJECT_CAPTURE_OPTIONS_DECLARATION,
+    'var PHANTOM_STREAM_CAPTURE_OPTIONS = ' + JSON.stringify(captureOptions) + ';'
+  );
+  if (!Object.prototype.hasOwnProperty.call(opts, 'bridgeToken')) return out;
+  return out.replace(
     INJECT_TOKEN_DECLARATION,
     'var PHANTOM_STREAM_BRIDGE_TOKEN = ' + JSON.stringify(String(opts.bridgeToken || '')) + ';'
   );
+}
+
+function normalizeCaptureOptions(options) {
+  var opts = options || {};
+  var captureOptions = opts.captureOptions || {};
+  if (captureOptions && captureOptions.styleMode === 'cssom') {
+    return { styleMode: 'cssom' };
+  }
+  return {};
 }
 
 /**
@@ -271,7 +286,10 @@ export function createPlaywrightAdapter(options) {
   async function install() {
     if (installed) return installPromise || Promise.resolve(handle);
     installPromise = (async function runInstall() {
-      var injectSource = buildPlaywrightInjectSource({ bridgeToken: bridgeToken });
+      var injectSource = buildPlaywrightInjectSource({
+        bridgeToken: bridgeToken,
+        captureOptions: cfg.captureOptions || {}
+      });
       if (typeof page.exposeBinding !== 'function') throw new Error('page-expose-binding-required');
       if (typeof page.addInitScript !== 'function') throw new Error('page-add-init-script-required');
 

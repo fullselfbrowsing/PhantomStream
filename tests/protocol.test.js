@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   encodeEnvelope,
   decodeEnvelope,
@@ -83,4 +85,17 @@ test('Phase 8 protocol constants are exported for fidelity sidecars and recovery
   assert.equal(DIFF_OP.FRAME, 'frame');
   assert.equal(CONTROL.SUBTREE_REQUEST, 'dash:ps-subtree-request');
   assert.equal(STREAM.SUBTREE_RESPONSE, 'ext:ps-subtree-response');
+});
+
+test('Phase 9 protocol constants and typedefs are exported for CSSOM style sources', () => {
+  assert.equal(DIFF_OP.STYLE_SOURCE, 'style-source');
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/protocol/messages.js', import.meta.url)),
+    'utf8'
+  );
+  for (const typedef of ['StyleScope', 'StyleSource', 'StyleStrategy', 'StyleSourceDiffOp']) {
+    assert.match(source, new RegExp('@typedef \\{Object\\} ' + typedef));
+  }
+  assert.match(source, /styleSources/);
+  assert.match(source, /styleStrategy/);
 });

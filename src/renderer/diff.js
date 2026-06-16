@@ -129,6 +129,12 @@ export function applyMutations(doc, mutations, counters, hooks) {
   var installFrames = typeof identity.installFrames === 'function'
     ? function (frames) { identity.installFrames(frames || []); }
     : null;
+  var applyStyleSource = typeof identity.applyStyleSource === 'function'
+    ? function (action, sourceId, scope, source) { return identity.applyStyleSource(action, sourceId, scope, source); }
+    : null;
+  var removeStyleSource = typeof identity.removeStyleSource === 'function'
+    ? function (sourceId, scope) { return identity.removeStyleSource(sourceId, scope); }
+    : null;
 
   // Shared miss path: count, warn, and escalate at the parity threshold.
   function recordStaleMiss(op, nid) {
@@ -156,6 +162,31 @@ export function applyMutations(doc, mutations, counters, hooks) {
       return;
     }
     installShadowRootDirect(doc, host, p, sanitizeCounters, logger, indexSubtree, removeSubtree);
+  }
+
+  function applyStyleSourceOp(m) {
+    var sourceId = m && m.sourceId ? String(m.sourceId) : '';
+    var scope = m && m.scope ? m.scope : null;
+    var scopeKind = scope && scope.kind ? String(scope.kind) : '';
+    if (!sourceId || !scopeKind) {
+      requestResync('stale-style-scope', { sourceId: sourceId, scopeKind: scopeKind });
+      return;
+    }
+    var ok = false;
+    if (m.action === 'remove') {
+      ok = removeStyleSource ? removeStyleSource(sourceId, scope) : false;
+    } else if (m.action === 'upsert' || m.action === 'replace') {
+      ok = applyStyleSource ? applyStyleSource(m.action, sourceId, scope, m.source || null) : false;
+    }
+    if (!ok) {
+      tallies.staleMisses += 1;
+      logger.warn('[Renderer] stale style source scope', {
+        sourceId: sourceId,
+        scopeKind: scopeKind,
+        staleMisses: tallies.staleMisses
+      });
+      requestResync('stale-style-scope', { sourceId: sourceId, scopeKind: scopeKind });
+    }
   }
 
   try {
@@ -224,6 +255,10 @@ export function applyMutations(doc, mutations, counters, hooks) {
             if (installFrames && m.frame) {
               installFrames([m.frame]);
             }
+            break;
+          }
+          case DIFF_OP.STYLE_SOURCE: {
+            applyStyleSourceOp(m);
             break;
           }
           case DIFF_OP.REMOVE: {

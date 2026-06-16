@@ -36,7 +36,7 @@
 
 import { buildSnapshotHtml, buildFramePlaceholderHtml } from './snapshot.js';
 import { applyMutations } from './diff.js';
-import { sanitizeFragment } from './sanitize.js';
+import { sanitizeFragment, scrubCssText } from './sanitize.js';
 import { createOverlays, mapRectToHost, OVERLAY_CSS } from './overlays.js';
 import { STREAM, CONTROL, isCurrentStream } from '../protocol/messages.js';
 
@@ -230,6 +230,7 @@ export function createViewer(options) {
         sanitizeFragment(scrubDoc.body, sanitizeCounters, logger);
         if (lastSnapshotPayload) {
           resetIdentityIndex(scrubDoc, lastSnapshotPayload.nodeIds || []);
+          installStyleSources(scrubDoc, lastSnapshotPayload.styleSources || [], { kind: 'document' });
           installShadowRoots(scrubDoc, lastSnapshotPayload.shadowRoots || []);
           installFrames(scrubDoc, lastSnapshotPayload.frames || []);
         }
@@ -683,6 +684,152 @@ export function createViewer(options) {
     }
   }
 
+  function cssEscapeIdent(value) {
+    var input = String(value || '');
+    if (win && win.CSS && typeof win.CSS.escape === 'function') {
+      return win.CSS.escape(input);
+    }
+    return input.replace(/[^a-zA-Z0-9_-]/g, function (ch) {
+      return '\\' + ch.charCodeAt(0).toString(16) + ' ';
+    });
+  }
+
+  function hasDangerousStylesheetUrl(value) {
+    if (!value || typeof value !== 'string') return false;
+    var compact = value.replace(/[\u0000-\u0020]+/g, '').toLowerCase();
+    return compact.indexOf('javascript:') === 0
+      || compact.indexOf('vbscript:') === 0
+      || compact.indexOf('data:text/html') === 0;
+  }
+
+  function setScopedStyleText(styleEl, cssText) {
+    styleEl.textContent = scrubCssText(String(cssText || ''));
+  }
+
+  function findStyleSourceElement(rootNode, sourceId) {
+    if (!rootNode || !rootNode.querySelector) return null;
+    try {
+      return rootNode.querySelector('[data-ps-style-source-id="' + cssEscapeIdent(sourceId) + '"]');
+    } catch (err) {
+      var nodes = rootNode.querySelectorAll ? rootNode.querySelectorAll('[data-ps-style-source-id]') : [];
+      for (var i = 0; i < nodes.length; i++) {
+        if (nodes[i].getAttribute('data-ps-style-source-id') === String(sourceId || '')) return nodes[i];
+      }
+      return null;
+    }
+  }
+
+  function installOneStyleSource(targetDoc, rootNode, source) {
+    var s = source || {};
+    if (!targetDoc || !rootNode || !s.sourceId) return false;
+    var existing = findStyleSourceElement(rootNode, s.sourceId);
+    if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+    var el = null;
+    if (s.href && !hasDangerousStylesheetUrl(s.href)) {
+      el = targetDoc.createElement('link');
+      el.setAttribute('rel', 'stylesheet');
+      el.setAttribute('href', String(s.href || ''));
+    } else {
+      el = targetDoc.createElement('style');
+      setScopedStyleText(el, s.cssText || '');
+    }
+    el.setAttribute('data-ps-style-source-id', String(s.sourceId));
+    if (s.media) el.setAttribute('media', String(s.media));
+    if (s.disabled) el.setAttribute('data-ps-style-disabled', 'true');
+    rootNode.appendChild(el);
+    return true;
+  }
+
+  function installStyleSources(targetDoc, styleSources, scopeContext) {
+    var sources = Array.isArray(styleSources) ? styleSources.slice() : [];
+    if (!targetDoc) return false;
+    var scope = scopeContext || { kind: 'document' };
+    var rootNode = null;
+    if (scope.kind === 'document') {
+      rootNode = targetDoc.head || targetDoc.documentElement;
+    } else if (scope.kind === 'shadow') {
+      var host = resolveIndexedNode(scope.hostNid);
+      rootNode = host && host.shadowRoot ? host.shadowRoot : null;
+    } else if (scope.kind === 'frame') {
+      rootNode = targetDoc.head || targetDoc.documentElement;
+    }
+    if (!rootNode) {
+      logger.warn('[Renderer] style source scope missing', {
+        scopeKind: scope.kind || '',
+        reason: 'stale-style-scope'
+      });
+      return false;
+    }
+    sources.sort(function (a, b) {
+      return (a && typeof a.order === 'number' ? a.order : 0)
+        - (b && typeof b.order === 'number' ? b.order : 0);
+    });
+    for (var i = 0; i < sources.length; i++) {
+      var source = sources[i] || {};
+      var sourceScope = source.scope || {};
+      if (sourceScope.kind !== scope.kind) continue;
+      if (scope.kind === 'shadow' && String(sourceScope.hostNid || '') !== String(scope.hostNid || '')) continue;
+      if (scope.kind === 'frame' && String(sourceScope.frameNid || '') !== String(scope.frameNid || '')) continue;
+      installOneStyleSource(targetDoc, rootNode, source);
+    }
+    return true;
+  }
+
+  function rootForStyleScope(targetDoc, scope) {
+    var s = scope || {};
+    if (!targetDoc) return null;
+    if (s.kind === 'document') return { doc: targetDoc, root: targetDoc.head || targetDoc.documentElement };
+    if (s.kind === 'shadow') {
+      var host = resolveIndexedNode(s.hostNid);
+      if (!host || !host.shadowRoot) return null;
+      return { doc: targetDoc, root: host.shadowRoot };
+    }
+    if (s.kind === 'frame') {
+      var frameEl = resolveIndexedNode(s.frameNid);
+      var frameDoc = null;
+      try {
+        frameDoc = frameEl && frameEl.contentDocument;
+      } catch (err) {
+        frameDoc = null;
+      }
+      if (!frameDoc || !frameDoc.head) return null;
+      return { doc: frameDoc, root: frameDoc.head };
+    }
+    return null;
+  }
+
+  function applyStyleSource(action, sourceId, scope, source) {
+    var targetDoc = iframe.contentDocument;
+    var resolved = rootForStyleScope(targetDoc, scope);
+    if (!resolved || !resolved.root) {
+      logger.warn('[Renderer] style source scope missing', {
+        sourceId: sourceId || '',
+        scopeKind: scope && scope.kind ? scope.kind : '',
+        reason: 'stale-style-scope'
+      });
+      return false;
+    }
+    var existing = findStyleSourceElement(resolved.root, sourceId);
+    if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+    return installOneStyleSource(resolved.doc, resolved.root, source || {});
+  }
+
+  function removeStyleSource(sourceId, scope) {
+    var targetDoc = iframe.contentDocument;
+    var resolved = rootForStyleScope(targetDoc, scope);
+    if (!resolved || !resolved.root) {
+      logger.warn('[Renderer] style source scope missing', {
+        sourceId: sourceId || '',
+        scopeKind: scope && scope.kind ? scope.kind : '',
+        reason: 'stale-style-scope'
+      });
+      return false;
+    }
+    var existing = findStyleSourceElement(resolved.root, sourceId);
+    if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+    return true;
+  }
+
   function installOneShadowRoot(targetDoc, payload) {
     var p = payload || {};
     if (!targetDoc || !p.hostNid) return false;
@@ -716,6 +863,7 @@ export function createViewer(options) {
     tpl.innerHTML = p.html || '';
     sanitizeFragment(tpl.content, sanitizeCounters, logger);
     shadowRoot.appendChild(targetDoc.importNode(tpl.content, true));
+    installStyleSources(targetDoc, p.styleSources || [], { kind: 'shadow', hostNid: p.hostNid });
     pairIdentityElements(
       Array.prototype.slice.call(shadowRoot.querySelectorAll('*')),
       p.nodeIds || [],
@@ -756,6 +904,7 @@ export function createViewer(options) {
         nidToNode.set(String(p.bodyNid), frameDoc.body);
         nodeToNid.set(frameDoc.body, String(p.bodyNid));
       }
+      installStyleSources(frameDoc, p.styleSources || [], { kind: 'frame', frameNid: p.frameNid });
       pairIdentityElements(
         Array.prototype.slice.call(frameDoc.body.querySelectorAll('*')),
         p.nodeIds || [],
@@ -986,7 +1135,9 @@ export function createViewer(options) {
         },
         installFrames: function(frames) {
           installFrames(cd, frames || []);
-        }
+        },
+        applyStyleSource: applyStyleSource,
+        removeStyleSource: removeStyleSource
       }
     });
     if (!resyncPending) markLive('mutations');

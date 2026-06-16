@@ -168,6 +168,35 @@ test('inject source is a single classic script with the capture bridge hooks', (
   assert.match(source, /createCapture/);
 });
 
+test('inject source serializes only supported captureOptions', () => {
+  const source = getPlaywrightInjectSource({
+    captureOptions: {
+      styleMode: 'cssom',
+      fetchStylesheet: () => '.secret{}',
+      other: 'ignored',
+    },
+  });
+
+  assert.match(source, /var PHANTOM_STREAM_CAPTURE_OPTIONS = \{"styleMode":"cssom"\};/);
+  assert.equal(source.includes('.secret'), false);
+  assert.equal(source.includes('ignored'), false);
+});
+
+test('adapter install passes CSSOM captureOptions to the injected artifact', async () => {
+  const page = createFakePage();
+  const transport = createRecordingTransport();
+  const adapter = createPlaywrightAdapter({
+    page,
+    transport,
+    captureOptions: { styleMode: 'cssom' },
+  });
+
+  await adapter.install();
+
+  const init = page.calls.find((call) => call.method === 'addInitScript');
+  assert.match(init.content, /var PHANTOM_STREAM_CAPTURE_OPTIONS = \{"styleMode":"cssom"\};/);
+});
+
 test('inject source exposes capture handle and getNodeId for tracked page elements', async () => {
   const dom = new JSDOM(
     '<!doctype html><html><body><main><button id="target">Run</button></main></body></html>',

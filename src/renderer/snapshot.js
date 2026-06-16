@@ -69,6 +69,30 @@ function hasDangerousStylesheetUrl(value) {
     || compact.indexOf('data:text/html') === 0;
 }
 
+function escapeStyleSourceId(value) {
+  return escapeAttribute(value);
+}
+
+function styleSourceTagsForDocument(styleSources) {
+  var sources = Array.isArray(styleSources) ? styleSources.slice() : [];
+  sources.sort(function (a, b) {
+    return (a && typeof a.order === 'number' ? a.order : 0)
+      - (b && typeof b.order === 'number' ? b.order : 0);
+  });
+  return sources.filter(function (source) {
+    return source && source.scope && source.scope.kind === 'document';
+  }).map(function (source) {
+    var sourceId = escapeStyleSourceId(source.sourceId || '');
+    if (source.href && !hasDangerousStylesheetUrl(source.href)) {
+      return '<link rel="stylesheet" data-ps-style-source-id="' + sourceId +
+        '" href="' + String(source.href).replace(/"/g, '&quot;') + '">';
+    }
+    return '<style data-ps-style-source-id="' + sourceId + '">' +
+      scrubCssText(source.cssText || '') +
+      '</style>';
+  }).join('\n');
+}
+
 /**
  * Escape a value for inclusion inside a double-quoted HTML attribute.
  * Renamed port of escapePreviewAttribute (dashboard.js:2671-2677): null and
@@ -144,6 +168,7 @@ export function buildSnapshotHtml(payload) {
     // break out of this tag.
     return '<style>' + scrubCssText(css) + '</style>';
   }).join('\n');
+  var cssomStyleTags = styleSourceTagsForDocument(p.styleSources || []);
 
   var htmlAttrs = buildShellAttributeString(p.htmlAttrs, p.htmlStyle);
   var bodyAttrs = buildShellAttributeString(p.bodyAttrs, p.bodyStyle);
@@ -154,6 +179,7 @@ export function buildSnapshotHtml(payload) {
     '<meta name="viewport" content="width=' + (parseInt(p.viewportWidth, 10) || 1920) + '">' +
     stylesheetLinks +
     inlineStyleTags +
+    cssomStyleTags +
     '<style>body { margin: 0; overflow: hidden; } *::selection { background: transparent; } ::-webkit-scrollbar { display: none; }</style>' +
     '</head><body' + bodyAttrs + '>' + (p.html || '') + '</body></html>';
 }

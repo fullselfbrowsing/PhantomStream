@@ -191,6 +191,31 @@ Stale, gone, skipped, blocked, untracked, or mismatched responses do not mutate
 the mirror. The latch is bounded so one missing region cannot create request
 storms.
 
+## Phase 9 CSSOM reconstruction
+
+When capture runs with `styleMode: 'cssom'`, snapshots and scoped sidecars may
+carry `styleSources[]` plus `styleStrategy` instead of generated computed
+inline styles. The renderer installs those sources as sanitized `<style>` or
+safe `<link rel="stylesheet">` nodes:
+
+- document-scope sources install into the mirror document head;
+- `{ kind: 'shadow', hostNid }` sources install inside the reconstructed open
+  shadow root for that host;
+- `{ kind: 'frame', frameNid }` sources install inside the same-origin mirror
+  frame document for that iframe.
+
+Each installed node is stamped with `data-ps-style-source-id`, so later
+`DIFF_OP.STYLE_SOURCE` ops can replace or remove the exact source without
+selector fallback. The op contract is
+`action: 'upsert' | 'replace' | 'remove'`; upsert/replace carry a sanitized
+`source`, while remove only needs the `sourceId` and `scope`.
+
+CSS text always routes through `scrubCssText` before insertion, matching the
+snapshot CSP and sandbox contract. If the scope cannot be resolved, or the
+viewer receives a style-source op before the matching document/shadow/frame is
+indexed, it increments stale-miss accounting and requests resync with
+`stale-style-scope`.
+
 ## Event contract (VIEW-02)
 
 ```js

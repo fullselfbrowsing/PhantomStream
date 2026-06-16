@@ -21,6 +21,7 @@ while ensuring configured private content never leaves the captured page.
 | `<object>` / `<embed>` plugin shells | Plugin or nested resource execution | Dropped entirely at both chokepoints |
 | Namespace-confusion mXSS (`svg`, `math`, `xlink:href`, style breakouts) | Parser mutation turns inert-looking markup active | DOM-fragment render sanitization, namespace-aware attr scrubs, CSS breakout scrub |
 | CSS vectors (`expression()`, `-moz-binding`, `url(javascript:)`, hostile `@import`) | Legacy script or unwanted fetch path | Targeted CSS value scrub at capture and render |
+| CSSOM `styleSources[]` and `DIFF_OP.STYLE_SOURCE` ops | Stylesheet text becomes a new insertion surface | Capture-side CSS scrub, render-side `scrubCssText`, CSP, and no `allow-scripts` sandbox |
 | Password and PII leakage | Private text leaves the page | Capture-side masking before transport; password masking is non-configurable |
 | Shadow root, same-origin frame, or subtree recovery HTML | New HTML insertion surface in the mirror | Same `sanitizeForWire` capture chokepoint, render-side `sanitizeFragment`, CSP meta, and no-`allow-scripts` sandbox |
 | Cross-origin iframe content | Browser-origin data leakage | Capture never reads cross-origin iframe content; renderer shows content-free placeholders only |
@@ -36,18 +37,20 @@ on either the capture or renderer side.
 
 1. **Capture chokepoint: `sanitizeForWire` (`src/capture/index.js`)** - every snapshot,
    add-op subtree, shadow root sidecar, same-origin frame payload, subtree response,
-   attr op, text op, value diff, and head inline style value routes through this named
-   function before `transport.send`. It strips, neutralizes, masks, or drops content only on
-   detached clones and wire values; the live page is not mutated.
+   attr op, text op, value diff, head inline style value, CSSOM `styleSources[]` entry,
+   and `DIFF_OP.STYLE_SOURCE` op routes through this named function before
+   `transport.send`. It strips, neutralizes, masks, or drops content only on detached
+   clones and wire values; the live page is not mutated.
 2. **Wire** - protocol messages carry already-sanitized and already-masked values. The D7
    differential ledger entry documents the intentional divergence from the raw reference stream.
 3. **Render chokepoints: `sanitizeFragment` and `sanitizeAttrValue`
    (`src/renderer/sanitize.js`)** - add-op HTML is parsed in a `<template>`, scrubbed as a
    DOM fragment, and then imported. Shadow root replacements, same-origin frame srcdoc
    payloads, and `STREAM.SUBTREE_RESPONSE` installs follow the same parse-then-sanitize
-   rule before becoming addressable. Attr ops are scrubbed before `setAttribute`. The
-   viewer also runs a post-parse `sanitizeFragment` scrub on the mirror document after
-   srcdoc loads.
+   rule before becoming addressable. Attr ops are scrubbed before `setAttribute`, and
+   CSSOM `styleSources[]` / `DIFF_OP.STYLE_SOURCE` text routes through `scrubCssText`
+   before a mirror `<style>` node is written. The viewer also runs a post-parse
+   `sanitizeFragment` scrub on the mirror document after srcdoc loads.
 4. **Srcdoc CSP meta** - every snapshot srcdoc includes this adopted policy:
 
    ```text
@@ -89,6 +92,10 @@ must mirror arbitrary real pages without breaking benign markup.
 - CSS is value-scrubbed for unsafe `url()`, `expression()`, `-moz-binding`, hostile `@import`,
   and `</style>` breakout shapes. Relative URLs remain allowed so captured same-page assets and
   ordinary author CSS keep rendering.
+- CSSOM mode (`styleMode: 'cssom'`) uses the same CSS scrub for snapshot `styleSources[]`
+  and live `DIFF_OP.STYLE_SOURCE` ops. The optional
+  `fetchStylesheet({ href, scope, ownerKind })` hook is host code, is never invoked by
+  default, and must return CSS text for PhantomStream to sanitize before transport.
 - Render-side sanitization operates on parsed DOM fragments, never on a sanitized string that is
   serialized and reparsed. String scrub/reparse is the mXSS anti-pattern this pipeline avoids.
 - Strips and scrubs are counted and logged. They are never silent health events.
@@ -145,5 +152,5 @@ rrweb-parity privacy boundary tracked as T-03-26.
 
 Closed shadow roots, cross-origin iframe content, and media stream pixels remain
 non-captured content. PhantomStream does not bypass those browser boundaries.
-Full CSSOM stylesheet-centric capture is not part of Phase 8; Phase 9 must keep
-the same sanitizer, CSP, and sandbox constraints when it adds CSSOM mode.
+CSSOM mode is stylesheet capture only; it does not capture protected browser
+content or weaken the sanitizer, CSP, or sandbox constraints.

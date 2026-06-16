@@ -36,6 +36,7 @@ import * as pauseResume from './scenarios/pause-resume.js';
 import * as textChildlist from './scenarios/text-childlist.js';
 import * as sanitizeDivergence from './scenarios/sanitize-divergence.js';
 import * as phase8ProtocolExtensions from './scenarios/phase8-protocol-extensions.js';
+import * as cssomCaptureMode from './scenarios/cssom-capture-mode.js';
 
 /**
  * The full fixture x scenario matrix. Every reliability defense from the
@@ -58,6 +59,7 @@ const MATRIX = [
   { fixture: 'canvas.html', scenario: snapshotOnly, config: {} },
   { fixture: 'dialog.html', scenario: dialog, config: { runScripts: 'dangerously' } },
   { fixture: 'phase8-fidelity.html', scenario: phase8ProtocolExtensions, config: {} },
+  { fixture: 'cssom-mode.html', scenario: cssomCaptureMode, config: { styleMode: 'cssom' } },
 ];
 
 function loadFixture(fixtureFile) {
@@ -400,6 +402,40 @@ for (const entry of MATRIX) {
         2,
         `only D24 Phase 8 protocol entries consulted (matched: ${[...matched].join(', ')})`
       );
+    } else if (entry.scenario.name === 'cssom-capture-mode') {
+      assert.ok(
+        matched.has('D25-cssom-mode-style-sources'),
+        'CSSOM fixture exercises the Phase 9 style-source ledger entry'
+      );
+      assert.equal(
+        matched.size,
+        1,
+        `only D25 CSSOM style-source entry consulted (matched: ${[...matched].join(', ')})`
+      );
+
+      const extSnapshot = extStream.find((msg) => msg.type === STREAM.SNAPSHOT);
+      assert.equal(
+        extSnapshot.payload.styleStrategy.mode,
+        'cssom',
+        'extracted CSSOM snapshot declares cssom style strategy'
+      );
+      assert.ok(
+        extSnapshot.payload.styleSources.some((source) => source.cssText.includes('.cssom-card')),
+        'extracted CSSOM snapshot carries document stylesheet text'
+      );
+      assert.equal(
+        /\sstyle=/.test(extSnapshot.payload.html),
+        false,
+        'CSSOM snapshot omits generated computed inline styles'
+      );
+      const styleOps = extStream
+        .filter((msg) => msg.type === STREAM.MUTATIONS)
+        .flatMap((msg) => msg.payload.mutations || [])
+        .filter((op) => op.op === DIFF_OP.STYLE_SOURCE);
+      assert.ok(
+        styleOps.some((op) => op.action === 'replace' && /40,\s*50,\s*60/.test(op.source.cssText)),
+        'extracted CSSOM stream carries live stylesheet replacement'
+      );
     } else {
       // D1/D6/D7/D24 (and any future mismatch entry) must stay scoped:
       // every scenario other than the named divergence scenarios compares
@@ -488,6 +524,16 @@ test('sanitize-divergence with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D
 
 test('phase8-protocol-extensions with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D24 entries are load-bearing', async () => {
   const entry = MATRIX.find((p) => p.scenario === phase8ProtocolExtensions);
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
+  assert.throws(
+    () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
+    /UNDECLARED DIVERGENCE/
+  );
+});
+
+test('cssom-capture-mode with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D25 is load-bearing', async () => {
+  const entry = MATRIX.find((p) => p.scenario === cssomCaptureMode);
   const { refStream, extStream } = await captureFlippedPair(entry);
 
   assert.throws(

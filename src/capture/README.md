@@ -17,7 +17,13 @@ is side-effect free.
 ```js
 import { createCapture } from '@fullselfbrowsing/phantom-stream/capture';
 
-const capture = createCapture({ transport, logger, overlayProvider, skipElement });
+const capture = createCapture({
+  transport,
+  logger,
+  overlayProvider,
+  skipElement,
+  styleMode: 'computed',
+});
 // -> { start, stop, pause, resume, getNodeId, handleControl }
 ```
 
@@ -31,6 +37,8 @@ const capture = createCapture({ transport, logger, overlayProvider, skipElement 
 | `maskTextSelector` | no | `null` | CSS selector for text that should be masked before transport. Non-whitespace chars become `*` by default, preserving whitespace and length. |
 | `maskInputs` | no | `false` | When true, masks form control values. Password inputs are always masked even when this is false. |
 | `maskTextFn` / `maskInputFn` | no | asterisk mask | Custom masking functions. They are fail-closed: thrown errors are logged and the default mask is used. |
+| `styleMode` | no | `'computed'` | <code>'computed' &#124; 'cssom'</code> — default mode preserves the legacy curated computed-style snapshot path. CSSOM mode omits generated computed inline styles and transports scoped `styleSources[]` plus `styleStrategy` instead. |
+| `fetchStylesheet` | no | `null` | Optional synchronous hook used only by CSSOM mode when a stylesheet cannot expose readable `cssRules` and cannot be safely re-linked. Called as `fetchStylesheet({ href, scope, ownerKind })`; PhantomStream never performs hidden network fetches. |
 
 A readiness ping (`STREAM.READY`) is emitted once, at factory creation
 (divergence-ledger entry D3 — the reference pinged at script-load time).
@@ -171,6 +179,49 @@ add-op serialization policy: sanitized HTML, masking, URL absolutification,
 curated styles, `nodeIds`, `shadowRoots[]`, and `frames[]`. Miss responses are
 content-free and clear the request path without exposing page data.
 
+## Phase 9 CSSOM style mode
+
+`styleMode: 'computed' | 'cssom'` controls how visual style fidelity is
+transported:
+
+- `'computed'` is the default and preserves the Phase 8 behavior: curated
+  computed declarations are written into snapshot and add-op HTML. Default
+  payloads do not include `styleSources[]` or `styleStrategy`.
+- `'cssom'` switches snapshots to stylesheet-centric capture. Document,
+  open-shadow-root, and same-origin-frame scopes carry sanitized
+  `styleSources[]` entries plus a `styleStrategy` summary. Generated computed
+  inline styles are not written into cloned HTML.
+
+A `styleSources[]` entry includes a stable `sourceId`, `scope`
+(`{ kind: 'document' }`, `{ kind: 'shadow', hostNid }`, or
+`{ kind: 'frame', frameNid }`), `ownerKind`, `order`, and either sanitized
+`cssText` or a safe `href`. `styleStrategy` records mode, source counts, byte
+counts, and fallback counts for diagnostics.
+
+Stylesheet fallback reasons are explicit and wire-visible:
+
+- `cssRules-blocked` — the browser denied `sheet.cssRules`.
+- `href-relinked` — an inaccessible external stylesheet had a safe URL, so
+  the renderer can install a link instead of inlining CSS.
+- `adapter-fetch` — the host-provided `fetchStylesheet({ href, scope, ownerKind })`
+  hook supplied CSS text.
+- `computed-fallback` — no readable/relinkable/fetched stylesheet source was
+  available for that owner.
+
+Live stylesheet changes stream as `DIFF_OP.STYLE_SOURCE` ops with
+`action: 'upsert' | 'replace' | 'remove'`. The payload is scoped the same way
+as snapshots. `CSSStyleSheet.insertRule` / `deleteRule` / `replaceSync` are
+patched while streaming in CSSOM mode; if a hook cannot be installed, capture
+logs `cssom-hook-unavailable` and sends a fresh snapshot rather than guessing.
+If a known style owner cannot be reconciled, the op carries
+`cssom-style-source-stale` so the renderer can request recovery. Renderer-side
+scope misses surface as `stale-style-scope`.
+
+The boundary rules are unchanged: closed shadow roots, cross-origin iframe
+content, and media pixels/streams are not captured. CSSOM mode is an opt-in
+capture path only; it does not publish the npm package, swap the FSB reference
+into production, or provide the Phase 12 baseline/ablation tables.
+
 ## Module layout
 
 Single-file core (`index.js`) per the Phase 1 user override (D-10); the
@@ -243,11 +294,6 @@ divergence, so it lives here rather than in the differential ledger):
   snapshots and add ops. The observed page is no longer mutated for
   framework identity, page-owned `data-fsb-nid` remains page data, and
   `getNodeId(element) -> string|null` is the public live-element lookup.
-
-## Behavioral changes queued for the standalone version
-
-- Optional stylesheet-centric capture mode (CSSOM) for the paper's ablation
-  study (Phase 9).
 
 ## Environment
 

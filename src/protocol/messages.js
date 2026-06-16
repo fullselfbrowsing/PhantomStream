@@ -73,6 +73,8 @@ export const DIFF_OP = {
   SHADOW_ROOT: 'shadow-root',
   /** { op:'frame', frameNid, frame:FramePayload } — refresh an inert iframe mirror */
   FRAME: 'frame',
+  /** StyleSourceDiffOp — upsert/replace/remove one scoped CSSOM source */
+  STYLE_SOURCE: 'style-source',
 };
 
 /**
@@ -82,6 +84,45 @@ export const DIFF_OP = {
  * nodeIds sidecars instead of mutating observed page elements.
  */
 export const NID_ATTR = 'data-fsb-nid';
+
+/**
+ * @typedef {Object} StyleScope
+ * @property {'document'|'shadow'|'frame'} kind
+ * @property {string} [hostNid]           Shadow host nid when kind is 'shadow'
+ * @property {string} [frameNid]          Iframe nid when kind is 'frame'
+ */
+
+/**
+ * @typedef {Object} StyleSource
+ * @property {string} sourceId
+ * @property {StyleScope} scope
+ * @property {'link'|'style'|'constructable'|'adopted'|'fallback'} ownerKind
+ * @property {number} order
+ * @property {string|null} [href]
+ * @property {string} [media]
+ * @property {boolean} [disabled]
+ * @property {string} [cssText]
+ * @property {{reason: string}|null} [fallback]
+ * @property {number} [approxBytes]
+ */
+
+/**
+ * @typedef {Object} StyleStrategy
+ * @property {'computed'|'cssom'} mode
+ * @property {number} sourceCount
+ * @property {number} fallbackCount
+ * @property {number} computedFallbackCount
+ * @property {number} approxCssBytes
+ */
+
+/**
+ * @typedef {Object} StyleSourceDiffOp
+ * @property {'style-source'} op
+ * @property {'upsert'|'replace'|'remove'} action
+ * @property {string} sourceId
+ * @property {StyleScope} scope
+ * @property {StyleSource} [source]
+ */
 
 /**
  * @typedef {Object} AddDiffOp
@@ -101,6 +142,8 @@ export const NID_ATTR = 'data-fsb-nid';
  * @property {string} html              Serialized shadow root child HTML
  * @property {string[]} nodeIds         Preorder ids for shadow descendant elements
  * @property {string} slotAssignment    Content-free slot assignment hint/diagnostic
+ * @property {StyleSource[]} [styleSources] Scoped CSSOM sources for this shadow root
+ * @property {StyleStrategy} [styleStrategy] CSSOM strategy counters for this scope
  */
 
 /**
@@ -111,6 +154,8 @@ export const NID_ATTR = 'data-fsb-nid';
  * @property {string[]} [nodeIds]       Preorder ids for serialized frame elements
  * @property {string[]} [stylesheets]   Absolutified stylesheet URLs
  * @property {string[]} [inlineStyles]  Sanitized inline style blocks
+ * @property {StyleSource[]} [styleSources] Scoped CSSOM sources for this frame document
+ * @property {StyleStrategy} [styleStrategy] CSSOM strategy counters for this scope
  * @property {Object} [htmlAttrs]       Sanitized frame <html> attributes
  * @property {Object} [bodyAttrs]       Sanitized frame <body> attributes
  * @property {string} [htmlStyle]       Computed shell style for frame <html>
@@ -147,6 +192,8 @@ export const NID_ATTR = 'data-fsb-nid';
  * @property {string[]} [nodeIds]       Preorder ids for serialized subtree elements
  * @property {ShadowRootPayload[]} [shadowRoots] Open shadow roots inside the subtree
  * @property {FramePayload[]} [frames]  Frame sidecars inside the subtree
+ * @property {StyleSource[]} [styleSources] Scoped CSSOM sources inside the subtree
+ * @property {StyleStrategy} [styleStrategy] CSSOM strategy counters for subtree sources
  * @property {string} streamSessionId
  * @property {number} snapshotId
  */
@@ -161,6 +208,8 @@ export const NID_ATTR = 'data-fsb-nid';
  * @property {number} missingDescendants Count of dropped subtrees
  * @property {string[]} stylesheets     Absolutified <link rel=stylesheet> URLs
  * @property {string[]} inlineStyles    Inline <style> text blocks from <head>
+ * @property {StyleSource[]} [styleSources] Scoped CSSOM sources for document/shadow/frame scopes
+ * @property {StyleStrategy} [styleStrategy] CSSOM strategy counters for document-level sources
  * @property {Object} htmlAttrs         Sanitized <html> attributes
  * @property {Object} bodyAttrs         Sanitized <body> attributes
  * @property {string} htmlStyle         Shell computed style for <html>

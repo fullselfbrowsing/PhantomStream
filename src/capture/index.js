@@ -467,6 +467,10 @@ export function createCapture(config) {
     ? cfg.skipElement
     : null;
   var skipElement = hostSkipElement || function () { return false; };
+  var styleMode = cfg.styleMode === 'cssom' ? 'cssom' : 'computed';
+  var fetchStylesheet = typeof cfg.fetchStylesheet === 'function'
+    ? cfg.fetchStylesheet
+    : null;
 
   // SEC-03 privacy-masking config (plan 03-03, rrweb-compatible vocabulary
   // per 03-RESEARCH Pattern 5). Every option defaults OFF: with no masking
@@ -603,6 +607,12 @@ export function createCapture(config) {
   var valueListenerRecords = [];
   var nativeAttachShadow = null;
   var attachShadowProto = null;
+  var pendingStyleSourceChanges = new Map();
+  var styleSourceRegistry = new Map();
+  var styleOwnerToSourceKey = typeof WeakMap === 'function' ? new WeakMap() : null;
+  var styleScopeRoots = new Map();
+  var nativeCssStyleSheetMethods = null;
+  var flushingMutations = false;
 
   // SEC-01 sanitization strip counters (closure state, staleFlushCount
   // pattern). Lifecycle is PER-SESSION (03-RESEARCH.md Pitfall 3): reset in
@@ -635,6 +645,10 @@ export function createCapture(config) {
     sanitizeCounters.cssScrubs = 0;
     sanitizeCounters.maskedTextNodes = 0;
     sanitizeCounters.maskedInputs = 0;
+    pendingStyleSourceChanges.clear();
+    styleSourceRegistry.clear();
+    styleScopeRoots.clear();
+    styleOwnerToSourceKey = typeof WeakMap === 'function' ? new WeakMap() : null;
   }
 
   function getCurrentStreamMetadata() {
@@ -802,7 +816,7 @@ export function createCapture(config) {
       }
       var srcset = clone.getAttribute('srcset');
       if (srcset) clone.setAttribute('srcset', absolutifySrcset(srcset, baseDoc));
-      captureComputedStyles(live, clone);
+      if (styleMode !== 'cssom') captureComputedStyles(live, clone);
     }
   }
 
@@ -826,13 +840,23 @@ export function createCapture(config) {
     });
     if (subtreeResult && subtreeResult.drop) return null;
 
-    return {
+    var shadowPayload = {
       hostNid: String(hostNid),
       mode: 'open',
       html: container.innerHTML || '',
       nodeIds: buildNodeIdSidecar(container, cloneToNid, false),
       slotAssignment: shadowSlotAssignment(root)
     };
+    if (styleMode === 'cssom') {
+      var shadowCssom = collectCssomStyleSourcesForScope(
+        ownerDoc,
+        { kind: 'shadow', hostNid: String(hostNid) },
+        { root: root }
+      );
+      shadowPayload.styleSources = shadowCssom.sources;
+      shadowPayload.styleStrategy = shadowCssom.strategy;
+    }
+    return shadowPayload;
   }
 
   function collectShadowRootPayloads(root, hostNodeIds, excludedHostNodeIds) {
@@ -995,6 +1019,422 @@ export function createCapture(config) {
     return inlineStyles;
   }
 
+  function cloneStyleScope(scope) {
+    var s = scope || {};
+    var out = { kind: s.kind || 'document' };
+    if (s.hostNid !== undefined && s.hostNid !== null) out.hostNid = String(s.hostNid);
+    if (s.frameNid !== undefined && s.frameNid !== null) out.frameNid = String(s.frameNid);
+    return out;
+  }
+
+  function styleScopeKey(scope) {
+    var s = scope || {};
+    if (s.kind === 'shadow') return 'shadow:' + String(s.hostNid || '');
+    if (s.kind === 'frame') return 'frame:' + String(s.frameNid || '');
+    return 'document';
+  }
+
+  function makeStyleSourceId(scope, order, ownerKind, ownerNid) {
+    var prefix = styleScopeKey(scope);
+    var suffix = ownerNid !== undefined && ownerNid !== null && String(ownerNid) !== ''
+      ? ':' + String(ownerNid)
+      : '';
+    return prefix + ':' + String(order || 0) + ':' + String(ownerKind || 'style') + suffix;
+  }
+
+  function cssRulesToText(ruleList) {
+    var rules = [];
+    if (!ruleList) return '';
+    for (var i = 0; i < ruleList.length; i++) {
+      if (ruleList[i] && ruleList[i].cssText) rules.push(String(ruleList[i].cssText));
+    }
+    return rules.join('\n');
+  }
+
+  function sanitizeCssTextForSource(cssText) {
+    return sanitizeForWire('css', { css: String(cssText || '') }).css;
+  }
+
+  function buildStyleStrategy(mode, sources) {
+    var list = Array.isArray(sources) ? sources : [];
+    var fallbackCount = 0;
+    var computedFallbackCount = 0;
+    var approxCssBytes = 0;
+    for (var i = 0; i < list.length; i++) {
+      var source = list[i] || {};
+      if (source.fallback) fallbackCount++;
+      if (source.fallback && source.fallback.reason === 'computed-fallback') {
+        computedFallbackCount++;
+      }
+      approxCssBytes += source.approxBytes || wireByteLength(source.cssText || '');
+    }
+    return {
+      mode: mode || 'computed',
+      sourceCount: list.length,
+      fallbackCount: fallbackCount,
+      computedFallbackCount: computedFallbackCount,
+      approxCssBytes: approxCssBytes
+    };
+  }
+
+  function safeStylesheetHref(href, doc) {
+    if (!href) return '';
+    var resolved = absolutifyUrl(String(href), doc);
+    if (!resolved || hasDangerousScheme(resolved)) {
+      if (resolved) sanitizeCounters.blockedUrlSchemes++;
+      return '';
+    }
+    return resolved;
+  }
+
+  function ownerKindForStyleNode(node, adopted) {
+    if (adopted) return 'adopted';
+    var tag = node && node.tagName ? String(node.tagName).toLowerCase() : '';
+    if (tag === 'link') return 'link';
+    if (tag === 'style') return 'style';
+    return adopted ? 'adopted' : 'constructable';
+  }
+
+  function styleOwnerHref(ownerNode, sheet, doc) {
+    var href = '';
+    if (ownerNode && typeof ownerNode.getAttribute === 'function') {
+      href = ownerNode.getAttribute('href') || '';
+    }
+    if (!href && sheet && sheet.href) href = sheet.href;
+    return safeStylesheetHref(href, doc);
+  }
+
+  function styleOwnerMedia(ownerNode, sheet) {
+    if (ownerNode && typeof ownerNode.getAttribute === 'function') {
+      return String(ownerNode.getAttribute('media') || '');
+    }
+    try {
+      if (sheet && sheet.media && sheet.media.mediaText) return String(sheet.media.mediaText || '');
+    } catch (err) { /* media is best-effort metadata */ }
+    return '';
+  }
+
+  function styleOwnerDisabled(ownerNode, sheet) {
+    if (ownerNode && typeof ownerNode.disabled === 'boolean') return ownerNode.disabled;
+    if (sheet && typeof sheet.disabled === 'boolean') return sheet.disabled;
+    return false;
+  }
+
+  function fallbackCssForScope(root) {
+    var css = [];
+    var elements = elementsUnderRoot(root && root.body ? root.body : root);
+    for (var i = 0; i < elements.length; i++) {
+      var styleText = collectComputedStyleText(elements[i], CURATED_PROPS);
+      if (!styleText) continue;
+      css.push('*{');
+      css.push(styleText);
+      css.push('}');
+      break;
+    }
+    return css.join('');
+  }
+
+  function styleSheetEntriesForScope(doc, root) {
+    var entries = [];
+    var seen = typeof WeakSet === 'function' ? new WeakSet() : null;
+    var queryRoot = root && root.querySelectorAll ? root : doc;
+    var nodes = [];
+    if (queryRoot && queryRoot.querySelectorAll) {
+      nodes = queryRoot.querySelectorAll('link[rel="stylesheet"], style');
+    }
+    for (var n = 0; n < nodes.length; n++) {
+      var node = nodes[n];
+      var sheet = node.sheet || null;
+      if (sheet && seen) seen.add(sheet);
+      entries.push({ sheet: sheet, ownerNode: node, adopted: false });
+    }
+    var adopted = [];
+    try {
+      adopted = root && root.adoptedStyleSheets ? root.adoptedStyleSheets : [];
+    } catch (err) {
+      adopted = [];
+    }
+    for (var a = 0; a < adopted.length; a++) {
+      var adoptedSheet = adopted[a];
+      if (!adoptedSheet) continue;
+      if (seen && seen.has(adoptedSheet)) continue;
+      if (seen) seen.add(adoptedSheet);
+      entries.push({ sheet: adoptedSheet, ownerNode: null, adopted: true });
+    }
+    return entries;
+  }
+
+  function sourceFromStyleSheetEntry(entry, scope, order, doc, root) {
+    var e = entry || {};
+    var ownerKind = ownerKindForStyleNode(e.ownerNode, e.adopted);
+    var href = styleOwnerHref(e.ownerNode, e.sheet, doc);
+    var cssText = '';
+    var fallback = null;
+    var sourceId = makeStyleSourceId(scope, order, ownerKind, '');
+    var media = styleOwnerMedia(e.ownerNode, e.sheet);
+    var disabled = styleOwnerDisabled(e.ownerNode, e.sheet);
+
+    try {
+      if (e.sheet && e.sheet.cssRules) {
+        cssText = cssRulesToText(e.sheet.cssRules);
+      } else if (e.ownerNode && String(e.ownerNode.tagName || '').toLowerCase() === 'style') {
+        cssText = String(e.ownerNode.textContent || '');
+      }
+    } catch (err) {
+      fallback = { reason: 'cssRules-blocked' };
+    }
+
+    if (cssText) {
+      cssText = sanitizeCssTextForSource(cssText);
+    } else if (fallback && href) {
+      fallback = { reason: 'href-relinked' };
+    } else if (fallback && fetchStylesheet) {
+      try {
+        var fetched = fetchStylesheet({ href: href || '', scope: cloneStyleScope(scope), ownerKind: ownerKind });
+        var fetchedCss = typeof fetched === 'string'
+          ? fetched
+          : (fetched && typeof fetched.css === 'string' ? fetched.css : '');
+        if (fetchedCss) {
+          cssText = sanitizeCssTextForSource(fetchedCss);
+          fallback = { reason: 'adapter-fetch' };
+        }
+      } catch (err2) {
+        logger.warn('[DOM Stream] cssom fetch failed', {
+          reason: 'adapter-fetch-failed',
+          ownerKind: ownerKind
+        });
+      }
+    }
+
+    if (!cssText && !href) {
+      cssText = sanitizeCssTextForSource(fallbackCssForScope(root));
+      ownerKind = 'fallback';
+      fallback = { reason: 'computed-fallback' };
+      sourceId = makeStyleSourceId(scope, order, ownerKind, '');
+    }
+
+    return {
+      sourceId: sourceId,
+      scope: cloneStyleScope(scope),
+      ownerKind: ownerKind,
+      order: order,
+      href: href || null,
+      media: media,
+      disabled: disabled,
+      cssText: cssText || '',
+      fallback: fallback,
+      approxBytes: wireByteLength(cssText || '')
+    };
+  }
+
+  function registerStyleSource(source, entry, doc, root) {
+    if (!source || !source.sourceId) return;
+    var key = String(source.sourceId);
+    styleSourceRegistry.set(key, {
+      source: source,
+      entry: entry || null,
+      scope: cloneStyleScope(source.scope),
+      doc: doc || document,
+      root: root || doc || document
+    });
+    if (styleOwnerToSourceKey) {
+      if (entry && entry.ownerNode) styleOwnerToSourceKey.set(entry.ownerNode, key);
+      if (entry && entry.sheet) styleOwnerToSourceKey.set(entry.sheet, key);
+    }
+  }
+
+  function collectCssomStyleSourcesForScope(doc, scope, options) {
+    var opts = options || {};
+    var root = opts.root || doc;
+    var sources = [];
+    if (styleMode !== 'cssom' || !doc) {
+      return { sources: sources, strategy: buildStyleStrategy('computed', sources) };
+    }
+    var entries = styleSheetEntriesForScope(doc, root);
+    for (var i = 0; i < entries.length; i++) {
+      var source = sourceFromStyleSheetEntry(entries[i], scope, i, doc, root);
+      sources.push(source);
+      registerStyleSource(source, entries[i], doc, root);
+    }
+    if (!sources.length) {
+      var fallback = {
+        sourceId: makeStyleSourceId(scope, 0, 'fallback', ''),
+        scope: cloneStyleScope(scope),
+        ownerKind: 'fallback',
+        order: 0,
+        href: null,
+        media: '',
+        disabled: false,
+        cssText: sanitizeCssTextForSource(fallbackCssForScope(root)),
+        fallback: { reason: 'computed-fallback' },
+        approxBytes: 0
+      };
+      fallback.approxBytes = wireByteLength(fallback.cssText || '');
+      sources.push(fallback);
+      registerStyleSource(fallback, null, doc, root);
+    }
+    styleScopeRoots.set(styleScopeKey(scope), { doc: doc, root: root, scope: cloneStyleScope(scope) });
+    return { sources: sources, strategy: buildStyleStrategy('cssom', sources) };
+  }
+
+  function scheduleMutationFlush() {
+    if (batchTimer) cancelAnimationFrame(batchTimer);
+    batchTimer = requestAnimationFrame(flushMutations);
+  }
+
+  function queueStyleSourceChange(action, source, scope, reason) {
+    if (styleMode !== 'cssom') return;
+    var sourceId = source && source.sourceId ? String(source.sourceId) : '';
+    if (!sourceId) return;
+    var safeSource = null;
+    if (action !== 'remove') {
+      safeSource = Object.assign({}, source, {
+        sourceId: sourceId,
+        scope: cloneStyleScope(scope || source.scope),
+        cssText: sanitizeCssTextForSource(source.cssText || '')
+      });
+      safeSource.approxBytes = wireByteLength(safeSource.cssText || '');
+    }
+    pendingStyleSourceChanges.set(sourceId, {
+      op: DIFF_OP.STYLE_SOURCE,
+      action: action === 'remove' ? 'remove' : (action === 'upsert' ? 'upsert' : 'replace'),
+      sourceId: sourceId,
+      scope: cloneStyleScope(scope || (source && source.scope) || {}),
+      source: safeSource,
+      reason: reason || 'cssom-style-source-stale'
+    });
+    logger.warn('[DOM Stream] cssom style source queued', {
+      action: action || 'replace',
+      sourceId: sourceId,
+      reason: reason || 'cssom-style-source-stale'
+    });
+    if (!flushingMutations) scheduleMutationFlush();
+  }
+
+  function drainPendingStyleSourceDiffs() {
+    var diffs = [];
+    pendingStyleSourceChanges.forEach(function(entry) {
+      var diff = {
+        op: DIFF_OP.STYLE_SOURCE,
+        action: entry.action,
+        sourceId: entry.sourceId,
+        scope: cloneStyleScope(entry.scope)
+      };
+      if (entry.action !== 'remove' && entry.source) diff.source = entry.source;
+      diffs.push(diff);
+    });
+    pendingStyleSourceChanges.clear();
+    return diffs;
+  }
+
+  function queueStyleScopeReplacement(scope, root, reason) {
+    if (styleMode !== 'cssom') return;
+    var scopeKey = styleScopeKey(scope);
+    var info = styleScopeRoots.get(scopeKey) || {};
+    var docForScope = info.doc || (root && root.ownerDocument) || document;
+    var rootForScope = root || info.root || docForScope;
+    var before = {};
+    styleSourceRegistry.forEach(function(entry, key) {
+      if (styleScopeKey(entry.scope) === scopeKey) before[key] = true;
+    });
+    var collected = collectCssomStyleSourcesForScope(docForScope, scope, { root: rootForScope });
+    for (var i = 0; i < collected.sources.length; i++) {
+      var source = collected.sources[i];
+      delete before[source.sourceId];
+      queueStyleSourceChange('replace', source, source.scope, reason || 'cssom-style-source-stale');
+    }
+    Object.keys(before).forEach(function(sourceId) {
+      var entry = styleSourceRegistry.get(sourceId);
+      styleSourceRegistry.delete(sourceId);
+      queueStyleSourceChange('remove', {
+        sourceId: sourceId,
+        scope: entry ? entry.scope : cloneStyleScope(scope)
+      }, entry ? entry.scope : scope, reason || 'cssom-style-source-stale');
+    });
+  }
+
+  function markStyleOwnerDirty(owner, reason) {
+    if (styleMode !== 'cssom') return;
+    var key = owner && styleOwnerToSourceKey ? styleOwnerToSourceKey.get(owner) : '';
+    var entry = key ? styleSourceRegistry.get(key) : null;
+    if (!entry) {
+      sendCssomFreshSnapshot('cssom-style-source-stale');
+      return;
+    }
+    queueStyleScopeReplacement(entry.scope, entry.root, reason || 'cssom-style-source-stale');
+  }
+
+  function patchCssStyleSheetMethods() {
+    if (styleMode !== 'cssom' || nativeCssStyleSheetMethods) return;
+    var proto = window && window.CSSStyleSheet && window.CSSStyleSheet.prototype;
+    if (!proto) return;
+    nativeCssStyleSheetMethods = {};
+    ['insertRule', 'deleteRule', 'replace', 'replaceSync'].forEach(function(name) {
+      if (typeof proto[name] !== 'function') return;
+      nativeCssStyleSheetMethods[name] = proto[name];
+      try {
+        proto[name] = function patchedCssStyleSheetMethod() {
+          var result = nativeCssStyleSheetMethods[name].apply(this, arguments);
+          var sheet = this;
+          if (name === 'replace' && result && typeof result.then === 'function') {
+            result.then(function() {
+              markStyleOwnerDirty(sheet, 'cssom-rule-mutated');
+            }, function() {
+              logger.warn('[DOM Stream] cssom hook unavailable', { reason: 'cssom-hook-unavailable' });
+              sendCssomFreshSnapshot('cssom-hook-unavailable');
+            });
+          } else {
+            markStyleOwnerDirty(sheet, 'cssom-rule-mutated');
+          }
+          return result;
+        };
+      } catch (err) {
+        logger.warn('[DOM Stream] cssom hook unavailable', { reason: 'cssom-hook-unavailable' });
+        sendCssomFreshSnapshot('cssom-hook-unavailable');
+      }
+    });
+  }
+
+  function restoreCssStyleSheetMethods() {
+    if (!nativeCssStyleSheetMethods) return;
+    var proto = window && window.CSSStyleSheet && window.CSSStyleSheet.prototype;
+    if (proto) {
+      Object.keys(nativeCssStyleSheetMethods).forEach(function(name) {
+        try {
+          proto[name] = nativeCssStyleSheetMethods[name];
+        } catch (err) { /* best-effort restore */ }
+      });
+    }
+    nativeCssStyleSheetMethods = null;
+  }
+
+  function reconcileAdoptedStyleSheetsForScope(root, scope) {
+    if (styleMode !== 'cssom') return;
+    try {
+      if (root && root.adoptedStyleSheets) {
+        queueStyleScopeReplacement(scope, root, 'adoptedStyleSheets');
+      }
+    } catch (err) {
+      logger.warn('[DOM Stream] cssom hook unavailable', { reason: 'cssom-hook-unavailable' });
+    }
+  }
+
+  function reconcileAllKnownStyleScopes() {
+    if (styleMode !== 'cssom') return;
+    styleScopeRoots.forEach(function(info) {
+      if (!info || !info.root || !info.scope) return;
+      reconcileAdoptedStyleSheetsForScope(info.root, info.scope);
+    });
+  }
+
+  function sendCssomFreshSnapshot(reason) {
+    if (styleMode !== 'cssom' || !streaming) return;
+    logger.warn('[DOM Stream] cssom resnapshot', {
+      reason: reason || 'cssom-style-source-stale'
+    });
+    safeSend(STREAM.SNAPSHOT, serializeDOM());
+  }
+
   function prepareFrameDocumentClone(frameDoc, bodyClone, cloneToNid) {
     var liveDescendants = frameDoc.body && frameDoc.body.querySelectorAll
       ? frameDoc.body.querySelectorAll('*')
@@ -1044,7 +1484,7 @@ export function createCapture(config) {
       }
       var srcsetVal = clone.getAttribute('srcset');
       if (srcsetVal) clone.setAttribute('srcset', absolutifySrcset(srcsetVal, frameDoc));
-      captureComputedStyles(live, clone);
+      if (styleMode !== 'cssom') captureComputedStyles(live, clone);
       sanitizeForWire('element', { orig: live, clone: clone });
     }
 
@@ -1081,7 +1521,7 @@ export function createCapture(config) {
     var nodeIds = buildNodeIdSidecar(bodyClone, cloneToNid, false);
     var frameShadowRoots = collectShadowRootPayloads(frameDoc.body, nodeIds);
     var nestedFrames = collectFramePayloads(frameDoc.body, cloneToNid);
-    return {
+    var framePayload = {
       frameNid: String(frameNid),
       kind: 'same-origin',
       html: bodyClone.innerHTML || '',
@@ -1105,6 +1545,16 @@ export function createCapture(config) {
       url: frameDoc.location ? String(frameDoc.location.href || '') : '',
       title: frameDoc.title || ''
     };
+    if (styleMode === 'cssom') {
+      var frameCssom = collectCssomStyleSourcesForScope(
+        frameDoc,
+        { kind: 'frame', frameNid: String(frameNid) },
+        { root: frameDoc }
+      );
+      framePayload.styleSources = frameCssom.sources;
+      framePayload.styleStrategy = frameCssom.strategy;
+    }
+    return framePayload;
   }
 
   function collectFramePayloads(root, cloneToNid, excludedFrameNodeIds) {
@@ -2763,8 +3213,8 @@ export function createCapture(config) {
         cl.setAttribute('srcset', absolutifySrcset(srcsetVal));
       }
 
-      // Capture computed styles from original element
-      captureComputedStyles(orig, cl);
+      // Capture generated computed styles only in the default compatibility mode.
+      if (styleMode !== 'cssom') captureComputedStyles(orig, cl);
 
       // SEC-01 re-scrub on FINAL wire values: absolutifyUrl normalizes
       // whitespace-obfuscated schemes (the URL parser strips tab/LF/CR), and
@@ -2802,6 +3252,9 @@ export function createCapture(config) {
     // breakout). Benign CSS passes byte-identical.
     var inlineStyles = collectInlineStylesFrom(document);
 
+    var documentCssom = styleMode === 'cssom'
+      ? collectCssomStyleSourcesForScope(document, { kind: 'document' }, { root: document })
+      : null;
     var html = clone.innerHTML;
     var truncated = false;
     var missingDescendants = 0;
@@ -2887,7 +3340,7 @@ export function createCapture(config) {
     var nodeIds = buildNodeIdSidecar(clone, cloneToNid, false);
     var shadowRoots = collectShadowRootPayloads(document.body, nodeIds, truncatedNodeIds);
     var frames = collectFramePayloads(document.body, cloneToNid, truncatedNodeIds);
-    var budgetedSidecars = pruneSnapshotSidecarsForBudget({
+    var budgetInput = {
       html: html,
       nodeIds: nodeIds,
       truncated: truncated,
@@ -2908,7 +3361,19 @@ export function createCapture(config) {
       title: document.title,
       streamSessionId: streamSessionId || '',
       snapshotId: currentSnapshotId || 0
-    }, shadowRoots, frames, clone, cloneToNid, truncatedNodeIds);
+    };
+    if (documentCssom) {
+      budgetInput.styleSources = documentCssom.sources;
+      budgetInput.styleStrategy = documentCssom.strategy;
+    }
+    var budgetedSidecars = pruneSnapshotSidecarsForBudget(
+      budgetInput,
+      shadowRoots,
+      frames,
+      clone,
+      cloneToNid,
+      truncatedNodeIds
+    );
     html = budgetedSidecars.html;
     nodeIds = budgetedSidecars.nodeIds;
     shadowRoots = budgetedSidecars.shadowRoots;
@@ -2940,6 +3405,10 @@ export function createCapture(config) {
       streamSessionId: streamSessionId || '',
       snapshotId: currentSnapshotId || 0
     };
+    if (documentCssom) {
+      snapshotPayload.styleSources = documentCssom.sources;
+      snapshotPayload.styleStrategy = documentCssom.strategy;
+    }
     return fitSnapshotPayloadForBudget(snapshotPayload, clone, cloneToNid, truncatedNodeIds);
   }
 
@@ -2985,7 +3454,7 @@ export function createCapture(config) {
         nodeIds: rootNid ? [rootNid] : []
       };
     }
-    var computedStyles = collectSubtreeComputedStyles(el);
+    var computedStyles = styleMode === 'cssom' ? new WeakMap() : collectSubtreeComputedStyles(el);
     var rootTag = el.tagName ? String(el.tagName).toLowerCase() : '';
     var baseDoc = el.ownerDocument || document;
     for (var a = 0; a < URL_ATTRS.length; a++) {
@@ -3045,12 +3514,17 @@ export function createCapture(config) {
     var nodeIds = buildNodeIdSidecar(wireClone, cloneToNid, true);
     var shadowRoots = collectShadowRootPayloads(el, nodeIds);
     var frames = collectFramePayloads(el, cloneToNid);
-    return {
+    var addedResult = {
       html: wireClone.outerHTML || '',
       nodeIds: nodeIds,
       shadowRoots: shadowRoots,
       frames: frames
     };
+    if (styleMode === 'cssom') {
+      addedResult.styleSources = [];
+      addedResult.styleStrategy = buildStyleStrategy('cssom', []);
+    }
+    return addedResult;
   }
 
   function contentFreeSubtreeStatus(status) {
@@ -3190,6 +3664,10 @@ export function createCapture(config) {
       }
 
       if (m.type === 'childList') {
+        if (styleMode === 'cssom' && m.target && m.target.nodeType === Node.ELEMENT_NODE) {
+          var childListTag = m.target.tagName ? String(m.target.tagName).toLowerCase() : '';
+          if (childListTag === 'style') markStyleOwnerDirty(m.target, 'style-text-mutated');
+        }
         // Bare text-node add/remove detection (fidelity fix, differential
         // ledger D6): el.textContent = '...' REPLACES the text child, which
         // the observer reports as a childList record with a TEXT-node
@@ -3290,12 +3768,17 @@ export function createCapture(config) {
           }
         }
       } else if (m.type === 'attributes') {
-        var targetNid = getTrackedNodeId(m.target);
-        if (!targetNid) continue;
-
         var attrName = String(m.attributeName || '');
         var attrNameLower = attrName.toLowerCase();
         var attrTargetTag = m.target && m.target.tagName ? String(m.target.tagName).toLowerCase() : '';
+        if (styleMode === 'cssom'
+            && attrTargetTag === 'link'
+            && (attrNameLower === 'href' || attrNameLower === 'media' || attrNameLower === 'disabled')) {
+          markStyleOwnerDirty(m.target, 'link-attr-mutated');
+        }
+        var targetNid = getTrackedNodeId(m.target);
+        if (!targetNid) continue;
+
         if (attrTargetTag === 'iframe' && attrNameLower === 'src') {
           registerFrameLoadListener(m.target, targetNid);
           continue;
@@ -3328,6 +3811,12 @@ export function createCapture(config) {
         }, frameRecord));
       } else if (m.type === 'characterData') {
         var parentEl = m.target.parentElement;
+        if (styleMode === 'cssom'
+            && parentEl
+            && parentEl.tagName
+            && String(parentEl.tagName).toLowerCase() === 'style') {
+          markStyleOwnerDirty(parentEl, 'style-text-mutated');
+        }
         var textNid = getTrackedNodeId(parentEl);
         if (!textNid) continue;
 
@@ -3506,7 +3995,7 @@ export function createCapture(config) {
    */
   function flushMutations() {
     batchTimer = null;
-    if (pendingMutations.length === 0) return;
+    if (pendingMutations.length === 0 && pendingStyleSourceChanges.size === 0) return;
 
     var batch = pendingMutations;
     pendingMutations = [];
@@ -3515,7 +4004,15 @@ export function createCapture(config) {
     // batch was dropped by the chokepoint (counted + logged, never silent),
     // so the snapshot/compare wraps the empty-diffs early return.
     var sanBefore = sanitizeCountersSnapshot();
-    var diffs = processMutationBatch(batch);
+    var diffs = [];
+    flushingMutations = true;
+    try {
+      diffs = processMutationBatch(batch);
+      reconcileAllKnownStyleScopes();
+      diffs = diffs.concat(drainPendingStyleSourceDiffs());
+    } finally {
+      flushingMutations = false;
+    }
     warnIfSanitizeStrips(sanBefore);
     if (diffs.length === 0) return;
 
@@ -3548,15 +4045,22 @@ export function createCapture(config) {
         pendingMutations.push(mutations[i]);
       }
 
-      // Batch flush synced to browser paint cycle via rAF (FIDELITY-03)
-      if (batchTimer) cancelAnimationFrame(batchTimer);
-      batchTimer = requestAnimationFrame(flushMutations);
+      // Batch flush synced to browser paint cycle via rAF (FIDELITY-03).
+      scheduleMutationFlush();
     });
 
     mutationObserver.observe(document.body, mutationObserverOptions());
+    if (styleMode === 'cssom' && document.head) {
+      try {
+        mutationObserver.observe(document.head, mutationObserverOptions());
+      } catch (err) {
+        logger.warn('[DOM Stream] cssom hook unavailable', { reason: 'cssom-hook-unavailable' });
+      }
+    }
     observeOpenShadowRoots(document.body);
     observeSameOriginFrameDocuments(document.body);
     wrapAttachShadow();
+    patchCssStyleSheetMethods();
 
     // Phase 211-02 STREAM-01: 5s capture-side self-watchdog (trip wire).
     // Detects stuck mutation queues without involving the host. Uses a
@@ -3610,6 +4114,7 @@ export function createCapture(config) {
     }
     observedShadowRoots = new WeakSet();
     restoreAttachShadow();
+    restoreCssStyleSheetMethods();
 
     // Flush any remaining mutations.
     // PARITY: the stop-path payload intentionally omits staleFlushCount,
@@ -3620,7 +4125,15 @@ export function createCapture(config) {
       pendingMutations = [];
       // SEC-01: same aggregate strip-warn discipline as flushMutations.
       var sanBefore = sanitizeCountersSnapshot();
-      var diffs = processMutationBatch(batch);
+      flushingMutations = true;
+      var diffs = [];
+      try {
+        diffs = processMutationBatch(batch);
+        reconcileAllKnownStyleScopes();
+        diffs = diffs.concat(drainPendingStyleSourceDiffs());
+      } finally {
+        flushingMutations = false;
+      }
       warnIfSanitizeStrips(sanBefore);
       if (diffs.length > 0) {
         sendMutationDiffs(diffs, { includeStaleFlushCount: false });
