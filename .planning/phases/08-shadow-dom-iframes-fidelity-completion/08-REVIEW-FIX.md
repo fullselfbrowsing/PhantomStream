@@ -1,18 +1,19 @@
 ---
 phase: 08-shadow-dom-iframes-fidelity-completion
 review: 08-REVIEW.md
-fixed: 2026-06-15T21:02:00Z
+fixed: 2026-06-16T04:20:39Z
 status: fixed
 fix_scope: critical_warning
 findings_fixed:
-  critical: 8
+  critical: 12
   warning: 1
   info: 0
-  total: 9
+  total: 13
 commits:
   - 33ae99c
   - 794e57a
   - 94ff5c6
+  - 907e5ed
 ---
 
 # Phase 08: Code Review Fix Report
@@ -32,6 +33,10 @@ Fixed all Critical and Warning findings from all `08-REVIEW.md` passes.
 - **Post-fix CR-03:** Late add mutation batches and subtree responses are bounded against the relay hard cap; oversized add ops become requestable placeholders and oversized subtree responses return content-free `too-large`.
 - **Final CR-01:** Final snapshot fitting now includes aggregate head payloads, shell metadata, and inline styles before sending; oversized head styles are pruned under the relay cap.
 - **Final CR-02:** `stop()` final mutation flush now routes through the same bounded chunk sender used by normal rAF mutation flushes.
+- **Final re-review CR-01:** Snapshot hard fallback now clears oversized `url` payloads so final snapshots cannot exceed the relay cap through long document URLs.
+- **Final re-review CR-02:** The renderer accepts valid empty-string snapshot HTML while still rejecting missing or non-string `html`.
+- **Final re-review CR-03:** Event-driven value diffs now use the bounded mutation sender instead of direct `safeSend`, keeping oversized form values under the relay cap.
+- **Final re-review CR-04:** Same-origin iframe `load` now emits a bounded `DIFF_OP.FRAME` refresh, and the renderer installs that frame payload so navigated frame content and nids are available before later frame-local mutations.
 
 ## Verification
 
@@ -48,7 +53,8 @@ Results:
 
 - Focused review regression gate: 22 tests, 22 pass.
 - Final lifecycle budget regression gate: 8 tests, 8 pass.
-- Phase 8 focused gate: 51 tests, 51 pass.
+- Latest targeted blocker gate: 58 tests, 58 pass.
+- Phase 8 focused gate: 83 tests, 83 pass.
 - Loopback recovery regression gate: included in focused cap check and full suite.
-- Full suite: 376 tests, 376 pass.
-- Playwright inject static forbidden grep returned no matches.
+- Full suite: 380 tests, 380 pass.
+- Playwright inject static forbidden grep returned only the expected `DIFF_OP.FRAME` constant/op lines and no `import`, `export`, `require()`, or `document.dispatchEvent` matches.
