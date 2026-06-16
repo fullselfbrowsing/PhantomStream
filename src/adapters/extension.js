@@ -256,12 +256,24 @@ export function createExtensionAdapter(options) {
     return undefined;
   }
 
-  function handleTransportMessage(message) {
-    var bridge = normalizeBridgeMessage(message);
-    if (!bridge || !CONTROL_TYPES[bridge.type]) return;
-    handleControl(bridge.type, bridge.payload || {}, null).catch(function handleControlFailure(error) {
+  function dispatchTransportControl(type, payload) {
+    if (typeof type !== 'string' || !CONTROL_TYPES[type]) return null;
+    return handleControl(type, payload || {}, null).catch(function handleControlFailure(error) {
       logWarn('transport-control-failed', error);
     });
+  }
+
+  // The transport may dispatch as (type, payload) — the createWebSocketTransport
+  // onMessage contract — or hand us a single { type, payload } message object.
+  // Support both. Returns the in-flight control promise so callers can await the
+  // persist + forward; the transport itself discards the return value.
+  function handleTransportMessage(messageOrType, maybePayload) {
+    if (typeof messageOrType === 'string') {
+      return dispatchTransportControl(messageOrType, maybePayload);
+    }
+    var bridge = normalizeBridgeMessage(messageOrType);
+    if (!bridge) return null;
+    return dispatchTransportControl(bridge.type, bridge.payload || {});
   }
 
   var runtimeListener = function runtimeListener(message, sender) {

@@ -107,6 +107,28 @@ function createTransport() {
   };
 }
 
+// Mirrors createWebSocketTransport's onMessage contract: handlers are invoked
+// as (type, payload), and onMessage returns an unsubscribe function.
+function createTransportWithOnMessage() {
+  const sent = [];
+  const handlers = new Set();
+  return {
+    sent,
+    send(type, payload) {
+      sent.push({ type, payload: clone(payload || {}) });
+    },
+    onMessage(handler) {
+      handlers.add(handler);
+      return () => handlers.delete(handler);
+    },
+    async emit(type, payload) {
+      for (const handler of [...handlers]) {
+        await handler(type, clone(payload || {}));
+      }
+    }
+  };
+}
+
 function hasForbiddenStoredKey(value, forbidden) {
   if (!value || typeof value !== 'object') return false;
   return Object.keys(value).some((key) => {
@@ -275,6 +297,51 @@ test('watchdog alarm rehydrates active state and requests a fresh snapshot', asy
     }
   });
   assert.equal(chrome.storageData[PHANTOMSTREAM_SESSION_KEY].pendingResnapshotReason, 'mv3-watchdog-resnapshot');
+});
+
+test('transport-delivered (type, payload) CONTROL frames are persisted and forwarded', async () => {
+  const chrome = createFakeChrome();
+  const transport = createTransportWithOnMessage();
+  const adapter = createExtensionAdapter({ chrome, transport, now: () => 707 });
+  await adapter.install();
+
+  // createWebSocketTransport dispatches viewer-originated frames as (type, payload).
+  // This emit is the ONLY trigger — it must persist intent and forward to the tab.
+  await transport.emit(CONTROL.START, {
+    roomKey: 'room-ws',
+    wsUrl: 'ws://127.0.0.1:5555/ws?room=room-ws&role=source',
+    tabId: 88
+  });
+
+  const stored = chrome.storageData[PHANTOMSTREAM_SESSION_KEY];
+  assert.deepEqual(stored, {
+    roomKey: 'room-ws',
+    wsUrl: 'ws://127.0.0.1:5555/ws?room=room-ws&role=source',
+    tabId: 88,
+    streamingActive: true,
+    lifecycleIntent: CONTROL.START,
+    pendingResnapshotReason: null,
+    updatedAt: 707
+  });
+  assert.deepEqual(chrome.tabMessages.at(-1), {
+    tabId: 88,
+    message: {
+      type: 'phantomstream:control',
+      message: {
+        type: CONTROL.START,
+        payload: {
+          roomKey: 'room-ws',
+          wsUrl: 'ws://127.0.0.1:5555/ws?room=room-ws&role=source',
+          tabId: 88
+        }
+      }
+    }
+  });
+
+  // A subsequent STOP frame delivered the same way flips streaming off.
+  await transport.emit(CONTROL.STOP, { tabId: 88 });
+  assert.equal(chrome.storageData[PHANTOMSTREAM_SESSION_KEY].streamingActive, false);
+  assert.equal(chrome.storageData[PHANTOMSTREAM_SESSION_KEY].lifecycleIntent, CONTROL.STOP);
 });
 
 test('new adapter instance recovers stream state from storage without module globals', async () => {
