@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 10 plan 10-01 completed; ready to execute 10-02
-last_updated: "2026-06-16T07:45:00Z"
-last_activity: 2026-06-16 -- Phase 10 plan 10-01 RED tests complete
+stopped_at: Phase 10 plan 10-02 completed; ready to execute 10-03
+last_updated: "2026-06-16T07:55:00Z"
+last_activity: 2026-06-16 -- Phase 10 plan 10-02 typed exports complete
 progress:
   total_phases: 13
   completed_phases: 9
   total_plans: 57
-  completed_plans: 53
-  percent: 93
+  completed_plans: 54
+  percent: 95
 ---
 
 # Project State
@@ -26,17 +26,17 @@ See: .planning/PROJECT.md (updated 2026-06-16)
 ## Current Position
 
 Phase: 10
-Plan: 10-02
+Plan: 10-03
 Status: Ready to execute
-Last activity: 2026-06-16 -- Phase 10 plan 10-01 RED tests complete
+Last activity: 2026-06-16 -- Phase 10 plan 10-02 typed exports complete
 
-Progress: [█████████░] 93%
+Progress: [█████████░] 95%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 52
+- Total plans completed: 54
 - Average duration: -
 - Total execution time: 0 hours
 
@@ -84,6 +84,7 @@ Progress: [█████████░] 93%
 | Phase 09 | 2h 20min | 8 plans | 32 files |
 | Phase 10 planning | 25min | 5 plans | 9 files |
 | Phase 10 P01 | 8min | 1 task | 1 file |
+| Phase 10 P02 | 12min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -141,6 +142,7 @@ Recent decisions affecting current work:
 - [Phase 10]: Package remains source-first ESM; TypeScript is used only to generate `.d.ts` from JSDoc.
 - [Phase 10]: Real `npm publish` is an authentication/user-approval gate. Autonomous work may prepare/dry-run trusted publishing, tarball validation, and docs, but must not publish without explicit approval.
 - [Phase 10]: Trusted publishing/provenance should use GitHub-hosted Actions with OIDC (`id-token: write`) and no long-lived `NPM_TOKEN` by default.
+- [Phase 10]: Type declarations are generated for importable `src/**/*.js` modules only; CLI/bin declarations are out of scope for the export map.
 
 ### Pending Todos
 
@@ -162,6 +164,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-16T07:45:00Z
-Stopped at: Phase 10 plan 10-01 completed; ready to execute 10-02
-Resume file: .planning/phases/10-npm-packaging-0-x-publish/10-02-PLAN.md
+Last session: 2026-06-16T07:55:00Z
+Stopped at: Phase 10 plan 10-02 completed; ready to execute 10-03
+Resume file: .planning/phases/10-npm-packaging-0-x-publish/10-03-PLAN.md

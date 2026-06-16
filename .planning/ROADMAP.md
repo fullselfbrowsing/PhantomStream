@@ -181,7 +181,7 @@ Plans:
 - [x] 10-01-PLAN.md — RED package validation tests for exports, types, tarball contents, docs, and release workflow
 
 **Wave 1** *(blocked on 10-01)*
-- [ ] 10-02-PLAN.md — JSDoc declaration generation, root export, and typed export map
+- [x] 10-02-PLAN.md — JSDoc declaration generation, root export, and typed export map
 
 **Wave 2** *(blocked on 10-02)*
 - [ ] 10-03-PLAN.md — Package validation tooling, tarball smoke, and CI package gate
