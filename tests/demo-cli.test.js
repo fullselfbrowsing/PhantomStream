@@ -169,7 +169,7 @@ test('CLI demo prints deterministic source viewer and room lines', async () => {
 
 test('package metadata exposes the phantom-stream binary', async () => {
   const pkg = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
-  assert.equal(pkg.bin['phantom-stream'], './bin/phantom-stream.js');
+  assert.equal(pkg.bin['phantom-stream'], 'bin/phantom-stream.js');
 });
 
 test('two-tab demo pages expose the required UI shell', async () => {

@@ -6,7 +6,10 @@
   "main": "src/index.js",
   "types": "./dist/types/index.d.ts",
   "bin": {
-    "phantom-stream": "./bin/phantom-stream.js"
+    "phantom-stream": "bin/phantom-stream.js"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "files": [
     "src",
@@ -71,7 +74,7 @@
     "attw": "npm run types && attw --pack --profile esm-only",
     "package:pack": "npm run types && npm pack --dry-run",
     "package:smoke": "npm run types && node scripts/package-smoke.mjs",
-    "package:check": "node --test --test-skip-pattern \"CI and publish workflows validate package shape before release\" tests/*.test.js tests/differential/*.test.js && npm run types && npm run lint:package && npm run attw && npm run package:pack && npm run package:smoke",
+    "package:check": "npm test && npm run types && npm run lint:package && npm run attw && npm run package:pack && npm run package:smoke",
     "demo": "node bin/phantom-stream.js demo",
     "demo:playwright": "node bin/phantom-stream.js playwright-demo",
     "example:loopback": "node examples/serve.js"
