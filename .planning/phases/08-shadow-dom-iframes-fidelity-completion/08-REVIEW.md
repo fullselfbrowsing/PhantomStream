@@ -1,8 +1,8 @@
 ---
-phase: "08-shadow-dom-iframes-fidelity-completion"
-reviewed: "2026-06-16T04:29:18Z"
+phase: 08-shadow-dom-iframes-fidelity-completion
+reviewed: "2026-06-16T04:47:26Z"
 depth: standard
-files_reviewed: 34
+files_reviewed: 35
 files_reviewed_list:
   - docs/ARCHITECTURE.md
   - docs/DESIGN-HISTORY.md
@@ -27,6 +27,7 @@ files_reviewed_list:
   - tests/differential/normalize.js
   - tests/differential/oracle.test.js
   - tests/differential/scenarios/phase8-protocol-extensions.js
+  - tests/playwright-adapter-cdp.test.js
   - tests/playwright-adapter.test.js
   - tests/playwright-fidelity-phase8.test.js
   - tests/protocol.test.js
@@ -39,121 +40,62 @@ files_reviewed_list:
   - tests/security-chokepoint-purity.test.js
   - tests/semantic-addressing.test.js
 findings:
-  critical: 2
-  warning: 2
+  critical: 1
+  warning: 0
   info: 0
-  total: 4
+  total: 1
 status: issues_found
 ---
 
 # Phase 8: Code Review Report
 
-**Reviewed:** 2026-06-16T04:29:18Z
+**Reviewed:** 2026-06-16T04:47:26Z
 **Depth:** standard
-**Files Reviewed:** 34
+**Files Reviewed:** 35
 **Status:** issues_found
 
 ## Summary
 
-Re-reviewed Phase 08 after the final review-fix commit, focusing on relay byte budgeting, empty snapshots, event-driven value diffs, and same-origin iframe load refreshes.
+Re-reviewed Phase 08 after commit 7022b15 and the updated review-fix report, with emphasis on Playwright bridge hardening, tokenized init/CDP source, frame and shadow-root relay bounding, requestable placeholder semantics, and the corrected subtree id test.
 
-The four previously reported fixes are present: oversized URLs are cleared from fallback snapshots, empty-string snapshots are accepted by the renderer, event-driven value diffs route through the mutation chunker, and same-origin iframe load emits a `DIFF_OP.FRAME` refresh. Two blockers remain: the Playwright page bridge is forgeable by page JavaScript, and over-cap frame/shadow refresh diffs are still silently dropped. Two warnings cover stale docs and a test that can pass while indexing the wrong subtree node.
+The frame/shadow over-budget paths now route through bounded placeholders, oversized subtree responses are content-free, and the subtree id assertion covers the recovered safe child. One bridge security issue remains: the injected script still sends the bridge token through a mutable page-global binding lookup, so page script can steal the token from any later legitimate capture send and forge allowlisted STREAM messages.
 
 ## Critical Issues
 
-### CR-01: BLOCKER - Playwright page scripts can forge bridge messages around the capture sanitizer
+### CR-01: BLOCKER - Page scripts can steal the Playwright bridge token by wrapping the exposed binding
 
-**File:** `src/adapters/playwright.js:151`, `src/adapters/playwright.js:163`, `src/adapters/playwright-inject.js:3813`
+**File:** `src/adapters/playwright-inject.js:3899`, `src/adapters/playwright-inject.js:3901`, `src/adapters/playwright.js:179`
 
-**Issue:** `page.exposeBinding()` exposes `__phantomStreamBridge` to the page realm, and `bindingCallback()` forwards any main-frame `{ type, payload }` object directly to `transport.send()`. A page script can call `window.__phantomStreamBridge({ type: 'ext:dom-snapshot', payload: ... })` or another stream type itself, bypassing `sanitizeForWire`, password/value masking, byte budgeting, and the capture-owned protocol shape. The injected capture is not the only caller of the binding.
-
-**Fix:**
-
-Add an unguessable adapter-owned capability to bridge calls and reject messages without it; also allowlist capture-to-viewer stream types before forwarding.
-
-```js
-var bridgeToken = randomBytes(32).toString('base64url');
-var allowedBridgeTypes = new Set(Object.values(STREAM));
-
-async function bindingCallback(caller, msg) {
-  if (!msg || msg.token !== bridgeToken) {
-    return { ok: false, error: 'bridge-token-invalid' };
-  }
-  if (!allowedBridgeTypes.has(msg.type)) {
-    return { ok: false, error: 'bridge-type-invalid' };
-  }
-  transport.send(msg.type, msg.payload || {});
-  return { ok: true };
-}
-```
-
-Generate/wrap `playwright-inject.js` so only the injected transport closure can add `token: bridgeToken`; do not place the token on `window`.
-
-### CR-02: BLOCKER - Over-cap iframe and shadow refresh diffs are still dropped instead of bounded
-
-**File:** `src/capture/index.js:1193`, `src/capture/index.js:3353`, `src/capture/index.js:3381`, `src/capture/index.js:3400`, `src/adapters/playwright-inject.js:1230`, `src/adapters/playwright-inject.js:3440`
-
-**Issue:** `sendMutationDiffs()` drops any single diff whose payload exceeds `RELAY_PER_MESSAGE_LIMIT_BYTES`, but `boundMutationDiffForBudget()` only creates a placeholder for `DIFF_OP.ADD`. The new same-origin iframe `load` refresh uses `DIFF_OP.FRAME`, and live shadow updates use `DIFF_OP.SHADOW_ROOT`; both are non-ADD ops and are still dropped when their serialized content is large. I reproduced `frameOps: 0` with a warning for `op: "frame"` after loading a >1 MiB same-origin iframe, and `shadowOps: 0` with a warning for `op: "shadow-root"` after a >1 MiB shadow-root update. The renderer keeps stale old frame/shadow content with no requestable marker.
+**Issue:** `bindingCallback()` rejects missing tokens and disallowed message types, but the injected transport undermines that check by reading `window.__phantomStreamBridge` every time it sends and passing `{ token: PHANTOM_STREAM_BRIDGE_TOKEN, ... }` through that mutable page-global function. After the init script starts, hostile page code can wrap the exposed binding, observe the next legitimate mutation/scroll/subtree response, recover the token, and then call the original binding with forged allowlisted `STREAM` messages. The allowlist does not contain this because forged `ext:dom-snapshot`, `ext:dom-mutations`, or `ext:ps-subtree-response` messages are valid stream types; this bypasses capture-side sanitization, masking, and relay-budget chokepoints before the host transport sees the payload.
 
 **Fix:**
+```javascript
+var phantomStreamBridge = typeof window.__phantomStreamBridge === "function"
+  ? window.__phantomStreamBridge
+  : null;
 
-Extend the budgeter to bound all large replacement-style diffs before the drop check, or fall back to a bounded full snapshot for those cases. Do not let `DIFF_OP.FRAME` or `DIFF_OP.SHADOW_ROOT` reach the generic drop path silently.
-
-```js
-function boundMutationDiffForBudget(diff, options) {
-  if (!diff) return null;
-  if (wireByteLength(mutationPayloadForBudget([diff], options)) <= RELAY_PER_MESSAGE_LIMIT_BYTES) {
-    return diff;
-  }
-  if (diff.op === DIFF_OP.ADD) return boundedAddPlaceholder(diff);
-  if (diff.op === DIFF_OP.FRAME) return boundedFramePlaceholder(diff);
-  if (diff.op === DIFF_OP.SHADOW_ROOT) return boundedShadowPlaceholder(diff);
-  return null;
-}
+var phantomStreamTransport = {
+  send: function (type, payload) {
+    try {
+      if (typeof phantomStreamBridge !== "function") return;
+      var result = phantomStreamBridge({
+        token: PHANTOM_STREAM_BRIDGE_TOKEN,
+        type: type,
+        payload: payload || {}
+      });
+      if (result && typeof result.catch === "function") {
+        result.catch(function () {});
+      }
+    } catch (e) { /* bridge failures must not break capture */ }
+  },
+  flush: function () {}
+};
 ```
 
-Apply the same generated change to `src/adapters/playwright-inject.js`, and add regression tests for oversized iframe load refreshes and oversized live shadow-root replacements.
-
-## Warnings
-
-### WR-01: WARNING - Architecture docs still describe obsolete resume semantics
-
-**File:** `docs/ARCHITECTURE.md:135`
-
-**Issue:** The architecture document says `domStreamResume` creates a fresh session and snapshot. The implementation and capture README now explicitly keep the same `streamSessionId`/`snapshotId` and do not send a snapshot on `resume()`. This stale contract can cause host integrations to rely on a refresh that will never happen.
-
-**Fix:**
-
-Replace the lifecycle bullet with the current contract:
-
-```markdown
-Control messages: `domStreamStart` (fresh session + snapshot + observers),
-`domStreamStop`, `domStreamPause` (observers off, session retained),
-`domStreamResume` (observers re-armed, same session/snapshot, no snapshot).
-```
-
-### WR-02: WARNING - Subtree response test can pass while indexing the wrong node
-
-**File:** `tests/renderer-subtree-fetch.test.js:166`, `tests/renderer-subtree-fetch.test.js:195`
-
-**Issue:** The test installs HTML with four elements (`section`, `button`, `a`, `p`) but supplies only two `nodeIds`. The renderer pairs ids by element preorder, so `safe-child-nid` is assigned to the button, not the `<p id="safe-child">`. The assertion only checks that `viewer.resolveNode('safe-child-nid')` is truthy, so this test passes even when the indexed nid points at the wrong element.
-
-**Fix:**
-
-Keep the sidecar length aligned and assert the resolved nid maps to the intended element, for example by giving the safe child a distinctive mocked rect before calling `resolveNode()`.
-
-```js
-nodeIds: ['truncated-nid', 'unsafe-nid', 'bad-link-nid', 'safe-child-nid'];
-
-const safeChild = recovered.querySelector('#safe-child');
-safeChild.getBoundingClientRect = () => ({ left: 7, top: 11, width: 13, height: 17 });
-assert.deepEqual(viewer.resolveNode('safe-child-nid').rect, {
-  left: 7, top: 11, width: 13, height: 17
-});
-```
+Capture the original binding in the injected closure before page scripts can replace it, and never read `window.__phantomStreamBridge` at send time. Add a regression test that replaces/wraps `window.__phantomStreamBridge` after injection, triggers a capture send, and asserts the wrapper never observes a token; keep the existing adapter tests that reject missing-token and wrong-type direct binding calls.
 
 ---
 
-_Reviewed: 2026-06-16T04:29:18Z_
+_Reviewed: 2026-06-16T04:47:26Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: standard_
