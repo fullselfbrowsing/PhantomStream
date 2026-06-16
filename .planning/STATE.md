@@ -5,7 +5,7 @@ milestone_name: milestone
 status: ready_to_plan
 stopped_at: Phase 08 complete (9/9) — ready to discuss Phase 9
 last_updated: 2026-06-16T05:08:51.490Z
-last_activity: 2026-06-15 -- Phase 08 execution started
+last_activity: 2026-06-16 -- Phase 08 complete; ready to plan Phase 9
 progress:
   total_phases: 13
   completed_phases: 7
@@ -18,7 +18,7 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-06-15)
+See: .planning/PROJECT.md (updated 2026-06-16)
 
 **Core value:** A live, trustworthy, low-bandwidth, semantically addressable mirror of a real browser tab — capture → relay → render → remote-control must work end-to-end as a standalone framework.
 **Current focus:** Phase 9 — cssom capture mode
@@ -136,7 +136,6 @@ None yet.
 
 ### Blockers/Concerns
 
-- [Phase 8]: Shadow DOM protocol extension needs a research pass during planning (slot semantics, declarative shadow DOM)
 - [Phase 9]: CSSOM mutation tracking scope (style-ops channel vs documented snapshot-only limitation) is a deliberate Phase 9 planning decision
 - [Phase 12]: Baseline-fairness protocol details and the semantic-fidelity metric definition need a dedicated research pass before harness implementation
 - [Requirements]: REQUIREMENTS.md previously stated "32 total" v1 requirements; actual count is 39 — corrected during roadmap creation
@@ -152,6 +151,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-15T17:21:40.556Z
-Stopped at: Phase 8 context gathered
-Resume file: .planning/phases/08-shadow-dom-iframes-fidelity-completion/08-CONTEXT.md
+Last session: 2026-06-16T05:08:51.490Z
+Stopped at: Phase 08 complete (9/9) — ready to discuss Phase 9
+Resume file: .planning/ROADMAP.md#phase-9-cssom-capture-mode
