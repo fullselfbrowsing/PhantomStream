@@ -478,27 +478,19 @@ All claims in this research were verified from local project files, package/CLI 
 |---|-------|---------|---------------|
 | -- | No assumed claims recorded. | -- | -- |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **What exact config and hook names should the planner choose?**
-   - What we know: Phase 9 requires a config flag and an explicit adapter-permitted fetch hook. [VERIFIED: .planning/phases/09-cssom-capture-mode/09-CONTEXT.md]
-   - What's unclear: Exact names are delegated to planner discretion. [VERIFIED: .planning/phases/09-cssom-capture-mode/09-CONTEXT.md]
-   - Recommendation: Use `styleMode: "computed" | "cssom"` and `fetchStylesheet({ href, scope, ownerKind })` unless existing capture config naming suggests a better fit during implementation. [VERIFIED: src/capture/index.js]
+   - RESOLVED: Plans use `styleMode: "computed" | "cssom"` as the capture config flag and `fetchStylesheet({ href, scope, ownerKind })` as the explicit adapter-permitted fetch hook. This implements the locked config-gated CSSOM mode and explicit host capability boundary. [VERIFIED: .planning/phases/09-cssom-capture-mode/09-CONTEXT.md; VERIFIED: src/capture/index.js]
 
 2. **How should adopted stylesheet list changes be observed across browsers?**
-   - What we know: `adoptedStyleSheets` exists on `Document` and `ShadowRoot`, and CSSStyleSheet methods are observable only if the capture runtime wraps them or reconciles state. [CITED: https://developer.mozilla.org/en-US/docs/Web/API/Document/adoptedStyleSheets; CITED: https://developer.mozilla.org/en-US/docs/Web/API/ShadowRoot/adoptedStyleSheets; CITED: https://www.w3.org/TR/cssom-1/]
-   - What's unclear: The safest minimum hook surface for assignment, array mutation, and method patch cleanup in the checked-in injected artifact. [VERIFIED: .planning/phases/09-cssom-capture-mode/09-CONTEXT.md]
-   - Recommendation: Patch `CSSStyleSheet.prototype` methods when configurable, reconcile known scope `adoptedStyleSheets` references during rAF flush, and emit diagnostics/resnapshot signals for unsupported cases. [VERIFIED: .planning/phases/09-cssom-capture-mode/09-CONTEXT.md]
+   - RESOLVED: Plans use an adopted-sheet wrapper plus rAF reconciliation approach: patch `CSSStyleSheet.prototype` methods when configurable, reconcile known document/shadow `adoptedStyleSheets` references during the style-source flush, and emit content-free diagnostics/resnapshot signals for unsupported hooks. [VERIFIED: .planning/phases/09-cssom-capture-mode/09-CONTEXT.md; CITED: https://developer.mozilla.org/en-US/docs/Web/API/Document/adoptedStyleSheets; CITED: https://developer.mozilla.org/en-US/docs/Web/API/ShadowRoot/adoptedStyleSheets; CITED: https://www.w3.org/TR/cssom-1/]
 
 3. **Should Playwright be upgraded from local 1.60.0 to registry 1.61.0?**
-   - What we know: Local tests use Playwright `^1.60.0`, CLI reports 1.60.0, and registry latest is 1.61.0 as of 2026-06-15. [VERIFIED: package.json; VERIFIED: `npx --yes playwright --version`; VERIFIED: `npm view playwright version time.modified`]
-   - What's unclear: Whether Phase 9 exposes a browser-specific issue fixed only in 1.61.0. [VERIFIED: current environment probe]
-   - Recommendation: Do not plan an upgrade unless a failing CSSOM fixture proves it is necessary. [VERIFIED: .planning/phases/09-cssom-capture-mode/09-CONTEXT.md]
+   - RESOLVED: Plans keep the existing Playwright package range and do not upgrade unless a failing Phase 9 CSSOM fixture proves the local browser path is blocked. Local tests use Playwright `^1.60.0`, CLI reports 1.60.0, and registry latest was 1.61.0 as of 2026-06-15. [VERIFIED: package.json; VERIFIED: `npx --yes playwright --version`; VERIFIED: `npm view playwright version time.modified`; VERIFIED: .planning/phases/09-cssom-capture-mode/09-CONTEXT.md]
 
 4. **What exact source-id format should be used?**
-   - What we know: Stable source identity is required for later updates. [VERIFIED: .planning/phases/09-cssom-capture-mode/09-CONTEXT.md]
-   - What's unclear: Exact field and id format are planner discretion. [VERIFIED: .planning/phases/09-cssom-capture-mode/09-CONTEXT.md]
-   - Recommendation: Use deterministic scope/order/owner identifiers such as `doc:3:style:n42`, `shadow:n17:2:constructable`, and `frame:n31:1:link` with content-free ids. [VERIFIED: src/capture/index.js; VERIFIED: docs/SECURITY.md]
+   - RESOLVED: Plans use deterministic, content-free scope/order/owner identifiers such as `doc:3:style:n42`, `shadow:n17:2:constructable`, and `frame:n31:1:link` so later style-source updates have stable identity without leaking CSS or URL content. [VERIFIED: .planning/phases/09-cssom-capture-mode/09-CONTEXT.md; VERIFIED: src/capture/index.js; VERIFIED: docs/SECURITY.md]
 
 ## Environment Availability
 
