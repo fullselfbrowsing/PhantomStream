@@ -23,6 +23,8 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
+      # Playwright fidelity/adapter tests launch a real Chromium; install it (+ OS deps) before the suite
+      - run: npx playwright install --with-deps chromium
       - run: npm test
   package:
     runs-on: ubuntu-latest
@@ -33,4 +35,6 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # package:check runs the full suite, which includes the Chromium-backed Playwright tests
+      - run: npx playwright install --with-deps chromium
       - run: npm run package:check

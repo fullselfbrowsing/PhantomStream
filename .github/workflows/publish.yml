@@ -21,5 +21,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false
       - run: npm ci
+      # package:check runs the full suite, including the Chromium-backed Playwright tests
+      - run: npx playwright install --with-deps chromium
       - run: npm run package:check
       - run: npm publish --access public
