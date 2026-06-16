@@ -43,14 +43,11 @@ standalone framework.
 - ✓ Extension MV3 + bookmarklet adapters — generated browser inject artifact, page-world bridge, service-worker watchdog state, bookmarklet loader diagnostics, and browser UAT for live mirror paths — Validated in Phase 6 (ADPT-01, ADPT-03)
 - ✓ WeakMap node identity + semantic addressing API — capture no longer writes framework identity attributes into the observed page, identity travels through `nodeIds` sidecars, renderer resolves through a private Map index, and hosts can use `getNodeId`, `resolveNode`, `highlightNode`, and `clearHighlight` — Validated in Phase 7 (CAPT-07, VIEW-03)
 - ✓ Modern web fidelity completion — open shadow DOM sidecars/reconstruction, same-origin iframe mirroring with cross-origin placeholders, live form value diffs, computed styles for late-added nodes, bounded on-demand subtree recovery, relay-cap hardening, and Playwright inject parity — Validated in Phase 8 (CAPT-05, CAPT-06, CAPT-08, CAPT-09, CAPT-11)
+- ✓ Stylesheet-centric capture mode (CSSOM) — opt-in `styleMode: 'cssom'`, scoped `styleSources[]` / `styleStrategy`, live `DIFF_OP.STYLE_SOURCE` ops, fallback diagnostics, Playwright inject support, and D25 oracle coverage — Validated in Phase 9 (CAPT-10)
 
 ### Active
 
 <!-- Current scope. Building toward these. -->
-
-**Framework extraction (first priority):**
-- [ ] Remaining inherited limitations fixed in the standalone v1:
-  - [ ] Stylesheet-centric capture mode (CSSOM) — fixes frozen-style drift, shrinks payloads, enables the paper's ablation
 
 **Plug-and-play surface:**
 - [ ] npm package published as `@fullselfbrowsing/phantom-stream` with JSDoc-generated `.d.ts`
@@ -84,7 +81,8 @@ standalone framework.
   capture/viewer cores, Phase 3 sanitization and masking gates, the raw relay/ws backend,
   endpoint WebSocket transport, Playwright/CDP adapter, extension/bookmarklet adapters,
   the Phase 7 WeakMap/nodeIds identity contract with semantic addressing APIs, and the
-  Phase 8 shadow DOM/iframe/value/subtree fidelity extensions.
+  Phase 8 shadow DOM/iframe/value/subtree fidelity extensions, and Phase 9 opt-in CSSOM
+  stylesheet capture.
 - **Docs are strong:** `docs/ARCHITECTURE.md` (full system description + 6 known limitations),
   `docs/DESIGN-HISTORY.md` (what failed and why — e.g. the 45 s YouTube serialize that forced
   curated style capture), `docs/paper/OUTLINE.md` (paper structure + evaluation plan).
@@ -115,7 +113,7 @@ standalone framework.
 |----------|-----------|---------|
 | Framework-first sequencing (extract → demo → FSB swap-in → paper) | A clean standalone framework is the prerequisite for both other deliverables | — Pending |
 | Plain JS ESM + JSDoc types, generated `.d.ts` (not TypeScript migration) | Sources must inject build-free into page contexts; consumers still get full types; `tsc --checkJs` enforces in CI | — Pending |
-| All six inherited limitations are v1 must-fix, not deferred | Published framework can't ship known security/fidelity gaps; CSSOM mode doubles as paper ablation | — Pending |
+| All six inherited limitations are v1 must-fix, not deferred | Published framework can't ship known security/fidelity gaps; CSSOM mode doubles as paper ablation | Validated in Phase 9 |
 | FSB integration verified from this repo via published npm package | Keeps "SDK that plugs back into FSB" an observable success criterion here, while FSB code stays in its own repo | — Pending |
 | Full system-track paper (WWW/UIST/CHI tier), no fixed deadline | Deep evaluation valued over fast turnaround; arXiv/workshop versions can derive from the full draft | — Pending |
 | Both demos: two-tab + Playwright-driven | Two-tab proves plug-and-play; Playwright proves the agent-observability story the paper leads with | — Pending |
@@ -143,4 +141,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-16 after Phase 8 completion (shadow DOM, iframes, form values, late styles, subtree recovery, and relay-cap fidelity validated)*
+*Last updated: 2026-06-16 after Phase 9 completion (CSSOM capture mode validated and Phase 10 packaging next)*
