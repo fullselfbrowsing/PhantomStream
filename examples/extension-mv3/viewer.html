@@ -37,11 +37,18 @@ var viewer = createViewer({
   }
 });
 
-viewer.on('state', function (state) {
-  document.getElementById('lifecycle').textContent = state.lifecycle;
+function sumCounts(map) {
+  var total = 0;
+  map = map || {};
+  Object.keys(map).forEach(function (key) { total += map[key] || 0; });
+  return total;
+}
+
+viewer.on('state', function (event) {
+  document.getElementById('lifecycle').textContent = event.state;
 });
 viewer.on('health', function (health) {
-  document.getElementById('health').textContent = String(health.framesReceived || 0) + ' frames';
+  document.getElementById('health').textContent = String(sumCounts(health.receivedByType)) + ' frames';
 });
 </script>
 </body>
