@@ -108,12 +108,13 @@ Phase 9 added optional stylesheet-centric capture:
 
 ## Where the standalone framework goes from here
 
-See `docs/ARCHITECTURE.md` §6 for the inherited limitations. The extraction roadmap, in
-order of research value:
+The standalone framework now has package quickstarts in
+`docs/QUICKSTARTS.md`. The remaining roadmap is publication and research
+work, not another capture fidelity pass:
 
-1. **Decouple capture from `chrome.runtime`** — a transport interface so the capture core
-   runs in any injection context (extension, Playwright/CDP, bookmarklet, embedded SDK).
-2. **Sanitization as a first-class stage** — strip `on*`/`javascript:` on capture, enforce
-   sandboxed rendering on the viewer.
-3. **Evaluation harness** — bandwidth/latency/fidelity benchmarks vs. video streaming and
-   rrweb-style record/replay, for the paper.
+1. **0.x package release** — validated npm package, trusted publishing setup,
+   and quickstarts.
+2. **FSB swap-in** — consume the published package in the original downstream
+   app before freezing 1.0.
+3. **Evaluation harness** — bandwidth/latency/fidelity benchmarks vs. video
+   streaming and rrweb-style record/replay, for the paper.

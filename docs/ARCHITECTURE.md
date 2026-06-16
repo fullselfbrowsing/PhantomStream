@@ -4,6 +4,8 @@ This document describes the system as it shipped inside FSB (milestone v0.9.9.1 
 Stream" plus the reliability hardening of phases 211 and 276). File references point at the
 verbatim copies under `reference/`.
 
+For runnable package setup paths, see [QUICKSTARTS.md](QUICKSTARTS.md).
+
 ## 1. Overview
 
 PhantomStream mirrors a live browser tab to a remote viewer by streaming the page as
@@ -236,10 +238,11 @@ script.
 | Forced layout thrash during truncation | single read-pass into a Map before any write |
 | Heavy pages (300+ computed props/element) | curated 85-property style list + default elision |
 
-## 6. Known limitations (inherited; targets for the standalone framework)
+## 6. Resolved limitations and residual boundaries
 
-These are honest weaknesses of the shipped/reference design and the remaining
-standalone limitations after Phase 8:
+These were weaknesses of the shipped/reference design. The standalone package
+has resolved the high-value framework gaps; the remaining items below are
+explicit browser/security boundaries or intentional default-mode tradeoffs:
 
 1. **Computed mode still freezes styles by design.** In default computed mode,
    inlined styles are snapshot-time state. Class-flip diffs (`attr` ops) can

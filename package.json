@@ -71,7 +71,7 @@
     "attw": "npm run types && attw --pack --profile esm-only",
     "package:pack": "npm run types && npm pack --dry-run",
     "package:smoke": "npm run types && node scripts/package-smoke.mjs",
-    "package:check": "node --test --test-skip-pattern \"CI and publish workflows validate package shape before release|package docs cover quickstarts, release gates, and shipped CSSOM mode\" tests/*.test.js tests/differential/*.test.js && npm run types && npm run lint:package && npm run attw && npm run package:pack && npm run package:smoke",
+    "package:check": "node --test --test-skip-pattern \"CI and publish workflows validate package shape before release\" tests/*.test.js tests/differential/*.test.js && npm run types && npm run lint:package && npm run attw && npm run package:pack && npm run package:smoke",
     "demo": "node bin/phantom-stream.js demo",
     "demo:playwright": "node bin/phantom-stream.js playwright-demo",
     "example:loopback": "node examples/serve.js"
