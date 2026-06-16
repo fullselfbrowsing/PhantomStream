@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { createCapture } from '../src/capture/index.js';
-import { SNAPSHOT_BUDGET_BYTES } from '../src/protocol/constants.js';
+import { RELAY_PER_MESSAGE_LIMIT_BYTES, SNAPSHOT_BUDGET_BYTES } from '../src/protocol/constants.js';
 import { STREAM, DIFF_OP } from '../src/protocol/messages.js';
 
 const AUDITED_GLOBALS = [
@@ -417,6 +417,50 @@ test('D-11 iframe load re-registers navigated same-origin frame documents', asyn
       )),
       'iframe load listener re-registers the new same-origin frame document'
     );
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-19 oversized same-origin iframe load refreshes emit bounded requestable placeholders', async () => {
+  const env = setupEnv('<main id="root"><iframe id="same-frame" src="/frame.html"></iframe></main>');
+  try {
+    const frame = env.document.getElementById('same-frame');
+    populateFrame(frame,
+      '<!DOCTYPE html><html><body><p id="before-load">Before load</p></body></html>'
+    );
+
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const frameNid = env.capture.getNodeId(frame);
+    const nextDoc = populateFrame(frame,
+      '<!DOCTYPE html><html><body><section id="oversized-loaded-frame">'
+        + 'x'.repeat(RELAY_PER_MESSAGE_LIMIT_BYTES + 1024)
+        + '</section></body></html>'
+    );
+    const oversizedRoot = nextDoc.getElementById('oversized-loaded-frame');
+    frame.dispatchEvent(new env.window.Event('load'));
+    await settle(env.window);
+
+    const refreshMessage = transport.sent.find((message) => (
+      message.type === STREAM.MUTATIONS
+      && (message.payload.mutations || []).some((op) => op.op === DIFF_OP.FRAME && op.frameNid === frameNid)
+    ));
+    assert.ok(refreshMessage, 'oversized iframe load still emits a frame refresh message');
+    assert.equal(wireByteLength(refreshMessage.payload) <= RELAY_PER_MESSAGE_LIMIT_BYTES, true,
+      'bounded frame refresh payload stays under the relay cap');
+
+    const frameRefresh = refreshMessage.payload.mutations.find((op) => op.op === DIFF_OP.FRAME);
+    assert.equal(frameRefresh.frame.truncated, true, 'oversized frame refresh is explicit about truncation');
+    assert.ok(frameRefresh.frame.html.includes('data-phantomstream-truncated="true"'),
+      'oversized frame refresh carries a requestable placeholder');
+    assert.equal(frameRefresh.frame.html.includes('oversized-loaded-frame'), false,
+      'oversized frame HTML is not sent after bounding');
+    assert.ok(frameRefresh.frame.nodeIds.includes(env.capture.getNodeId(oversizedRoot)),
+      'placeholder is keyed by the oversized frame content nid');
   } finally {
     env.teardown();
   }

@@ -77,10 +77,11 @@ test('CDP install registers the same new-document inject artifact', async () => 
 
   assert.equal(page.calls[0].method, 'exposeBinding');
   assert.equal(page.calls[1].method, 'addInitScript');
-  assert.deepEqual(cdpSession.sent[0], {
-    method: 'Page.addScriptToEvaluateOnNewDocument',
-    params: { source: getPlaywrightInjectSource() },
-  });
+  assert.equal(cdpSession.sent[0].method, 'Page.addScriptToEvaluateOnNewDocument');
+  assert.equal(cdpSession.sent[0].params.source, page.calls[1].content);
+  assert.notEqual(cdpSession.sent[0].params.source, getPlaywrightInjectSource());
+  assert.match(cdpSession.sent[0].params.source, /var PHANTOM_STREAM_BRIDGE_TOKEN = "[^"]+";/);
+  assert.equal(cdpSession.sent[0].params.source.includes('window.__phantomStreamBridgeToken'), false);
 });
 
 test('CDP mode replays approved input through Input domain methods', async () => {

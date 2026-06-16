@@ -172,7 +172,7 @@ test('D-19/D-21 current SUBTREE_RESPONSE replaces a truncated placeholder after 
         + '<a id="bad-link" href="javascript:alert(1)">bad url</a>'
         + '<p id="safe-child">recovered content</p>'
         + '</section>',
-      nodeIds: ['truncated-nid', 'safe-child-nid'],
+      nodeIds: ['truncated-nid', 'unsafe-nid', 'bad-link-nid', 'safe-child-nid'],
       shadowRoots: [],
       frames: [],
       streamSessionId: 'stream-current',
@@ -192,7 +192,21 @@ test('D-19/D-21 current SUBTREE_RESPONSE replaces a truncated placeholder after 
     assert.equal(recovered.querySelector('#bad-link').hasAttribute('href'), false,
       'dangerous href is stripped before import');
     assert.equal(recovered.querySelector('#safe-child').textContent, 'recovered content');
-    assert.ok(viewer.resolveNode('safe-child-nid'), 'response nodeIds are indexed');
+    const safeChild = recovered.querySelector('#safe-child');
+    safeChild.getBoundingClientRect = () => ({
+      left: 7,
+      top: 11,
+      width: 13,
+      height: 17,
+      right: 20,
+      bottom: 28,
+    });
+    assert.deepEqual(viewer.resolveNode('safe-child-nid').rect, {
+      left: 7,
+      top: 11,
+      width: 13,
+      height: 17,
+    }, 'safe-child-nid resolves to the intended recovered element');
     assert.ok(viewer.resolveNode('truncated-nid'), 'requested root nid is re-indexed');
   } finally {
     env.teardown();

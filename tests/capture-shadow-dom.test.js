@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { createCapture } from '../src/capture/index.js';
-import { SNAPSHOT_BUDGET_BYTES } from '../src/protocol/constants.js';
+import { RELAY_PER_MESSAGE_LIMIT_BYTES, SNAPSHOT_BUDGET_BYTES } from '../src/protocol/constants.js';
 import { STREAM, DIFF_OP } from '../src/protocol/messages.js';
 
 const AUDITED_GLOBALS = [
@@ -212,6 +212,46 @@ test('D-07 mutation inside mirrored open shadow root emits shadow-aware sidecar 
     assert.equal(Array.isArray(shadowOps[0].nodeIds), true, 'shadow mutation carries nodeIds');
     assert.ok(shadowOps[0].nodeIds.includes(env.capture.getNodeId(added)), 'added shadow node is indexed');
     assert.equal(JSON.stringify(transport.sent).includes('data-fsb-nid'), false, 'wire identity is sidecar-only');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('D-19 oversized live shadow root replacements emit bounded requestable placeholders', async () => {
+  const env = setupEnv('<main id="root"><fs-card id="card"></fs-card></main>');
+  try {
+    const host = env.document.getElementById('card');
+    const root = host.attachShadow({ mode: 'open' });
+    root.innerHTML = '<section id="shadow-before">Before</section>';
+
+    const transport = createRecordingTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    root.innerHTML = '<section id="oversized-shadow-live">'
+      + 'x'.repeat(RELAY_PER_MESSAGE_LIMIT_BYTES + 1024)
+      + '</section>';
+    const oversizedRoot = root.getElementById('oversized-shadow-live');
+    await settle(env.window);
+
+    const shadowMessage = transport.sent.find((message) => (
+      message.type === STREAM.MUTATIONS
+      && (message.payload.mutations || []).some((op) => op.op === DIFF_OP.SHADOW_ROOT)
+    ));
+    assert.ok(shadowMessage, 'oversized shadow replacement still emits a shadow-root mutation');
+    assert.equal(wireByteLength(shadowMessage.payload) <= RELAY_PER_MESSAGE_LIMIT_BYTES, true,
+      'bounded shadow-root mutation payload stays under the relay cap');
+
+    const shadowOp = shadowMessage.payload.mutations.find((op) => op.op === DIFF_OP.SHADOW_ROOT);
+    assert.equal(shadowOp.hostNid, env.capture.getNodeId(host), 'shadow replacement remains scoped to the host nid');
+    assert.equal(shadowOp.truncated, true, 'oversized shadow replacement is explicit about truncation');
+    assert.ok(shadowOp.html.includes('data-phantomstream-truncated="true"'),
+      'oversized shadow replacement carries a requestable placeholder');
+    assert.equal(shadowOp.html.includes('oversized-shadow-live'), false,
+      'oversized shadow HTML is not sent after bounding');
+    assert.ok(shadowOp.nodeIds.includes(env.capture.getNodeId(oversizedRoot)),
+      'placeholder is keyed by the oversized shadow content nid');
   } finally {
     env.teardown();
   }

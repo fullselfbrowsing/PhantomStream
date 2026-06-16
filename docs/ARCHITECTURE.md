@@ -133,8 +133,9 @@ the next flush envelope so the host can observe rescue frequency.
 ### 2.8 Lifecycle & readiness
 
 Control messages: `domStreamStart` (fresh session + snapshot + observers),
-`domStreamStop`, `domStreamPause` (observers off, session retained), `domStreamResume`
-(fresh session + snapshot), `pingDomStream` (synchronous readiness probe).
+`domStreamStop`, `domStreamPause` (observers off, session retained),
+`domStreamResume` (observers re-armed, same session/snapshot, no snapshot),
+`pingDomStream` (synchronous readiness probe).
 
 Auto-start chain: module load → `domStreamReady` ping → host issues stream start. If the
 viewer's start request arrives before the module loads (slow pages), the host parks it in

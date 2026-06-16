@@ -3,6 +3,7 @@
   if (window.top !== window) return;
   if (window.__phantomStreamInjected) return;
   window.__phantomStreamInjected = true;
+  var PHANTOM_STREAM_BRIDGE_TOKEN = "";
 
   var RELAY_PER_MESSAGE_LIMIT_BYTES = 1048576;
   var SNAPSHOT_BUDGET_BYTES = Math.floor(RELAY_PER_MESSAGE_LIMIT_BYTES * 0.8);
@@ -3415,11 +3416,19 @@ function createCapture(config) {
     return payload;
   }
 
-  function boundMutationDiffForBudget(diff) {
-    if (!diff || diff.op !== DIFF_OP.ADD) return diff;
-    if (wireByteLength(mutationPayloadForBudget([diff])) <= RELAY_PER_MESSAGE_LIMIT_BYTES) return diff;
+  function firstPayloadNodeId(nodeIds) {
+    if (!Array.isArray(nodeIds)) return '';
+    for (var i = 0; i < nodeIds.length; i++) {
+      if (nodeIds[i] !== undefined && nodeIds[i] !== null && String(nodeIds[i]) !== '') {
+        return String(nodeIds[i]);
+      }
+    }
+    return '';
+  }
+
+  function boundedAddPlaceholder(diff) {
     var rootNid = Array.isArray(diff.nodeIds) && diff.nodeIds.length ? diff.nodeIds[0] : '';
-    if (!rootNid) return diff;
+    if (!rootNid) return null;
     var bounded = Object.assign({
       op: DIFF_OP.ADD,
       parentNid: diff.parentNid || '',
@@ -3429,10 +3438,87 @@ function createCapture(config) {
     return bounded;
   }
 
+  function boundedFramePlaceholder(diff) {
+    var frame = diff && diff.frame ? diff.frame : {};
+    var frameNid = String((diff && diff.frameNid) || frame.frameNid || '');
+    if (!frameNid) return null;
+    var rootNid = firstPayloadNodeId(frame.nodeIds) || String(frame.bodyNid || frame.htmlNid || '');
+    if (!rootNid) return null;
+    var placeholder = truncatedPayloadForNid(document, rootNid);
+    var boundedFrame = {
+      frameNid: frameNid,
+      kind: 'same-origin',
+      html: placeholder.html || '',
+      nodeIds: placeholder.nodeIds || [],
+      shadowRoots: [],
+      htmlNid: frame.htmlNid ? String(frame.htmlNid) : '',
+      bodyNid: frame.bodyNid ? String(frame.bodyNid) : '',
+      frames: [],
+      stylesheets: [],
+      inlineStyles: [],
+      htmlAttrs: {},
+      bodyAttrs: {},
+      htmlStyle: '',
+      bodyStyle: '',
+      scrollX: frame.scrollX || 0,
+      scrollY: frame.scrollY || 0,
+      viewportWidth: frame.viewportWidth || 0,
+      viewportHeight: frame.viewportHeight || 0,
+      pageWidth: frame.pageWidth || 0,
+      pageHeight: frame.pageHeight || 0,
+      url: '',
+      title: '',
+      truncated: true,
+      missingDescendants: (frame.missingDescendants || 0) + 1
+    };
+    return { op: DIFF_OP.FRAME, frameNid: frameNid, frame: boundedFrame };
+  }
+
+  function boundedShadowRootPlaceholder(diff) {
+    var hostNid = String((diff && diff.hostNid) || '');
+    var rootNid = firstPayloadNodeId(diff && diff.nodeIds);
+    if (!hostNid || !rootNid) return null;
+    var placeholder = truncatedPayloadForNid(document, rootNid);
+    var bounded = {
+      op: DIFF_OP.SHADOW_ROOT,
+      hostNid: hostNid,
+      mode: diff.mode || 'open',
+      html: placeholder.html || '',
+      nodeIds: placeholder.nodeIds || [],
+      slotAssignment: diff.slotAssignment || 'none',
+      truncated: true,
+      missingDescendants: (diff.missingDescendants || 0) + 1
+    };
+    if (diff.frameNid) bounded.frameNid = diff.frameNid;
+    return bounded;
+  }
+
+  function boundMutationDiffForBudget(diff, options) {
+    if (!diff) return null;
+    if (wireByteLength(mutationPayloadForBudget([diff], options)) <= RELAY_PER_MESSAGE_LIMIT_BYTES) return diff;
+    var bounded = null;
+    if (diff.op === DIFF_OP.ADD) bounded = boundedAddPlaceholder(diff);
+    if (diff.op === DIFF_OP.FRAME) bounded = boundedFramePlaceholder(diff);
+    if (diff.op === DIFF_OP.SHADOW_ROOT) bounded = boundedShadowRootPlaceholder(diff);
+    if (!bounded) return null;
+    return wireByteLength(mutationPayloadForBudget([bounded], options)) <= RELAY_PER_MESSAGE_LIMIT_BYTES
+      ? bounded
+      : null;
+  }
+
   function sendMutationDiffs(diffs, options) {
     var chunk = [];
     for (var i = 0; i < diffs.length; i++) {
-      var diff = diffs[i];
+      var originalDiff = diffs[i];
+      var diff = boundMutationDiffForBudget(originalDiff, options);
+      if (!diff) {
+        if (originalDiff) {
+          logger.warn('[DOM Stream] mutation diff dropped over budget', {
+            op: originalDiff && originalDiff.op ? originalDiff.op : ''
+          });
+        }
+        continue;
+      }
       var singlePayload = mutationPayloadForBudget([diff], options);
       if (wireByteLength(singlePayload) > RELAY_PER_MESSAGE_LIMIT_BYTES) {
         logger.warn('[DOM Stream] mutation diff dropped over budget', {
@@ -3812,7 +3898,7 @@ function createCapture(config) {
       try {
         var bridge = window.__phantomStreamBridge;
         if (typeof bridge !== "function") return;
-        var result = bridge({ type: type, payload: payload || {} });
+        var result = bridge({ token: PHANTOM_STREAM_BRIDGE_TOKEN, type: type, payload: payload || {} });
         if (result && typeof result.catch === "function") {
           result.catch(function () {});
         }

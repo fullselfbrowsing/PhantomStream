@@ -5,18 +5,21 @@
 // and replays approved control frames through Playwright or CDP driver APIs.
 
 import { readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import {
   CONTROL,
   REMOTE_CONTROL,
   REMOTE_CONTROL_STATE,
+  STREAM,
   createRemoteControlStateEvent,
   isRemoteControlType,
   validateRemoteControlMessage,
 } from '../protocol/index.js';
 
 var DEFAULT_BINDING_NAME = '__phantomStreamBridge';
+var INJECT_TOKEN_DECLARATION = 'var PHANTOM_STREAM_BRIDGE_TOKEN = "";';
 
 /**
  * Read the checked-in classic-script inject artifact.
@@ -24,9 +27,19 @@ var DEFAULT_BINDING_NAME = '__phantomStreamBridge';
  * @returns {string}
  */
 export function getPlaywrightInjectSource() {
-  return readFileSync(
+  return buildPlaywrightInjectSource();
+}
+
+function buildPlaywrightInjectSource(options) {
+  var source = readFileSync(
     fileURLToPath(new URL('./playwright-inject.js', import.meta.url)),
     'utf8'
+  );
+  var opts = options || {};
+  if (!Object.prototype.hasOwnProperty.call(opts, 'bridgeToken')) return source;
+  return source.replace(
+    INJECT_TOKEN_DECLARATION,
+    'var PHANTOM_STREAM_BRIDGE_TOKEN = ' + JSON.stringify(String(opts.bridgeToken || '')) + ';'
   );
 }
 
@@ -46,6 +59,10 @@ export function createPlaywrightAdapter(options) {
   var bindingName = typeof cfg.bindingName === 'string' && cfg.bindingName
     ? cfg.bindingName
     : DEFAULT_BINDING_NAME;
+  var bridgeToken = randomBytes(32).toString('base64url');
+  var allowedBridgeTypes = new Set(Object.keys(STREAM).map(function(key) {
+    return STREAM[key];
+  }));
   var authorizeControl = typeof cfg.authorizeControl === 'function'
     ? cfg.authorizeControl
     : function () { return false; };
@@ -159,6 +176,12 @@ export function createPlaywrightAdapter(options) {
     if (!msg || Object(msg) !== msg || typeof msg.type !== 'string') {
       return { ok: false, error: 'bridge-message-invalid' };
     }
+    if (msg.token !== bridgeToken) {
+      return { ok: false, error: 'bridge-token-invalid' };
+    }
+    if (!allowedBridgeTypes.has(msg.type)) {
+      return { ok: false, error: 'bridge-type-invalid' };
+    }
     try {
       transport.send(msg.type, msg.payload || {});
       emit('bridge', { type: msg.type });
@@ -248,7 +271,7 @@ export function createPlaywrightAdapter(options) {
   async function install() {
     if (installed) return installPromise || Promise.resolve(handle);
     installPromise = (async function runInstall() {
-      var injectSource = getPlaywrightInjectSource();
+      var injectSource = buildPlaywrightInjectSource({ bridgeToken: bridgeToken });
       if (typeof page.exposeBinding !== 'function') throw new Error('page-expose-binding-required');
       if (typeof page.addInitScript !== 'function') throw new Error('page-add-init-script-required');
 

@@ -120,6 +120,15 @@ function createFakePage() {
   return page;
 }
 
+function installedBridgeToken(page) {
+  const init = page.calls.find((call) => call.method === 'addInitScript');
+  assert.ok(init && typeof init.content === 'string', 'adapter installs tokenized init script');
+  const match = init.content.match(/var PHANTOM_STREAM_BRIDGE_TOKEN = "([^"]+)";/);
+  assert.ok(match, 'init script carries a closure-scoped bridge token');
+  assert.notEqual(match[1], '', 'bridge token is non-empty');
+  return match[1];
+}
+
 async function settleWindow(win) {
   await new Promise((resolve) => setTimeout(resolve, 0));
   await new Promise((resolve) => win.requestAnimationFrame(resolve));
@@ -138,7 +147,9 @@ test('install exposes the binding before adding the init script artifact', async
     ['exposeBinding', 'addInitScript']
   );
   assert.equal(page.calls[0].name, '__phantomStreamBridge');
-  assert.equal(page.calls[1].content, getPlaywrightInjectSource());
+  assert.notEqual(page.calls[1].content, getPlaywrightInjectSource());
+  assert.match(page.calls[1].content, /var PHANTOM_STREAM_BRIDGE_TOKEN = "[^"]+";/);
+  assert.equal(page.calls[1].content.includes('window.__phantomStreamBridgeToken'), false);
   assert.ok(page.calls.some((call) => call.method === 'on' && call.event === 'framenavigated'));
 });
 
@@ -149,6 +160,7 @@ test('inject source is a single classic script with the capture bridge hooks', (
   assert.equal(source.includes('export '), false);
   assert.match(source, /window\.top !== window/);
   assert.match(source, /window\.__phantomStreamBridge/);
+  assert.match(source, /var PHANTOM_STREAM_BRIDGE_TOKEN = "";/);
   assert.match(source, /window\.__phantomStreamStart/);
   assert.match(source, /window\.__phantomStreamCapture/);
   assert.match(source, /window\.__phantomStreamHandleControl/);
@@ -197,6 +209,7 @@ test('binding forwards only main-frame bridge messages to transport', async () =
   await adapter.install();
 
   const bridge = page.bindings.get('__phantomStreamBridge');
+  const token = installedBridgeToken(page);
   const child = await bridge(
     { page, frame: page.childFrameValue },
     { type: STREAM.READY, payload: { child: true } }
@@ -213,12 +226,24 @@ test('binding forwards only main-frame bridge messages to transport', async () =
 
   const main = await bridge(
     { page, frame: page.mainFrameValue },
-    { type: STREAM.SNAPSHOT, payload: { snapshotId: 7 } }
+    { token, type: STREAM.SNAPSHOT, payload: { snapshotId: 7 } }
   );
   assert.deepEqual(main, { ok: true });
   assert.deepEqual(transport.sent, [
     { type: STREAM.SNAPSHOT, payload: { snapshotId: 7 } },
   ]);
+
+  const forged = await bridge(
+    { page, frame: page.mainFrameValue },
+    { type: STREAM.SNAPSHOT, payload: { snapshotId: 8 } }
+  );
+  assert.deepEqual(forged, { ok: false, error: 'bridge-token-invalid' });
+
+  const wrongType = await bridge(
+    { page, frame: page.mainFrameValue },
+    { token, type: CONTROL.START, payload: { reason: 'page-forged-control' } }
+  );
+  assert.deepEqual(wrongType, { ok: false, error: 'bridge-type-invalid' });
 });
 
 test('main-frame navigation calls the injected start hook for a fresh snapshot path', async () => {
@@ -319,6 +344,7 @@ test('transport subtree requests are evaluated in the injected capture bridge an
   assert.deepEqual(page.evaluateArgs[0], forwarded);
 
   const bridge = page.bindings.get('__phantomStreamBridge');
+  const token = installedBridgeToken(page);
   const response = {
     requestId: 'subtree-1',
     nid: '42',
@@ -332,7 +358,7 @@ test('transport subtree requests are evaluated in the injected capture bridge an
   };
   const result = await bridge(
     { page, frame: page.mainFrameValue },
-    { type: STREAM.SUBTREE_RESPONSE, payload: response }
+    { token, type: STREAM.SUBTREE_RESPONSE, payload: response }
   );
 
   assert.deepEqual(result, { ok: true });
