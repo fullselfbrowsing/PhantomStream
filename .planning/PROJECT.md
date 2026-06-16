@@ -42,6 +42,7 @@ standalone framework.
 - ✓ Playwright/CDP adapter + agent-observability demo — single-file inject artifact, binding bridge, consent-gated native input replay, reverse-mapped mirror control, local Playwright-driven demo, browser verification, and threat verification — Validated in Phase 5 (ADPT-02, PKG-02, VIEW-05, SEC-04)
 - ✓ Extension MV3 + bookmarklet adapters — generated browser inject artifact, page-world bridge, service-worker watchdog state, bookmarklet loader diagnostics, and browser UAT for live mirror paths — Validated in Phase 6 (ADPT-01, ADPT-03)
 - ✓ WeakMap node identity + semantic addressing API — capture no longer writes framework identity attributes into the observed page, identity travels through `nodeIds` sidecars, renderer resolves through a private Map index, and hosts can use `getNodeId`, `resolveNode`, `highlightNode`, and `clearHighlight` — Validated in Phase 7 (CAPT-07, VIEW-03)
+- ✓ Modern web fidelity completion — open shadow DOM sidecars/reconstruction, same-origin iframe mirroring with cross-origin placeholders, live form value diffs, computed styles for late-added nodes, bounded on-demand subtree recovery, relay-cap hardening, and Playwright inject parity — Validated in Phase 8 (CAPT-05, CAPT-06, CAPT-08, CAPT-09, CAPT-11)
 
 ### Active
 
@@ -50,9 +51,6 @@ standalone framework.
 **Framework extraction (first priority):**
 - [ ] Remaining inherited limitations fixed in the standalone v1:
   - [ ] Stylesheet-centric capture mode (CSSOM) — fixes frozen-style drift, shrinks payloads, enables the paper's ablation
-  - [ ] Computed styles for nodes added after the snapshot
-  - [ ] On-demand subtree fetch to close the truncation gap interactively
-  - [ ] Shadow DOM mirroring
 
 **Plug-and-play surface:**
 - [ ] npm package published as `@fullselfbrowsing/phantom-stream` with JSDoc-generated `.d.ts`
@@ -84,8 +82,9 @@ standalone framework.
   dependency-free, tested with `node --test`). `src/capture/`, `src/renderer/`, `src/relay/`,
   `src/transport/websocket.js`, and `src/adapters/playwright.js` now hold the extracted
   capture/viewer cores, Phase 3 sanitization and masking gates, the raw relay/ws backend,
-  endpoint WebSocket transport, Playwright/CDP adapter, extension/bookmarklet adapters, and
-  the Phase 7 WeakMap/nodeIds identity contract with semantic addressing APIs.
+  endpoint WebSocket transport, Playwright/CDP adapter, extension/bookmarklet adapters,
+  the Phase 7 WeakMap/nodeIds identity contract with semantic addressing APIs, and the
+  Phase 8 shadow DOM/iframe/value/subtree fidelity extensions.
 - **Docs are strong:** `docs/ARCHITECTURE.md` (full system description + 6 known limitations),
   `docs/DESIGN-HISTORY.md` (what failed and why — e.g. the 45 s YouTube serialize that forced
   curated style capture), `docs/paper/OUTLINE.md` (paper structure + evaluation plan).
@@ -124,6 +123,7 @@ standalone framework.
 | Relay stays raw; compression and decode are endpoint-owned | Keeps routing transport-agnostic, preserves byte-cap diagnostics, and maintains FSB `_lz` compatibility without a relay-side payload dependency | Validated in Phase 4 |
 | Consent-gated remote control belongs in host/adapter boundaries, not renderer/relay | Renderer exposes geometry only and relay stays raw; the adapter owns authorization and driver-native replay | Validated in Phase 5 |
 | Capture and renderer identity is private state, not live-page markup | Prevents framework identity from mutating or colliding with the observed page while preserving opaque nid addressing through `nodeIds` sidecars | Validated in Phase 7 |
+| Phase 8 fidelity extensions use sidecars and bounded refreshes instead of live frame loads or unbounded payloads | Keeps the viewer inert/sandboxed and preserves relay-cap guarantees while adding shadow DOM, iframe, value, late-style, and subtree recovery fidelity | Validated in Phase 8 |
 
 ## Evolution
 
@@ -143,4 +143,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-15 after Phase 7 completion (WeakMap identity, sidecar addressing, and semantic APIs validated)*
+*Last updated: 2026-06-16 after Phase 8 completion (shadow DOM, iframes, form values, late styles, subtree recovery, and relay-cap fidelity validated)*
