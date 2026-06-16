@@ -234,7 +234,28 @@ Plans:
   1. With the flag enabled, the mirror renders from captured stylesheets instead of per-element inlined styles, verified on fixtures including production-built CSS-in-JS, cross-origin CDN CSS, and constructable sheets
   2. Cross-origin `cssRules` access failures fall back per sheet through the documented fallback chain (href re-link → adapter-permitted fetch → computed-style fallback) without breaking the mirror
   3. `insertRule`-injected styles and `adoptedStyleSheets` changes are reflected in the mirror via a style-ops channel — or the snapshot-only scope is loudly documented for the paper's limitations section
-**Plans**: TBD
+**Plans**: 8 plans (6 waves)
+
+Plans:
+**Wave 0**
+- [ ] 09-01-PLAN.md — RED capture/protocol/security CSSOM tests
+- [ ] 09-02-PLAN.md — RED renderer/browser/oracle CSSOM tests
+
+**Wave 1** *(blocked on Wave 0 capture/security tests)*
+- [ ] 09-03-PLAN.md — Protocol contract and CSSOM snapshot/fallback capture
+
+**Wave 2** *(blocked on 09-03; 09-04 also requires 09-02)*
+- [ ] 09-04-PLAN.md — Renderer CSSOM snapshot replay for document, shadow, and frame scopes
+- [ ] 09-05-PLAN.md — Capture dynamic style-source op producer
+
+**Wave 3** *(blocked on 09-04 and 09-05)*
+- [ ] 09-06-PLAN.md — Renderer style-source op application
+
+**Wave 4** *(blocked on 09-05 and 09-06)*
+- [ ] 09-07-PLAN.md — Playwright/browser inject artifact CSSOM sync
+
+**Wave 5** *(blocked on 09-07)*
+- [ ] 09-08-PLAN.md — CSSOM oracle, docs, and final automated gate
 
 ### Phase 10: npm Packaging & 0.x Publish
 **Goal**: `@fullselfbrowsing/phantom-stream` is installable from npm with clean ESM exports, generated types, and < 5-minute quickstarts
