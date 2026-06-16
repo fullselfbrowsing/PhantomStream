@@ -1,6 +1,6 @@
 ---
 phase: 08-shadow-dom-iframes-fidelity-completion
-reviewed: "2026-06-16T04:47:26Z"
+reviewed: "2026-06-16T04:56:00Z"
 depth: standard
 files_reviewed: 35
 files_reviewed_list:
@@ -40,62 +40,45 @@ files_reviewed_list:
   - tests/security-chokepoint-purity.test.js
   - tests/semantic-addressing.test.js
 findings:
-  critical: 1
+  critical: 0
   warning: 0
   info: 0
-  total: 1
-status: issues_found
+  total: 0
+status: clean
 ---
 
 # Phase 8: Code Review Report
 
-**Reviewed:** 2026-06-16T04:47:26Z
+**Reviewed:** 2026-06-16T04:56:00Z
 **Depth:** standard
 **Files Reviewed:** 35
-**Status:** issues_found
+**Status:** clean
 
 ## Summary
 
-Re-reviewed Phase 08 after commit 7022b15 and the updated review-fix report, with emphasis on Playwright bridge hardening, tokenized init/CDP source, frame and shadow-root relay bounding, requestable placeholder semantics, and the corrected subtree id test.
+Final re-review after commit `fe83c0c` focused on the Playwright bridge hardening, direct binding rejection behavior, and the previously fixed frame/shadow relay-budget paths.
 
-The frame/shadow over-budget paths now route through bounded placeholders, oversized subtree responses are content-free, and the subtree id assertion covers the recovered safe child. One bridge security issue remains: the injected script still sends the bridge token through a mutable page-global binding lookup, so page script can steal the token from any later legitimate capture send and forge allowlisted STREAM messages.
+The Playwright inject transport now captures the original `window.__phantomStreamBridge` binding in the init-script closure and sends through that closed-over function instead of re-reading a mutable page-global at send time. The bridge token remains a closure-local init-script value, and the adapter rejects direct binding calls that omit the token, use the wrong token, come from non-main frames or pages, or try to forward non-`STREAM` message types.
 
-## Critical Issues
+Frame and shadow snapshot sidecars, live frame refreshes, live shadow-root replacements, subtree responses, stop-path mutation flushes, and value diffs all route through bounded payload handling or content-free miss/too-large responses. Renderer paths preserve the sandbox/CSP/sanitizer chain and continue to reject iframe `src` attr replay.
 
-### CR-01: BLOCKER - Page scripts can steal the Playwright bridge token by wrapping the exposed binding
+All reviewed files meet quality standards. No issues found.
 
-**File:** `src/adapters/playwright-inject.js:3899`, `src/adapters/playwright-inject.js:3901`, `src/adapters/playwright.js:179`
+## Verification
 
-**Issue:** `bindingCallback()` rejects missing tokens and disallowed message types, but the injected transport undermines that check by reading `window.__phantomStreamBridge` every time it sends and passing `{ token: PHANTOM_STREAM_BRIDGE_TOKEN, ... }` through that mutable page-global function. After the init script starts, hostile page code can wrap the exposed binding, observe the next legitimate mutation/scroll/subtree response, recover the token, and then call the original binding with forged allowlisted `STREAM` messages. The allowlist does not contain this because forged `ext:dom-snapshot`, `ext:dom-mutations`, or `ext:ps-subtree-response` messages are valid stream types; this bypasses capture-side sanitization, masking, and relay-budget chokepoints before the host transport sees the payload.
-
-**Fix:**
-```javascript
-var phantomStreamBridge = typeof window.__phantomStreamBridge === "function"
-  ? window.__phantomStreamBridge
-  : null;
-
-var phantomStreamTransport = {
-  send: function (type, payload) {
-    try {
-      if (typeof phantomStreamBridge !== "function") return;
-      var result = phantomStreamBridge({
-        token: PHANTOM_STREAM_BRIDGE_TOKEN,
-        type: type,
-        payload: payload || {}
-      });
-      if (result && typeof result.catch === "function") {
-        result.catch(function () {});
-      }
-    } catch (e) { /* bridge failures must not break capture */ }
-  },
-  flush: function () {}
-};
+```bash
+node --test tests/playwright-adapter.test.js tests/playwright-adapter-cdp.test.js tests/capture-iframe.test.js tests/capture-shadow-dom.test.js tests/capture-subtree-fetch.test.js tests/renderer-subtree-fetch.test.js tests/capture-input-values.test.js tests/renderer-iframe.test.js tests/renderer-shadow-dom.test.js tests/renderer-value-diff.test.js tests/renderer-viewer.test.js tests/protocol.test.js
+npm test
 ```
 
-Capture the original binding in the injected closure before page scripts can replace it, and never read `window.__phantomStreamBridge` at send time. Add a regression test that replaces/wraps `window.__phantomStreamBridge` after injection, triggers a capture send, and asserts the wrapper never observes a token; keep the existing adapter tests that reject missing-token and wrong-type direct binding calls.
+Results:
+
+- Focused Phase 8 gate: 79 tests, 79 pass.
+- Full suite: 383 tests, 383 pass.
+- Static review scan over the scoped files found only expected documented sinks, tests/fixtures, comments, and intentional harness use.
 
 ---
 
-_Reviewed: 2026-06-16T04:47:26Z_
+_Reviewed: 2026-06-16T04:56:00Z_
 _Reviewer: the agent (gsd-code-reviewer)_
 _Depth: standard_
