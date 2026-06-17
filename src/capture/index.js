@@ -1726,6 +1726,25 @@ export function createCapture(config) {
     return indexes;
   }
 
+  // Positional selectedIndexes only line up with the mirror when EVERY option
+  // survives the wire. If skipElement/blockSelector drops an <option> (or an
+  // <optgroup>), the mirror's options list is shorter, so live-collection
+  // indexes would address the wrong option. Detect that and fall back to value
+  // matching instead.
+  function selectHasFilteredOptions(select) {
+    var nodes = select && select.querySelectorAll
+      ? select.querySelectorAll('option, optgroup')
+      : [];
+    for (var i = 0; i < nodes.length; i++) {
+      if (skipElementWithAncestors(nodes[i])
+        || blockedWithAncestors(nodes[i])
+        || wireDroppedWithAncestors(nodes[i])) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function sanitizeInputValue(value, owner) {
     return sanitizeForWire('input', {
       value: value == null ? '' : String(value),
@@ -1764,8 +1783,13 @@ export function createCapture(config) {
       }
       // Authoritative selection identity (the renderer prefers this over the
       // maskable selectedValues): option indexes never carry page content and
-      // stay unambiguous even when masked option values collide.
-      diff.selectedIndexes = selectedOptionIndexes(control);
+      // stay unambiguous even when masked option values collide. Only emit when
+      // every option survives the wire -- if an option is filtered out, the
+      // live indexes would mis-address the shorter mirror options list, so fall
+      // back to value matching there.
+      if (!selectHasFilteredOptions(control)) {
+        diff.selectedIndexes = selectedOptionIndexes(control);
+      }
       return diff;
     }
 

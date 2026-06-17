@@ -1723,6 +1723,36 @@ function createCapture(config) {
     return values;
   }
 
+  // Positional identity for the selected options; mirrors src/capture/index.js
+  // so masked option-value collisions stay unambiguous on the renderer.
+  function selectedOptionIndexes(select) {
+    var indexes = [];
+    var options = select && select.options ? select.options : [];
+    for (var i = 0; i < options.length; i++) {
+      if (options[i].selected) indexes.push(i);
+    }
+    return indexes;
+  }
+
+  // Positional selectedIndexes only line up with the mirror when EVERY option
+  // survives the wire. If skipElement/blockSelector drops an <option> (or an
+  // <optgroup>), the mirror's options list is shorter, so live-collection
+  // indexes would address the wrong option. Detect that and fall back to value
+  // matching instead.
+  function selectHasFilteredOptions(select) {
+    var nodes = select && select.querySelectorAll
+      ? select.querySelectorAll('option, optgroup')
+      : [];
+    for (var i = 0; i < nodes.length; i++) {
+      if (skipElementWithAncestors(nodes[i])
+        || blockedWithAncestors(nodes[i])
+        || wireDroppedWithAncestors(nodes[i])) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function sanitizeInputValue(value, owner) {
     return sanitizeForWire('input', {
       value: value == null ? '' : String(value),
@@ -1758,6 +1788,12 @@ function createCapture(config) {
       diff.selectedValues = [];
       for (var s = 0; s < selected.length; s++) {
         diff.selectedValues.push(sanitizeInputValue(selected[s], control));
+      }
+      // Authoritative selection identity (renderer prefers this over the
+      // maskable selectedValues), omitted when an option is filtered from the
+      // wire so live indexes cannot mis-address the shorter mirror options.
+      if (!selectHasFilteredOptions(control)) {
+        diff.selectedIndexes = selectedOptionIndexes(control);
       }
       return diff;
     }
