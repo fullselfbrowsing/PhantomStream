@@ -458,3 +458,64 @@ test('masked <select> with colliding option masks selects the exact option by in
     env.teardown();
   }
 });
+
+test('select with a skipElement-filtered <option> omits selectedIndexes so value matching stays correct', async () => {
+  // skipElement drops <option value="beta"> from the wire, so the mirror's
+  // options list is SHORTER than the live select. A live-collection index ([2]
+  // for gamma) would address the wrong option (or nothing) in the 2-option
+  // mirror, so capture must omit selectedIndexes and let value matching resolve
+  // the selection. (Regression: previously selectedIndexes was always emitted.)
+  const env = setupEnv(
+    '<select id="sel">'
+    + '<option value="alpha">Alpha</option>'
+    + '<option value="beta" data-skip="1">Beta</option>'
+    + '<option value="gamma">Gamma</option>'
+    + '</select>'
+  );
+  try {
+    const transport = createRecordingTransport();
+    env.capture = createCapture({
+      transport,
+      logger: silentLogger(),
+      skipElement: (el) => !!(el && el.getAttribute && el.getAttribute('data-skip') === '1'),
+    });
+    env.capture.start();
+    await settle(env.window);
+
+    const select = env.document.getElementById('sel');
+    const nid = env.capture.getNodeId(select);
+    // Select the third LIVE option (live index 2, value 'gamma').
+    select.value = 'gamma';
+    dispatchValueEvent(env, select, 'change');
+    await settle(env.window);
+
+    const selectOp = valueOps(transport).find((op) => op.nid === nid);
+    assert.ok(selectOp, 'a value op for the select reached the wire');
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(selectOp, 'selectedIndexes'),
+      false,
+      'selectedIndexes is omitted because an <option> is filtered from the wire'
+    );
+    assert.deepEqual(selectOp.selectedValues, ['gamma'], 'selectedValues remain for value matching');
+
+    // The snapshot path produces a mirror with the skipped option REMOVED, so
+    // options are [alpha(0), gamma(1)] -- the stale live index 2 does not exist.
+    const mirror = env.document.implementation.createHTMLDocument('mirror');
+    mirror.body.innerHTML = '<select id="sel">'
+      + '<option value="alpha">Alpha</option>'
+      + '<option value="gamma">Gamma</option>'
+      + '</select>';
+    const mirrorSelect = mirror.getElementById('sel');
+    const identity = {
+      resolve(targetNid) { return String(targetNid) === String(nid) ? mirrorSelect : null; },
+    };
+
+    applyMutations(mirror, [selectOp], { staleMisses: 0, applyFailures: 0 }, { identity });
+
+    assert.equal(mirrorSelect.options[0].selected, false, 'alpha is not selected');
+    assert.equal(mirrorSelect.options[1].selected, true, 'gamma IS selected by value, not a stale index');
+    assert.equal(mirrorSelect.selectedIndex, 1, 'renderer selected the correct mirror option');
+  } finally {
+    env.teardown();
+  }
+});
