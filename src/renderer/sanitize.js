@@ -96,11 +96,18 @@ function hasDangerousScheme(value) {
 /**
  * Minimal srcset candidate parser for the URL+descriptor forms this project
  * emits (mirror of the capture-side parser). Unlike split(','), it keeps
- * commas inside data:image URLs attached to the URL token, so a benign data
- * candidate cannot turn into a bogus relative fetch candidate. Exported so the
- * Phase-12 renderer fetch gates (diff ATTR branch, gateFragmentAssets, the
- * snapshot string layer) gate srcset per-candidate through ONE parser and the
- * attribute coverage cannot drift between sites (review WR-03/WR-04).
+ * commas inside a candidate URL attached to the URL token, so a benign
+ * candidate cannot turn into a bogus relative fetch candidate. Two carve-outs
+ * suppress the comma-as-separator split: (1) data:image URLs (a base64 comma /
+ * the data: mediatype comma), and (2) any scheme-bearing absolute URL
+ * (http(s)/etc.), because an unencoded comma in an http(s) query string would
+ * otherwise mis-split a legitimate responsive CDN URL into a bogus second
+ * candidate -- which then fails the fetch gate and over-blocks the whole <img>
+ * to a placeholder (review WR-02). This is a fidelity widening only; the gate
+ * decision per candidate is unchanged. Exported so the Phase-12 renderer fetch
+ * gates (diff ATTR branch, gateFragmentAssets, the snapshot string layer) gate
+ * srcset per-candidate through ONE parser and the attribute coverage cannot
+ * drift between sites (review WR-03/WR-04).
  * @param {string} srcset
  * @returns {{url: string, descriptor: string}[]}
  */
@@ -111,10 +118,14 @@ export function parseSrcsetCandidates(srcset) {
   while (i < raw.length) {
     while (i < raw.length && /[\s,]/.test(raw.charAt(i))) i++;
     var urlStart = i;
-    var isData = raw.slice(i, i + 5).toLowerCase() === 'data:';
+    var tokenSoFar = raw.slice(urlStart);
+    var isData = tokenSoFar.slice(0, 5).toLowerCase() === 'data:';
+    // A scheme-bearing absolute URL (scheme://...) keeps in-query commas
+    // attached to the URL token, mirroring the data: carve-out (WR-02).
+    var isAbsolute = /^[a-z][a-z0-9+.\-]*:\/\//i.test(tokenSoFar);
     while (i < raw.length
         && !/\s/.test(raw.charAt(i))
-        && (isData || raw.charAt(i) !== ',')) {
+        && (isData || isAbsolute || raw.charAt(i) !== ',')) {
       i++;
     }
     var url = raw.slice(urlStart, i);
