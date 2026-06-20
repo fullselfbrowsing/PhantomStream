@@ -1,36 +1,33 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: in_progress
-stopped_at: Phase 10 complete — @full-self-browsing/phantom-stream@0.1.0 published to npm (public); ready for Phase 11 (FSB swap-in)
-last_updated: "2026-06-16T15:26:18Z"
-last_activity: 2026-06-16 -- Published @full-self-browsing/phantom-stream@0.1.0 to npm (public); Phase 10 publish gate resolved
+milestone: v2.0
+milestone_name: Asset & Media Streaming
+status: planning
+last_updated: "2026-06-20T04:26:51.813Z"
+last_activity: 2026-06-20
 progress:
-  total_phases: 13
-  completed_phases: 10
-  total_plans: 57
-  completed_plans: 57
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-06-16)
+See: .planning/PROJECT.md (updated 2026-06-19)
 
 **Core value:** A live, trustworthy, low-bandwidth, semantically addressable mirror of a real browser tab — capture → relay → render → remote-control must work end-to-end as a standalone framework.
-**Current focus:** Phase 11 — FSB swap-in (Phase 10 complete; `@full-self-browsing/phantom-stream@0.1.0` published to npm)
+**Current focus:** Milestone v2.0 Asset & Media Streaming — defining roadmap (v1.0 closed at Phases 1–11: framework + npm publish + FSB swap-in)
 
 ## Current Position
 
-Phase: 10 complete → Phase 11 next
+Phase: Not started (defining requirements)
 Plan: —
-Status: Phase 10 complete — package published to npm (public); publish gate resolved
-Last activity: 2026-06-16 -- Published @full-self-browsing/phantom-stream@0.1.0 to npm (public)
-
-Progress: [██████████] Phase 10 complete; `@full-self-browsing/phantom-stream@0.1.0` live on npm
+Status: Defining requirements
+Last activity: 2026-06-20 — Milestone v2.0 started
 
 ## Performance Metrics
 
