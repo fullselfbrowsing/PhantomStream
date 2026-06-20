@@ -175,12 +175,19 @@ fail-closed:
 
 **`mediaMode` switch (MSEC-02).** A `createViewer` config option selects the privacy / bandwidth
 posture: `off` (no viewer asset fetch at all -- every asset becomes a placeholder), `poster`
-(posters/placeholders only; full-asset fetch withheld), and `reference` (full by-reference
-fetch). The **default is `reference`** -- media-by-reference is on by default (the milestone's
-purpose) and the fail-closed origin policy is the safety net. In Phase 12 `poster` still permits
-poster *images* to fetch (gated by origin); the full poster / full-asset split matures in Phase
-13 when the `<video>`/`<audio>` element ships. An invalid `mediaMode` throws at viewer-factory
-time (the sanctioned throw site).
+(*target* posture: posters/placeholders only, full-asset fetch withheld -- see the Phase-12
+interim note below), and `reference` (full by-reference fetch). The **default is `reference`** --
+media-by-reference is on by default (the milestone's purpose) and the fail-closed origin policy is
+the safety net. An invalid `mediaMode` throws at viewer-factory time (the sanctioned throw site).
+
+> **Phase 12 interim semantics for `poster` (review WR-02 -- read before relying on `poster`).**
+> The poster / full-asset split is a Phase 13 deliverable, gated on the `<video>` / `<audio>`
+> element actually shipping. In Phase 12 `poster` therefore behaves **identically to `reference`
+> for images**: every origin-permitted image (content image OR `<video>` poster) is allowed to
+> fetch, gated only by the fail-closed origin policy -- there is no content-image-vs-poster
+> distinction yet (the gate's `kind` parameter is threaded through but does not yet narrow
+> `poster`). A host that needs *all* content-image fetches suppressed today must use `off`, not
+> `poster`. The stricter "posters only, full-asset withheld" guarantee lands in Phase 13.
 
 **Pre-write timing (the non-negotiable rule).** The gate runs **before** the asset URL is written
 into the mirror DOM, so a blocked origin never reaches a fetch. For diffs this is pre-`setAttribute`
