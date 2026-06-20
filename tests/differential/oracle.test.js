@@ -37,6 +37,7 @@ import * as textChildlist from './scenarios/text-childlist.js';
 import * as sanitizeDivergence from './scenarios/sanitize-divergence.js';
 import * as phase8ProtocolExtensions from './scenarios/phase8-protocol-extensions.js';
 import * as cssomCaptureMode from './scenarios/cssom-capture-mode.js';
+import * as staticAssets from './scenarios/static-assets.js';
 
 /**
  * The full fixture x scenario matrix. Every reliability defense from the
@@ -60,6 +61,7 @@ const MATRIX = [
   { fixture: 'dialog.html', scenario: dialog, config: { runScripts: 'dangerously' } },
   { fixture: 'phase8-fidelity.html', scenario: phase8ProtocolExtensions, config: {} },
   { fixture: 'cssom-mode.html', scenario: cssomCaptureMode, config: { styleMode: 'cssom' } },
+  { fixture: 'static-assets.html', scenario: staticAssets, config: {} },
 ];
 
 function loadFixture(fixtureFile) {
@@ -436,6 +438,68 @@ for (const entry of MATRIX) {
         styleOps.some((op) => op.action === 'replace' && /40,\s*50,\s*60/.test(op.source.cssText)),
         'extracted CSSOM stream carries live stylesheet replacement'
       );
+    } else if (entry.scenario.name === 'static-assets') {
+      // D26 territory (Phase 12): the extracted snapshot carries the clone-only
+      // data-ps-currentsrc variant pin (ASST-03) and degrades blob:/oversized-
+      // data: <img>s to dimensioned data-ps-asset-unavailable placeholders
+      // (ASST-04). The reference has neither, so the single SNAPSHOT diverges.
+      assert.ok(
+        matched.has('D26-currentsrc-variant-pin'),
+        'static-assets exercises ledger entry D26'
+      );
+      assert.equal(
+        matched.size,
+        1,
+        `only D26 consulted in static-assets (matched: ${[...matched].join(', ')})`
+      );
+
+      const refSnap = refStream.find((msg) => msg.type === STREAM.SNAPSHOT);
+      const extSnap = extStream.find((msg) => msg.type === STREAM.SNAPSHOT);
+      assert.ok(refSnap && extSnap, 'both sides emit a snapshot');
+
+      // ASST-03: clone-only currentSrc pin present in extracted, absent in
+      // reference (the injected divergent currentSrc drove the enrichment).
+      assert.match(
+        extSnap.payload.html,
+        /data-ps-currentsrc="https:\/\/cdn\.fixture\.test\/img\/photo-1600\.png"/,
+        'extracted snapshot pins the negotiated currentSrc variant on the clone'
+      );
+      assert.doesNotMatch(
+        refSnap.payload.html,
+        /data-ps-currentsrc/,
+        'reference snapshot carries no currentSrc pin'
+      );
+
+      // ASST-04: blob:/oversized-data: degrade to a placeholder in extracted;
+      // the reference ships the raw (dead) reference instead.
+      assert.match(
+        extSnap.payload.html,
+        /data-ps-asset-unavailable="blob"/,
+        'extracted snapshot degrades the blob: <img> to a placeholder'
+      );
+      assert.match(
+        extSnap.payload.html,
+        /data-ps-asset-unavailable="oversized-data"/,
+        'extracted snapshot degrades the oversized data: <img> to a placeholder'
+      );
+      assert.doesNotMatch(
+        extSnap.payload.html,
+        /blob:https:\/\/fixture\.test/,
+        'a blob: reference never reaches the extracted wire'
+      );
+      assert.match(
+        refSnap.payload.html,
+        /blob:https:\/\/fixture\.test/,
+        'the reference ships the dead blob: reference (the gap this closes)'
+      );
+
+      // Pitfall 5: the SMALL inline data: image stays byte-identical (NOT
+      // degraded) on BOTH sides -- no over-degrade churn.
+      assert.match(
+        extSnap.payload.html,
+        /src="data:image\/png;base64,iVBORw0KGgo/,
+        'extracted snapshot keeps the small inline data: image byte-identical'
+      );
     } else {
       // D1/D6/D7/D24 (and any future mismatch entry) must stay scoped:
       // every scenario other than the named divergence scenarios compares
@@ -556,6 +620,20 @@ test('basic-mutations with an EMPTY ledger throws UNDECLARED DIVERGENCE -- add-o
   const entry = MATRIX.find((p) => p.scenario === basicMutations);
   const { refStream, extStream } = await captureFlippedPair(entry);
 
+  assert.throws(
+    () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
+    /UNDECLARED DIVERGENCE/
+  );
+});
+
+test('static-assets with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D26 currentSrc pin / asset degrade is load-bearing', async () => {
+  const entry = MATRIX.find((p) => p.scenario === staticAssets);
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
+  // The divergence is REAL: without D26, the same stream pair that passes
+  // above must fail loudly -- proving the clone-only data-ps-currentsrc pin and
+  // the blob:/oversized-data: placeholder degrade are the thing permitting it,
+  // not a comparison blind spot.
   assert.throws(
     () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
     /UNDECLARED DIVERGENCE/

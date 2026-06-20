@@ -169,6 +169,32 @@ function isPhase8ShadowValueMutationBatch(msg) {
     && ops.every((op) => op.op === DIFF_OP.SHADOW_ROOT || op.op === DIFF_OP.VALUE);
 }
 
+/**
+ * True when a SNAPSHOT message's serialized HTML carries the clone-only
+ * data-ps-currentsrc variant pin (Phase 12 ASST-03). The extracted core emits
+ * it for a responsive <img> whose currentSrc differs from src; the FSB
+ * reference never does.
+ * @param {*} msg
+ * @returns {boolean}
+ */
+function htmlContainsCurrentSrcPin(msg) {
+  if (!msg || msg.type !== STREAM.SNAPSHOT) return false;
+  return payloadHtml(msg).includes('data-ps-currentsrc');
+}
+
+/**
+ * True when a SNAPSHOT message's serialized HTML carries an asset-unavailable
+ * placeholder marker (Phase 12 ASST-04). The extracted core degrades
+ * blob:/oversized-data: refs to a dimensioned <div data-ps-asset-unavailable>;
+ * the FSB reference ships the raw (dead) reference instead.
+ * @param {*} msg
+ * @returns {boolean}
+ */
+function htmlContainsAssetUnavailable(msg) {
+  if (!msg || msg.type !== STREAM.SNAPSHOT) return false;
+  return payloadHtml(msg).includes('data-ps-asset-unavailable');
+}
+
 function hasCssomDocumentStyleSource(msg) {
   if (!msg || msg.type !== STREAM.SNAPSHOT) return false;
   const payload = msg.payload || {};
@@ -590,6 +616,48 @@ export const DIVERGENCES = [
 
       if (refMsg !== undefined || extMsg === undefined) return false;
       return isCssomStyleSourceMutationBatch(extMsg);
+    },
+  },
+  {
+    id: 'D26-currentsrc-variant-pin',
+    kind: 'mismatch',
+    description:
+      'Phase 12 by-reference static assets: the extracted core enriches the '
+      + 'serialized snapshot with two clone-only, extracted-only surfaces the '
+      + 'FSB reference lacks. (1) ASST-03 currentSrc variant pin: a responsive '
+      + '<img> whose currentSrc differs from its resolved src carries a '
+      + 'data-ps-currentsrc attribute on the wire clone (never the live page), '
+      + 'so the cross-origin viewer pins the same variant the origin showed. '
+      + '(2) ASST-04 non-shareable degrade: a blob:/origin-local or oversized '
+      + 'data: <img> becomes a dimensioned <div data-ps-asset-unavailable> '
+      + 'placeholder, never a dead reference on the wire. The reference '
+      + 'serializes the raw src/srcset (and the dead blob:/oversized data: ref) '
+      + 'with no enrichment, so the single SNAPSHOT message diverges.',
+    rationale:
+      'ASST-03/ASST-04 (12-CONTEXT locked decisions): the variant pin and the '
+      + 'placeholder degrade are intentional capture-side enrichments written '
+      + 'CLONE-ONLY (Phase 7 no-mutation invariant). Both ride one snapshot, so '
+      + 'this single scenario-pinned mismatch entry covers the combined '
+      + 'extracted-only divergence (research Open Question 2: one predicate, not '
+      + 'two overlapping entries -- the oracle surfaces exactly one SNAPSHOT '
+      + 'mismatch for the static-assets fixture). jsdom returns currentSrc==="" '
+      + 'so the scenario injects a divergent currentSrc; the entry only fires '
+      + 'when the extracted snapshot carries a Phase 12 marker the reference '
+      + 'does not.',
+    affectedMessages: [STREAM.SNAPSHOT, STREAM.MUTATIONS],
+    affectedScenarios: ['static-assets'],
+    appliesTo(refMsg, extMsg, scenarioName) {
+      if (scenarioName !== 'static-assets') return false;
+      // The static-assets divergence is a SAME-INDEX SNAPSHOT mismatch: both
+      // sides emit a snapshot, but only the extracted HTML carries the Phase 12
+      // clone-only markers (currentSrc pin and/or asset-unavailable
+      // placeholder). A trailing/missing message or a non-snapshot type is not
+      // this divergence and stays undeclared.
+      if (refMsg === undefined || extMsg === undefined) return false;
+      if (refMsg.type !== STREAM.SNAPSHOT || extMsg.type !== STREAM.SNAPSHOT) return false;
+      const extEnriched = htmlContainsCurrentSrcPin(extMsg) || htmlContainsAssetUnavailable(extMsg);
+      const refEnriched = htmlContainsCurrentSrcPin(refMsg) || htmlContainsAssetUnavailable(refMsg);
+      return extEnriched && !refEnriched;
     },
   },
   {
