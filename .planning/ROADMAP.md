@@ -340,9 +340,17 @@ Plans:
   3. Non-shareable references (`blob:`/origin-local object URLs; oversized `data:` URIs) are detected at capture and degrade to a dimensioned placeholder, never a broken reference or a `blob:` on the wire
   4. The viewer CSP is opened precisely enough to fetch referenced assets (scoped `media-src`/confirmed `img-src`) while keeping `default-src 'none'` and no `script-src` — asserted by a srcdoc test
   5. A fail-closed host origin/scheme policy hook (conservative default: https-only, block private/internal ranges) governs which asset URLs the viewer may fetch, and a `mediaMode` switch (`off` | `poster` | `reference`) selects the privacy/bandwidth posture with a documented default
-**Plans**: TBD
+**Plans**: 3 plans (2 waves)
 **UI hint**: yes
 **Research**: Standard patterns — verification of shipped behavior + a small clone-only enrichment + one CSP directive + the policy-hook/`mediaMode` seam. Skip `--research-phase`.
+
+Plans:
+**Wave 1**
+- [ ] 12-01-PLAN.md — Verify shipped by-reference pipeline (relay byte-identity, confirm-only CSP) + RED Wave-0 test scaffolds (ASST-01, ASST-02, ASST-05)
+
+**Wave 2** *(blocked on 12-01)*
+- [ ] 12-02-PLAN.md — Capture: ASSET_DATA_URI_MAX_BYTES + blob:/oversized-data placeholder degrade + clone-only data-ps-currentsrc + D26 oracle (ASST-03, ASST-04)
+- [ ] 12-03-PLAN.md — Renderer: pure fail-closed origin classifier + mediaMode + pre-write fetch gate (string-layer snapshot + diff/subtree) + currentSrc pin + SECURITY.md (ASST-02, ASST-03, MSEC-01, MSEC-02)
 
 ### Phase 13: Video/Audio URL + Playback Sync
 **Goal**: The defining v2.0 capability — progressive `<video>`/`<audio>` play in the viewer from the source URL with drift-corrected playback sync (play/pause/seek/rate) over a new throttled `STREAM.MEDIA` side channel, autoplay-policy-correct, with the relay and envelope untouched and old viewers safely ignoring the new type
@@ -422,7 +430,7 @@ Phases execute in numeric order. v1.0 (1–11) is complete. v2.0 active order: 1
 | 9. CSSOM Capture Mode | 8/8 | Complete | 2026-06-16 |
 | 10. npm Packaging & 0.x Publish | 5/5 | Complete | 2026-06-16 |
 | 11. FSB Swap-In → 1.0 | — | Complete (verified in FSB repo) | 2026-06-16 |
-| 12. Static Assets by Reference | 0/TBD | Not started | - |
+| 12. Static Assets by Reference | 0/3 | Planned (3 plans, 2 waves) | - |
 | 13. Video/Audio URL + Playback Sync | 0/TBD | Not started | - |
 | 14. Adaptive Streaming + Adapter Discovery + Fallback | 0/TBD | Not started | - |
 | 15. Media Security, Masking, Threat Model & Docs | 0/TBD | Not started | - |
