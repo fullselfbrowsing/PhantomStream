@@ -43,8 +43,8 @@ Each maps to exactly one roadmap phase.
 
 ### Media Security & Privacy (MSEC)
 
-- [ ] **MSEC-01**: A fail-closed host origin/scheme policy hook governs which asset/media URLs the viewer may fetch (conservative default: https-only, block private/internal ranges) — mitigates viewer-side SSRF, tracking-pixel/live-viewer confirmation, and DoS amplification
-- [ ] **MSEC-02**: A `mediaMode` switch (`off` | `poster` | `reference`) lets hosts choose the privacy/bandwidth posture; the default is documented
+- [x] **MSEC-01**: A fail-closed host origin/scheme policy hook governs which asset/media URLs the viewer may fetch (conservative default: https-only, block private/internal ranges) — mitigates viewer-side SSRF, tracking-pixel/live-viewer confirmation, and DoS amplification
+- [x] **MSEC-02**: A `mediaMode` switch (`off` | `poster` | `reference`) lets hosts choose the privacy/bandwidth posture; the default is documented
 - [ ] **MSEC-03**: Asset/media URL masking — the host masking vocabulary redacts/blocks asset+media URLs (signed CDN URLs carry tokens/PII) and `maskMediaSelector`/`blockSelector` omit private media URLs from the wire; masked media degrades to placeholder
 - [ ] **MSEC-04**: Viewer-side fetch minimizes leakage (`referrerpolicy="no-referrer"`, no credentials by default); secrets-on-the-wire implications are documented; the sandbox token is unchanged (the `allow-scripts`-forbidden static scan covers media code paths)
 
@@ -105,8 +105,8 @@ Which phases cover which requirements. Finalized during roadmap creation.
 | ASST-03 | Phase 12 | Complete |
 | ASST-04 | Phase 12 | Complete |
 | ASST-05 | Phase 12 | Complete |
-| MSEC-01 | Phase 12 | Pending |
-| MSEC-02 | Phase 12 | Pending |
+| MSEC-01 | Phase 12 | Complete |
+| MSEC-02 | Phase 12 | Complete |
 | MEDIA-01 | Phase 13 | Pending |
 | MEDIA-02 | Phase 13 | Pending |
 | MEDIA-03 | Phase 13 | Pending |

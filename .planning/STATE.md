@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Asset & Media Streaming
 status: executing
-stopped_at: Phase 12 Plan 12-02 complete (ASST-03/04 capture-complete; D26 oracle GREEN); Plan 12-03 (renderer gate + mediaMode) is next to execute
-last_updated: "2026-06-20T07:54:07.801Z"
+stopped_at: Phase 12 Plan 12-03 complete (renderer fetch gate + mediaMode + currentSrc pin; MSEC-01/MSEC-02/ASST-02/ASST-03 GREEN; full suite 449/449). Phase 12 (Static Assets by Reference) is now 3/3 plans complete.
+last_updated: "2026-06-20T08:40:00.000Z"
 last_activity: 2026-06-20
 progress:
   total_phases: 15
   completed_phases: 10
   total_plans: 60
-  completed_plans: 59
+  completed_plans: 60
   percent: 67
 ---
 
@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-06-19)
 
 ## Current Position
 
-Phase: 12 (static-assets-by-reference) — EXECUTING
-Plan: 3 of 3
-Status: 12-02 complete (capture-side ASST-03/04 + D26 oracle GREEN); 12-03 (renderer fetch-gate + mediaMode + CSP confirm) next
+Phase: 12 (static-assets-by-reference) — COMPLETE (3/3 plans)
+Plan: 3 of 3 (12-03 complete)
+Status: 12-03 complete (renderer fetch-gate + mediaMode + currentSrc pin GREEN; full suite 449/449). Phase 12 done; Phase 13 (Video/Audio URL + Playback Sync) is next to plan.
 Last activity: 2026-06-20
 
 **v2.0 phase order:** 12 → 13 → 14 → 15
@@ -95,6 +95,7 @@ Last activity: 2026-06-20
 | Phase 10 P05 | 20min | 2 tasks | 4 files |
 | Phase 12 P12-01 | 14min | 2 tasks | 6 files |
 | Phase 12 P12-02 | 38min | 2 tasks tasks | 5 files files |
+| Phase 12 P12-03 | 42min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -120,6 +121,8 @@ Earlier v1.0 decisions are retained in PROJECT.md Key Decisions and the prior ph
 
 - [Phase 12-02]: D26 only, no D27: the static-assets fixture surfaces ONE same-index SNAPSHOT mismatch (clone-only data-ps-currentsrc pin + blob-degrade + oversized-degrade all in the html field); compareStreams compares the whole message and ledgerCovers returns the first match, so a second D27 entry could never fire and would fail stale-entry detection. D26's predicate recognizes the combined extracted-only divergence (data-ps-currentsrc OR data-ps-asset-unavailable present in ext, absent in ref).
 - [Phase 12-02]: ASST-03 (clone-only data-ps-currentsrc variant pin) and ASST-04 (blob:/oversized-data: -> dimensioned data-ps-asset-unavailable placeholder; small data: byte-identical, ASSET_DATA_URI_MAX_BYTES=256 KiB) are capture-complete at all 4 serialization sites; the live page is never mutated (clone-only; the added-node wireClone is the trap). Capture-degrade suite + differential oracle (firing D26) GREEN; renderer fetch-gate/mediaMode/CSP remain Plan 12-03.
+- [Phase 12-03]: Viewer-side-fetch security model is GREEN. classifyAssetOrigin (src/renderer/asset-policy.js) is a PURE fail-closed https-only + private-range classifier (denies localhost/127/10/172.16.0.0-12 incl. /12 boundary/192.168/169.254/::1/fc00::-7/.local/unqualified; parse-error blocks), exported for Phase-15 reuse. gateAssetUrl(url, ctx) precedence: mediaMode 'off' blocks all -> allowAssetOrigins host widen -> classifier deny authoritative -> assetOriginPolicy hook fail-closed (throw OR non-true blocks) -> posture allow. mediaMode default 'reference' (off|poster|reference; invalid throws at factory time). Gate runs PRE-write at all 4 sites: snapshot at the STRING layer (Pitfall 1 -- parser fetches during parse, before post-parse scrub) + diff ADD/ATTR + subtree; blocked -> data-ps-asset-unavailable="blocked-origin" placeholder. ASST-03 currentSrc pin (effective src = data-ps-currentsrc, srcset/sizes neutralized) viewer-side. Sandbox token + CSP_META byte-unchanged (no script-src, no media-src -- media-src is Phase 13); no allow-scripts literal.
+- [Phase 12-03]: VERIFIED jsdom/URL realities baked into the implementation: Node's WHATWG URL does NOT strip IPv6 brackets (new URL('https://[::1]/').hostname === '[::1]') -- isPrivateOrLocalHost strips them before its IPv6 checks; .local routes to 'unqualified-host' not 'private-host'. createViewer gained a host-driven API (mount alias + optional no-op transport + handleSnapshot on the handle, envelope-or-bare-payload tolerant) while the wire-driven cfg.container path keeps transport REQUIRED. Placeholders carry NO live identity attr (positional nid pairing preserved -- Phase 7). Playwright asset UAT DEFERRED (jsdom never parses srcdoc/enforces CSP/fetches) per the project UAT-deferral precedent.
 
 ### Pending Todos
 

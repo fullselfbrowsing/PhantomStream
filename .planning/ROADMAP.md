@@ -32,7 +32,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Milestone v2.0 — Asset & Media Streaming (Phases 12–15):**
 
-- [ ] **Phase 12: Static Assets by Reference** - Verify/harden the already-shipped by-reference asset pipeline; `currentSrc` pinning; placeholder fallback; precise viewer CSP; front-loaded fail-closed origin policy + `mediaMode`
+- [x] **Phase 12: Static Assets by Reference** - Verify/harden the already-shipped by-reference asset pipeline; `currentSrc` pinning; placeholder fallback; precise viewer CSP; front-loaded fail-closed origin policy + `mediaMode` (completed 2026-06-20)
 - [ ] **Phase 13: Video/Audio URL + Playback Sync** - Progressive `<video>`/`<audio>` from source URL; throttled `STREAM.MEDIA` side channel; drift-corrected pure-function reconciler; autoplay-policy-correct viewer
 - [ ] **Phase 14: Adaptive Streaming + Adapter Discovery + Fallback** - Best-effort HLS/DASH via an optional, lazy, parent-realm player; opt-in adapter manifest discovery; MSE-no-manifest/DRM → poster; live-stream handling
 - [ ] **Phase 15: Media Security, Masking, Threat Model & Docs** - Complete URL/media masking + `referrerpolicy="no-referrer"`; threat-review the parent-realm object-URL blast radius; media security tests; SECURITY/ARCHITECTURE docs
@@ -350,7 +350,7 @@ Plans:
 
 **Wave 2** *(blocked on 12-01)*
 - [x] 12-02-PLAN.md — Capture: ASSET_DATA_URI_MAX_BYTES + blob:/oversized-data placeholder degrade + clone-only data-ps-currentsrc + D26 oracle (ASST-03, ASST-04)
-- [ ] 12-03-PLAN.md — Renderer: pure fail-closed origin classifier + mediaMode + pre-write fetch gate (string-layer snapshot + diff/subtree) + currentSrc pin + SECURITY.md (ASST-02, ASST-03, MSEC-01, MSEC-02)
+- [x] 12-03-PLAN.md — Renderer: pure fail-closed origin classifier + mediaMode + pre-write fetch gate (string-layer snapshot + diff/subtree) + currentSrc pin + SECURITY.md (ASST-02, ASST-03, MSEC-01, MSEC-02)
 
 ### Phase 13: Video/Audio URL + Playback Sync
 **Goal**: The defining v2.0 capability — progressive `<video>`/`<audio>` play in the viewer from the source URL with drift-corrected playback sync (play/pause/seek/rate) over a new throttled `STREAM.MEDIA` side channel, autoplay-policy-correct, with the relay and envelope untouched and old viewers safely ignoring the new type
@@ -430,7 +430,7 @@ Phases execute in numeric order. v1.0 (1–11) is complete. v2.0 active order: 1
 | 9. CSSOM Capture Mode | 8/8 | Complete | 2026-06-16 |
 | 10. npm Packaging & 0.x Publish | 5/5 | Complete | 2026-06-16 |
 | 11. FSB Swap-In → 1.0 | — | Complete (verified in FSB repo) | 2026-06-16 |
-| 12. Static Assets by Reference | 2/3 | In Progress|  |
+| 12. Static Assets by Reference | 3/3 | Complete   | 2026-06-20 |
 | 13. Video/Audio URL + Playback Sync | 0/TBD | Not started | - |
 | 14. Adaptive Streaming + Adapter Discovery + Fallback | 0/TBD | Not started | - |
 | 15. Media Security, Masking, Threat Model & Docs | 0/TBD | Not started | - |
