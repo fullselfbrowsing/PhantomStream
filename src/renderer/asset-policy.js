@@ -50,18 +50,43 @@
  * unqualified-host branch's job in classifyAssetOrigin so a *.local name
  * classifies as 'unqualified-host', not 'private-host'.)
  *
- * @param {string} host Lowercased hostname (u.hostname).
+ * SELF-CONTAINED NORMALIZATION (Phase 12 review CR-01/WR-01): this predicate
+ * is an exported Phase-15-reusable seam, so it must NOT depend on the caller
+ * having pre-normalized the host through WHATWG `new URL()`. A single trailing
+ * dot (the FQDN root label -- 'localhost.', '127.0.0.1.') is stripped, the host
+ * is lowercased, and any IPv6 zone-id ('%eth0') is dropped here so a raw
+ * `Host:` header / CSS url() host / media URL host cannot bypass the deny
+ * decision. Beyond the IPv4 dotted-quad ranges this blocks IPv6 loopback
+ * (`::1`), the unspecified address (`::`), link-local fe80::/10, ULA fc00::/7,
+ * the NAT64 well-known prefix 64:ff9b::/96, and IPv4-mapped / IPv4-compatible
+ * IPv6 (`::ffff:a.b.c.d`, `::ffff:HHHH:HHHH`, `::a.b.c.d`) by extracting the
+ * embedded IPv4 and re-running the v4 ranges -- so the AWS/GCP/Azure metadata
+ * host 169.254.169.254 and 127.0.0.1 are blocked in every representation. The
+ * milestone has no use case for fetching from a raw IP literal, so this stays
+ * fail-closed: an IP-literal form it cannot confidently prove public is denied.
+ *
+ * @param {string} host Lowercased hostname (u.hostname) OR a raw host string.
  * @returns {boolean}
  */
 export function isPrivateOrLocalHost(host) {
   if (!host || typeof host !== 'string') return true; // fail closed on no host
-  if (host === 'localhost') return true;
+  // Normalize independent of any caller pre-normalization (CR-01/WR-01):
+  // lowercase, then strip a single trailing FQDN-root dot so 'localhost.' and
+  // '127.0.0.1.' cannot slip past the equality/regex checks below.
+  var normalized = host.toLowerCase();
+  if (normalized.length > 1 && normalized.charAt(normalized.length - 1) === '.') {
+    normalized = normalized.slice(0, -1);
+  }
+  if (normalized === 'localhost') return true;
   // Strip the brackets WHATWG URL keeps on IPv6 literal hostnames so the
-  // bare-address IPv6 checks below match ('[::1]' -> '::1').
-  var bare = host.charAt(0) === '[' && host.charAt(host.length - 1) === ']'
-    ? host.slice(1, -1)
-    : host;
-  if (bare === '::1') return true; // IPv6 loopback
+  // bare-address IPv6 checks below match ('[::1]' -> '::1'), then drop any
+  // IPv6 zone-id ('fe80::1%eth0' -> 'fe80::1') so a scoped literal cannot
+  // bypass the prefix checks.
+  var bare = normalized.charAt(0) === '[' && normalized.charAt(normalized.length - 1) === ']'
+    ? normalized.slice(1, -1)
+    : normalized;
+  var zone = bare.indexOf('%');
+  if (zone !== -1) bare = bare.slice(0, zone);
   // IPv4 dotted-quad ranges.
   var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(bare);
   if (m) {
@@ -73,9 +98,35 @@ export function isPrivateOrLocalHost(host) {
     if (a === 169 && b === 254) return true;           // 169.254.0.0/16 link-local
     return false;
   }
-  // IPv6 ULA fc00::/7 (fc.. or fd.. prefix). The leading 7 bits of fc/fd
-  // cover the whole fc00::/7 block; a colon-bearing host is IPv6.
+  // Everything below is an IPv6 literal (colon-bearing) or a name; only the
+  // IPv6 forms are denied here. A name with no colon falls through to false
+  // (the dotless/.local check lives in classifyAssetOrigin).
+  if (bare.indexOf(':') === -1) return false;
+  if (bare === '::1') return true;                    // IPv6 loopback
+  if (bare === '::') return true;                     // unspecified address
+  // IPv6 link-local fe80::/10 (first hextet fe80..febf).
+  if (/^fe[89ab][0-9a-f]*:/.test(bare)) return true;
+  // IPv6 ULA fc00::/7 (fc.. or fd.. prefix).
   if (/^f[cd][0-9a-f]*:/.test(bare)) return true;
+  // NAT64 well-known prefix 64:ff9b::/96 -- a public resolver maps an embedded
+  // IPv4 (incl. the metadata host: 64:ff9b::a9fe:a9fe) here. Block the prefix
+  // outright; the milestone never fetches via NAT64 by raw literal.
+  if (/^64:ff9b:/.test(bare)) return true;
+  // IPv4-mapped / IPv4-compatible IPv6: ::ffff:a.b.c.d, ::ffff:HHHH:HHHH,
+  // or ::a.b.c.d. Extract the trailing embedded IPv4 (dotted, or the last two
+  // hextets) and re-run the v4 ranges so e.g. ::ffff:169.254.169.254 and
+  // ::ffff:7f00:1 (127.0.0.1) are denied through the same table.
+  var mapped = /^(?:::ffff:|::)(?:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/.exec(bare);
+  if (mapped) {
+    var v4 = mapped[1];
+    if (!v4 && mapped[2] && mapped[3]) {
+      var hi = parseInt(mapped[2], 16), lo = parseInt(mapped[3], 16);
+      v4 = (hi >> 8) + '.' + (hi & 255) + '.' + (lo >> 8) + '.' + (lo & 255);
+    }
+    // Re-run the v4 ranges on the embedded address; ::ffff:0:0/96 mapping a
+    // public v4 stays allowed only when that v4 is itself public.
+    if (v4 && isPrivateOrLocalHost(v4)) return true;
+  }
   return false;
 }
 
