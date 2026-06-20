@@ -105,6 +105,17 @@ const SSRF_BYPASS_ROWS = [
   { url: 'https://[::]/x', allowed: false, reason: 'private-host', note: 'unspecified ::' },
   // IPv4-compatible (no ::ffff:) form of the metadata host.
   { url: 'https://[::169.254.169.254]/x', allowed: false, reason: 'private-host', note: 'IPv4-compatible metadata' },
+  // 0.0.0.0/8 "this host" (RFC 1122) -- a real SSRF vector to loopback-bound
+  // services on Linux. The whole /8 first octet must be denied, not just
+  // 0.0.0.0 exactly.
+  { url: 'https://0.0.0.0/admin', allowed: false, reason: 'private-host', note: '0.0.0.0 "this host" RFC 1122' },
+  { url: 'https://0.0.0.0:8080/admin', allowed: false, reason: 'private-host', note: '0.0.0.0 with explicit port' },
+  { url: 'https://0.0.0.1/x', allowed: false, reason: 'private-host', note: '0.0.0.0/8 range' },
+  { url: 'https://0.1.2.3/x', allowed: false, reason: 'private-host', note: '0.0.0.0/8 range, non-zero tail' },
+  // IPv4-mapped 0.0.0.0 forms re-run the embedded v4 classifier -> must hit
+  // the same 0.0.0.0/8 rule.
+  { url: 'https://[::ffff:0:0]/x', allowed: false, reason: 'private-host', note: 'IPv4-mapped 0.0.0.0 (hex hextets)' },
+  { url: 'https://[::ffff:0.0.0.0]/x', allowed: false, reason: 'private-host', note: 'IPv4-mapped 0.0.0.0 (dotted)' },
 ];
 
 for (const row of SSRF_BYPASS_ROWS) {
@@ -132,6 +143,11 @@ const PREDICATE_PRIVATE_ROWS = [
   'localhost.',
   'LOCALHOST',
   '169.254.169.254',
+  '0.0.0.0',
+  '0.0.0.1',
+  '0.1.2.3',
+  '[::ffff:0:0]',
+  '[::ffff:0.0.0.0]',
   '[::ffff:7f00:1]',
   '[::ffff:169.254.169.254]',
   '[fe80::1]',
@@ -152,4 +168,8 @@ test('isPrivateOrLocalHost stays false for a genuinely public host/IP (WR-01 not
   assert.equal(isPrivateOrLocalHost('cdn.example.com'), false, 'public hostname is not private');
   assert.equal(isPrivateOrLocalHost('8.8.8.8'), false, 'public IPv4 is not private');
   assert.equal(isPrivateOrLocalHost('172.32.0.1'), false, '172.32.x is outside the /12');
+  // 0.0.0.0/8 denial is the WHOLE /8 (first octet 0), but it must not bleed
+  // into 1.x or any other public space (CR-01 not over-broad).
+  assert.equal(isPrivateOrLocalHost('1.0.0.0'), false, '1.0.0.0 is outside 0.0.0.0/8');
+  assert.equal(isPrivateOrLocalHost('1.2.3.4'), false, 'public IPv4 1.2.3.4 is not private');
 });

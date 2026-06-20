@@ -25,6 +25,7 @@
 // gateAssetUrl), never by relaxing this function.
 //
 // Denylist (12-CONTEXT, locked): scheme MUST be https:; deny localhost,
+// 0.0.0.0/8 ("this host", RFC 1122 -- SSRF to loopback on Linux),
 // 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16,
 // ::1, fc00::/7 (fc.. or fd..), and .local / unqualified (dotless) hosts.
 
@@ -91,6 +92,7 @@ export function isPrivateOrLocalHost(host) {
   var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(bare);
   if (m) {
     var a = +m[1], b = +m[2];
+    if (a === 0) return true;                          // 0.0.0.0/8 "this host" (RFC 1122) -- SSRF to loopback-bound services on Linux
     if (a === 127) return true;                       // 127.0.0.0/8 loopback
     if (a === 10) return true;                         // 10.0.0.0/8
     if (a === 172 && b >= 16 && b <= 31) return true;  // 172.16.0.0/12
