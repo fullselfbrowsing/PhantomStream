@@ -34,11 +34,96 @@
 // || inline defaulting, function expressions, named exports, explicit .js
 // import extensions, factory-time validation as the ONLY throwing site.
 
-import { buildSnapshotHtml, buildFramePlaceholderHtml } from './snapshot.js';
+import { buildSnapshotHtml, buildFramePlaceholderHtml, gateSnapshotAssets } from './snapshot.js';
 import { applyMutations } from './diff.js';
 import { sanitizeFragment, scrubCssText } from './sanitize.js';
 import { createOverlays, mapRectToHost, OVERLAY_CSS } from './overlays.js';
+import { classifyAssetOrigin } from './asset-policy.js';
 import { STREAM, CONTROL, isCurrentStream } from '../protocol/messages.js';
+
+// ---- Phase 12 (MSEC-01/MSEC-02): the renderer pre-write fetch gate ----
+//
+// v2.0 changes the viewer's verb from render-inert to FETCH. gateAssetUrl is
+// the single orchestrator every write site consults BEFORE an asset URL
+// reaches the mirror DOM, so the viewer's browser never issues a GET for a
+// blocked origin (snapshot: pre-srcdoc string layer; diff ADD/subtree:
+// pre-importNode on inert template content; diff ATTR: pre-setAttribute).
+//
+// Pure and fail-closed (mirrors compileMaskSelector's fail-closed-and-loud
+// precedent): it takes the per-viewer posture in ctx so it is unit-testable
+// in isolation and reused unchanged across all four sites. Precedence:
+//   1. mediaMode 'off'              -> block ALL asset fetch (no surface).
+//   2. allowAssetOrigins host match -> ALLOW (explicit host widen of the
+//                                       conservative default; the only way a
+//                                       private/non-https host is reachable).
+//   3. classifyAssetOrigin(url)     -> classifier deny is authoritative
+//                                       (https-only + private-range deny)
+//                                       unless (2) widened it.
+//   4. assetOriginPolicy(url, ctx)  -> host hook, fail-closed: a throw OR any
+//                                       non-true return BLOCKS (never opens).
+//   5. mediaMode 'poster' | 'reference' -> poster images pass under 'poster'
+//                                       (the full poster/full-asset split
+//                                       matures in Phase 13 when <video>
+//                                       ships); both pass under 'reference'.
+var VALID_MEDIA_MODES = { off: true, poster: true, reference: true };
+
+/** Extract a lowercased hostname from a URL string, or '' on parse failure. */
+function assetUrlHost(url) {
+  try {
+    return new URL(String(url)).hostname.toLowerCase();
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * The renderer's pre-write asset fetch gate (MSEC-01/MSEC-02). Pure: decides
+ * allow/deny for a single asset URL under the posture carried in ctx. Every
+ * branch that is not an explicit allow fails closed.
+ *
+ * @param {string} url Absolute asset URL about to be written into the mirror.
+ * @param {Object} [ctx] Posture: { mediaMode, allowAssetOrigins, assetOriginPolicy, kind }.
+ * @returns {{ allow: boolean, reason: string }}
+ */
+export function gateAssetUrl(url, ctx) {
+  var c = ctx || {};
+  var mode = VALID_MEDIA_MODES[c.mediaMode] ? c.mediaMode : 'reference';
+
+  // (1) mediaMode 'off': no viewer fetch surface at all.
+  if (mode === 'off') return { allow: false, reason: 'media-off' };
+
+  // (2) allowAssetOrigins widen: an explicitly allowlisted host is reachable
+  // even if the conservative classifier would otherwise deny it.
+  var host = assetUrlHost(url);
+  var allowlist = Array.isArray(c.allowAssetOrigins) ? c.allowAssetOrigins : null;
+  var widened = false;
+  if (allowlist && host) {
+    for (var i = 0; i < allowlist.length; i++) {
+      if (String(allowlist[i]).toLowerCase() === host) { widened = true; break; }
+    }
+  }
+
+  // (3) classifier: authoritative deny unless (2) widened the host.
+  if (!widened) {
+    var verdict = classifyAssetOrigin(url);
+    if (!verdict.allowed) return { allow: false, reason: verdict.reason };
+  }
+
+  // (4) host hook, fail-closed: throw OR non-true -> block.
+  if (typeof c.assetOriginPolicy === 'function') {
+    var ok;
+    try {
+      ok = c.assetOriginPolicy(url, c);
+    } catch (e) {
+      return { allow: false, reason: 'hook-threw' };
+    }
+    if (ok !== true) return { allow: false, reason: 'hook-denied' };
+  }
+
+  // (5) posture: 'poster' permits poster images (P12 scope; the full split is
+  // Phase 13). 'reference' permits all by-reference assets.
+  return { allow: true, reason: 'ok' };
+}
 
 /**
  * The host-injected viewer transport. Mirrors the capture Transport's
@@ -152,13 +237,33 @@ export function computeScale(pageW, pageH, containerW, containerH) {
 export function createViewer(options) {
   var cfg = options || {};
 
-  var container = cfg.container;
+  // Container resolution: `mount` is accepted as an alias for `container`
+  // (the host-driven asset-gate path and embedders that think in "mount
+  // points" use it). When the resolved container carries no ownerDocument,
+  // cfg.document is the construction-document fallback (see `doc` below).
+  var hostDriven = !cfg.container && !!cfg.mount; // mount alias == host-driven API
+  var container = cfg.container || cfg.mount;
   if (!container || typeof container.appendChild !== 'function') {
     throw new Error('viewer-container-required');
   }
+  // Transport requirement depends on the API style. The wire-driven API
+  // (cfg.container) REQUIRES a complete transport -- the original contract,
+  // and a partial { send } / { onMessage } still throws. The host-driven API
+  // (cfg.mount) makes transport OPTIONAL: such viewers drive handleSnapshot
+  // directly (Phase 12 asset path) and need no socket, so a no-op transport
+  // keeps the dispatch wiring intact without one. A provided transport is
+  // always validated regardless of style.
   var transport = cfg.transport;
-  if (!transport || typeof transport.send !== 'function'
-      || typeof transport.onMessage !== 'function') {
+  if (transport) {
+    if (typeof transport.send !== 'function' || typeof transport.onMessage !== 'function') {
+      throw new Error('viewer-transport-required');
+    }
+  } else if (hostDriven) {
+    transport = {
+      send: function () {},
+      onMessage: function () { return function () {}; }
+    };
+  } else {
     throw new Error('viewer-transport-required');
   }
   var logger = cfg.logger || {
@@ -170,9 +275,97 @@ export function createViewer(options) {
     ? Math.max(0, cfg.disconnectDelayMs)
     : 750;
 
+  // Phase 12 asset-fetch posture (MSEC-01/MSEC-02). Validate mediaMode at
+  // factory time -- the ONLY sanctioned throw site (capture precedent); an
+  // invalid value is a host misconfiguration, not a per-message error.
+  var mediaMode = cfg.mediaMode == null ? 'reference' : String(cfg.mediaMode);
+  if (!VALID_MEDIA_MODES[mediaMode]) {
+    throw new Error('viewer-mediamode-invalid');
+  }
+  var assetOriginPolicy = typeof cfg.assetOriginPolicy === 'function'
+    ? cfg.assetOriginPolicy
+    : null;
+  var allowAssetOrigins = Array.isArray(cfg.allowAssetOrigins)
+    ? cfg.allowAssetOrigins.slice()
+    : null;
+  // Per-viewer gate closure: every write site (snapshot string layer, diff
+  // ADD/ATTR, subtree) calls this so the posture is applied uniformly and
+  // fail-closed. kind defaults to 'image' (P12 image scope).
+  function gateAsset(url, kind) {
+    return gateAssetUrl(url, {
+      mediaMode: mediaMode,
+      allowAssetOrigins: allowAssetOrigins,
+      assetOriginPolicy: assetOriginPolicy,
+      kind: kind || 'image'
+    });
+  }
+
+  /**
+   * Build the renderer-owned dimensioned blocked-origin placeholder ELEMENT
+   * (the DOM-fragment twin of snapshot.js's string placeholder; renderer-owned
+   * per the project's duplicate-don't-couple style). Preserves the source
+   * element's dimensions (rr_width/rr_height or width/height) so layout stays
+   * stable; replacing an <img> 1:1 with this <div> keeps the positional nid
+   * index consistent (the renderer pairs elements by the nodeIds sidecar
+   * positionally, not by any live identity attribute -- Phase 7). No fetchable
+   * attribute is set.
+   * @param {Document} ownerDoc
+   * @param {Element} el The blocked <img>.
+   * @returns {Element}
+   */
+  function buildAssetPlaceholderEl(ownerDoc, el) {
+    var ph = ownerDoc.createElement('div');
+    ph.setAttribute('data-ps-asset-unavailable', 'blocked-origin');
+    var w = (el.getAttribute && (el.getAttribute('rr_width') || el.getAttribute('width'))) || '';
+    var h = (el.getAttribute && (el.getAttribute('rr_height') || el.getAttribute('height'))) || '';
+    if (w) ph.setAttribute('rr_width', w);
+    if (h) ph.setAttribute('rr_height', h);
+    return ph;
+  }
+
+  /**
+   * Pre-write asset gate over a PARSED, inert DOM subtree (defense-in-depth
+   * for the post-parse mirror body and the authoritative gate for diff ADD /
+   * subtree-response template content, which is inert and fires no fetch). For
+   * each <img>: apply the ASST-03 currentSrc pin (effective src =
+   * data-ps-currentsrc, neutralize srcset/sizes), then gateAsset the effective
+   * src; blocked -> replace the <img> with the dimensioned placeholder. Safe
+   * on any Document-owned root; contained per-element so one bad node never
+   * aborts the pass.
+   * @param {Node} rootNode A parsed fragment/body (template.content or mirror body).
+   */
+  function gateFragmentAssets(rootNode) {
+    if (!rootNode || typeof rootNode.querySelectorAll !== 'function') return;
+    var ownerDoc = rootNode.ownerDocument || (rootNode.nodeType === 9 ? rootNode : null);
+    if (!ownerDoc) return;
+    var imgs = rootNode.querySelectorAll('img');
+    for (var i = 0; i < imgs.length; i++) {
+      var el = imgs[i];
+      try {
+        var pinned = el.getAttribute('data-ps-currentsrc');
+        var effective = el.getAttribute('src');
+        if (pinned) {
+          effective = pinned;
+          el.setAttribute('src', pinned);
+          el.removeAttribute('srcset');
+          el.removeAttribute('sizes');
+          el.removeAttribute('data-ps-currentsrc');
+        }
+        if (effective && !gateAsset(effective, 'image').allow) {
+          var ph = buildAssetPlaceholderEl(ownerDoc, el);
+          if (el.parentNode) el.parentNode.replaceChild(ph, el);
+        }
+      } catch (e) {
+        logger.warn('[Renderer] asset gate pass failed for an element', {
+          error: e && e.message ? e.message : String(e)
+        });
+      }
+    }
+  }
+
   // All DOM construction happens in the container's own document so the
   // viewer works in any window (host page, jsdom test, future multi-doc).
-  var doc = container.ownerDocument;
+  var doc = container.ownerDocument || cfg.document;
   var win = doc.defaultView;
 
   // --- Viewer root: fills the container, clips the scaled mirror, and
@@ -228,6 +421,12 @@ export function createViewer(options) {
       var scrubDoc = iframe.contentDocument;
       if (scrubDoc && scrubDoc.body) {
         sanitizeFragment(scrubDoc.body, sanitizeCounters, logger);
+        // DEFENSE-IN-DEPTH (MSEC-01): the authoritative snapshot gate already
+        // ran at the string layer (handleSnapshot) so the parser never saw a
+        // blocked URL; this post-parse pass re-gates the parsed mirror body to
+        // catch any asset a future write path introduces and to keep the pin
+        // consistent on the live mirror DOM.
+        gateFragmentAssets(scrubDoc.body);
         if (lastSnapshotPayload) {
           resetIdentityIndex(scrubDoc, lastSnapshotPayload.nodeIds || []);
           installStyleSources(scrubDoc, lastSnapshotPayload.styleSources || [], { kind: 'document' });
@@ -1093,6 +1292,13 @@ export function createViewer(options) {
    */
   function handleSnapshot(payload) {
     var p = payload || {};
+    // Accept either a bare SnapshotPayload (the dispatch() path passes
+    // payload directly) or a full { type, payload } message envelope (the
+    // host-driven handleSnapshot entry point on the returned handle). Unwrap
+    // the envelope so both call shapes resolve the same payload.
+    if (typeof p.html !== 'string' && p.payload && typeof p.payload === 'object') {
+      p = p.payload;
+    }
     if (typeof p.html !== 'string') {
       logger.error('[Renderer] snapshot missing html');
       return;
@@ -1110,7 +1316,20 @@ export function createViewer(options) {
     lastScroll.y = p.scrollY || 0;
     lastSnapshotPayload = p;
     clearIdentityIndex();
-    iframe.srcdoc = buildSnapshotHtml(p);
+    // PRE-WRITE FETCH GATE (MSEC-01, THE timing rule -- 12-RESEARCH Pitfall 1):
+    // rewrite blocked <img> assets to the dimensioned blocked-origin
+    // placeholder and apply the ASST-03 currentSrc pin at the STRING layer,
+    // BEFORE buildSnapshotHtml assembles the srcdoc, so a real browser's
+    // parser never sees a blocked URL and never issues the GET. Operates on a
+    // shallow payload copy (the wire payload object stays intact for the
+    // post-parse scrub's nodeIds/styleSources re-read). This rewrites typed
+    // values we are emitting -- NOT a scrub-then-reparse of sanitized HTML
+    // (snapshot.js header lines 14-19 invariant preserved). The post-parse
+    // DOM gate below is defense-in-depth for diffs/robustness.
+    var gatedPayload = Object.assign({}, p, {
+      html: gateSnapshotAssets(p.html, gateAsset)
+    });
+    iframe.srcdoc = buildSnapshotHtml(gatedPayload);
     markLive('snapshot');
   }
 
@@ -1143,7 +1362,12 @@ export function createViewer(options) {
           installFrames(cd, frames || []);
         },
         applyStyleSource: applyStyleSource,
-        removeStyleSource: removeStyleSource
+        removeStyleSource: removeStyleSource,
+        // Phase 12 (MSEC-01) pre-write asset gate hooks for the diff applier:
+        // ADD template content is gated as an inert fragment; ATTR src/poster
+        // is gated per-URL before setAttribute.
+        gateFragmentAssets: gateFragmentAssets,
+        gateAssetUrl: gateAsset
       }
     });
     if (!resyncPending) markLive('mutations');
@@ -1170,6 +1394,9 @@ export function createViewer(options) {
     var tpl = targetDoc.createElement('template');
     tpl.innerHTML = p.html || '';
     sanitizeFragment(tpl.content, sanitizeCounters, logger);
+    // PRE-WRITE FETCH GATE (MSEC-01): template content is inert (no fetch), so
+    // gating here -- before importNode -- is pre-write and safe.
+    gateFragmentAssets(tpl.content);
     var newNode = tpl.content.firstElementChild;
     if (!newNode) {
       logger.warn('[Renderer] subtree response dropped: html parsed to no element', {
@@ -1396,7 +1623,12 @@ export function createViewer(options) {
     on: on,
     registerOverlay: registerOverlay,
     requestSubtree: requestSubtree,
-    resolveNode: resolveNode
+    resolveNode: resolveNode,
+    // Host-driven snapshot entry point (Phase 12): viewers wired without a
+    // wire transport (the asset-fetch-gate path) render a snapshot by calling
+    // this directly. Identical to the dispatch() STREAM.SNAPSHOT target and
+    // accepts either a bare payload or a { type, payload } envelope.
+    handleSnapshot: handleSnapshot
   };
 }
 

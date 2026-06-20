@@ -40,6 +40,113 @@ import { scrubCssText } from './sanitize.js';
 
 /** @typedef {import('../protocol/messages.js').SnapshotPayload} SnapshotPayload */
 
+// ---- Phase 12 (MSEC-01/MSEC-02/ASST-03): string-layer snapshot asset gate ----
+//
+// THE critical timing rule (12-RESEARCH Pitfall 1): a real browser's HTML
+// parser begins fetching <img src> DURING srcdoc parse, before the iframe's
+// post-parse `load` scrub can run. So for the SNAPSHOT, the authoritative
+// fetch gate must run at the STRING/payload layer -- before buildSnapshotHtml
+// assembles the srcdoc -- so a blocked origin never reaches the parser and
+// the viewer's browser never issues the GET. The post-parse DOM scrub
+// (src/renderer/index.js) and the diff-path gates remain as defense-in-depth.
+//
+// This is NOT the mXSS scrub-then-reparse anti-pattern guarded by the module
+// header (lines 14-19): we rewrite TYPED attribute values inside the markup
+// we are ABOUT TO EMIT (the wire payload's <img> src/srcset/poster), never a
+// sanitized DOM serialized back to a string and re-parsed. payload.html stays
+// raw for everything else; only fetchable asset attributes are rewritten, and
+// only into a non-fetchable dimensioned placeholder or a pinned same-origin
+// value. No DOM is constructed here (this module stays DOM-free by contract).
+
+/** Match an <img ...> start tag (self-closing or not); group 1 is its attrs. */
+var IMG_TAG_RE = /<img\b([^>]*)>/gi;
+/** Pull a double/single/unquoted attribute value out of an attrs blob. */
+function readTagAttr(attrs, name) {
+  var re = new RegExp(name + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s"\'>]+))', 'i');
+  var m = re.exec(attrs);
+  if (!m) return null;
+  return m[1] != null ? m[1] : (m[2] != null ? m[2] : (m[3] != null ? m[3] : ''));
+}
+/** Remove an attribute (all quote forms) from an attrs blob. */
+function stripTagAttr(attrs, name) {
+  return attrs.replace(
+    new RegExp('\\s' + name + '\\s*=\\s*(?:"[^"]*"|\'[^\']*\'|[^\\s"\'>]+)', 'gi'),
+    ''
+  );
+}
+/** Set/replace a double-quoted attribute on an attrs blob (value HTML-escaped). */
+function setTagAttr(attrs, name, value) {
+  var cleaned = stripTagAttr(attrs, name);
+  return cleaned + ' ' + name + '="' + escapeAttribute(value) + '"';
+}
+
+/**
+ * Build the dimensioned blocked-origin placeholder STRING (renderer-owned;
+ * never imported from capture per the project's duplicate-don't-couple style).
+ * Mirrors the capture placeholder visual: a dimension-only <div> carrying
+ * rr_width/rr_height (read from the element's own rr_width/rr_height or
+ * width/height attrs) and the machine-readable
+ * data-ps-asset-unavailable="blocked-origin" reason. Replacing an <img> 1:1
+ * with this <div> keeps the renderer's positional nid pairing consistent (the
+ * index pairs elements with the nodeIds sidecar by position, not by any live
+ * identity attribute -- Phase 7), so no identity attribute is carried here.
+ * @param {string} attrs The original img attribute blob.
+ * @returns {string}
+ */
+function assetUnavailablePlaceholderTag(attrs) {
+  var w = readTagAttr(attrs, 'rr_width') || readTagAttr(attrs, 'width') || '';
+  var h = readTagAttr(attrs, 'rr_height') || readTagAttr(attrs, 'height') || '';
+  var out = '<div data-ps-asset-unavailable="blocked-origin"';
+  if (w) out += ' rr_width="' + escapeAttribute(w) + '"';
+  if (h) out += ' rr_height="' + escapeAttribute(h) + '"';
+  out += '></div>';
+  return out;
+}
+
+/**
+ * Rewrite fetchable <img> assets in a raw snapshot HTML string against an
+ * injected pre-write fetch gate (MSEC-01) and apply the ASST-03 currentSrc
+ * pin. For each <img>:
+ *   1. currentSrc pin: if data-ps-currentsrc is present, the effective src
+ *      becomes that value and srcset/sizes are neutralized (removed) so the
+ *      cross-origin viewer's DPR cannot re-negotiate a different variant.
+ *   2. fetch gate: gate(effectiveSrc, 'image'); if !allow, the entire <img>
+ *      is replaced by the dimensioned blocked-origin placeholder so the
+ *      parser never sees a fetchable src.
+ * An <img> with no src/currentsrc is left untouched. The gate is fail-closed
+ * by construction (createViewer's gateAssetUrl); a missing gate leaves the
+ * markup unchanged (no-op) so this stays a pure string transform.
+ * @param {string} html  Raw payload.html (string layer, pre-srcdoc).
+ * @param {(url: string, kind: string) => { allow: boolean }} gate
+ * @returns {string}
+ */
+export function gateSnapshotAssets(html, gate) {
+  if (typeof html !== 'string' || !html) return html;
+  if (typeof gate !== 'function') return html;
+  return html.replace(IMG_TAG_RE, function (whole, attrs) {
+    var pinned = readTagAttr(attrs, 'data-ps-currentsrc');
+    var src = readTagAttr(attrs, 'src');
+    var nextAttrs = attrs;
+    var effective = src;
+    if (pinned) {
+      // ASST-03: pin the displayed variant and neutralize re-negotiation.
+      effective = pinned;
+      nextAttrs = setTagAttr(nextAttrs, 'src', pinned);
+      nextAttrs = stripTagAttr(nextAttrs, 'srcset');
+      nextAttrs = stripTagAttr(nextAttrs, 'sizes');
+      nextAttrs = stripTagAttr(nextAttrs, 'data-ps-currentsrc');
+    }
+    if (effective) {
+      var verdict = gate(effective, 'image');
+      if (!verdict || !verdict.allow) {
+        // Blocked origin -> dimensioned placeholder; no fetchable src emitted.
+        return assetUnavailablePlaceholderTag(attrs);
+      }
+    }
+    return '<img' + nextAttrs + '>';
+  });
+}
+
 // The ADOPTED srcdoc CSP (backstop behind both sanitization chokepoints,
 // delivered via meta because the mirror is never a fetched URL). Baseline
 // from 03-CONTEXT with ONE documented adjustment under the decision's own

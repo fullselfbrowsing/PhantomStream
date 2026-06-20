@@ -135,6 +135,19 @@ export function applyMutations(doc, mutations, counters, hooks) {
   var removeStyleSource = typeof identity.removeStyleSource === 'function'
     ? function (sourceId, scope) { return identity.removeStyleSource(sourceId, scope); }
     : null;
+  // Phase 12 (MSEC-01) injected pre-write asset gate. createViewer injects the
+  // posture-bound closures; omitted hooks default to no-ops so the public
+  // applyMutations signature and every existing caller stay unchanged.
+  //   gateFragmentAssets(node): pre-write gate over inert ADD template content
+  //     (currentSrc pin + blocked-origin -> placeholder), run before importNode.
+  //   gateAssetUrl(url, kind): per-URL verdict for the ATTR branch's src/poster,
+  //     run before setAttribute (live-element mutation -> must gate pre-write).
+  var gateFragmentAssets = typeof identity.gateFragmentAssets === 'function'
+    ? function (node) { identity.gateFragmentAssets(node); }
+    : function () {};
+  var gateAssetUrl = typeof identity.gateAssetUrl === 'function'
+    ? function (url, kind) { return identity.gateAssetUrl(url, kind); }
+    : null;
 
   // Shared miss path: count, warn, and escalate at the parity threshold.
   function recordStaleMiss(op, nid) {
@@ -212,6 +225,11 @@ export function applyMutations(doc, mutations, counters, hooks) {
             // before it gets anywhere near the mirror document -- DOM-
             // fragment based, never string-scrub-then-reparse (mXSS).
             sanitizeFragment(tpl.content, sanitizeCounters, logger);
+            // PRE-WRITE FETCH GATE (MSEC-01): the parsed template content is
+            // inert (fires no fetch), so gating it here -- before importNode --
+            // is pre-write. Applies the currentSrc pin and replaces blocked
+            // origins with the dimensioned placeholder.
+            gateFragmentAssets(tpl.content);
             var newNode = tpl.content.firstElementChild;
             if (!newNode) {
               // Still possible: empty/whitespace-only m.html, or html whose
@@ -317,6 +335,22 @@ export function applyMutations(doc, mutations, counters, hooks) {
             if (scrubbed.value === null) {
               target.removeAttribute(m.attr);
               break;
+            }
+            // PRE-WRITE FETCH GATE (MSEC-01): for fetchable attrs (src/poster)
+            // on a LIVE mirror element, gate before setAttribute so a blocked
+            // origin never reaches the live DOM (the browser would GET it
+            // immediately). Blocked -> drop the attribute (no fetchable src);
+            // the dimensioned placeholder is the snapshot/ADD path's job.
+            if (gateAssetUrl && (attrName === 'src' || attrName === 'poster')) {
+              var assetVerdict = gateAssetUrl(scrubbed.value, attrName === 'poster' ? 'poster' : 'image');
+              if (!assetVerdict || !assetVerdict.allow) {
+                sanitizeCounters.blockedUrls += 1;
+                logger.warn('[Renderer] attr op asset blocked by origin gate', {
+                  nid: m.nid || '', attr: m.attr || ''
+                });
+                target.removeAttribute(m.attr);
+                break;
+              }
             }
             target.setAttribute(m.attr, scrubbed.value);
             break;

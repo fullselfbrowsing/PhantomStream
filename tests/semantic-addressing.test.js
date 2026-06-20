@@ -177,13 +177,14 @@ test('viewer resolves and locally highlights nodes by opaque nid', () => {
         'destroy',
         'detach',
         'getViewportMapping',
+        'handleSnapshot',
         'highlightNode',
         'on',
         'registerOverlay',
         'requestSubtree',
         'resolveNode',
       ],
-      'viewer exposes semantic addressing methods on the public handle'
+      'viewer exposes semantic addressing methods on the public handle (plus the Phase 12 host-driven handleSnapshot)'
     );
 
     const payload = semanticSnapshotPayload();
