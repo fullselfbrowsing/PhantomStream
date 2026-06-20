@@ -123,7 +123,7 @@ Which phases cover which requirements. Finalized during roadmap creation.
 
 **Coverage:**
 - v2.0 requirements: 20 total
-- Mapped to phases: 20 (proposed — validated by roadmapper)
+- Mapped to phases: 20 (validated by roadmapper — each requirement maps to exactly one phase, no orphans, no duplicates)
 - Unmapped: 0
 
 ---

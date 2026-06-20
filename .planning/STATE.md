@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Asset & Media Streaming
-status: planning
-last_updated: "2026-06-20T04:26:51.813Z"
+status: roadmapped
+last_updated: "2026-06-20T05:10:00.000Z"
 last_activity: 2026-06-20
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -20,24 +20,30 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-19)
 
 **Core value:** A live, trustworthy, low-bandwidth, semantically addressable mirror of a real browser tab — capture → relay → render → remote-control must work end-to-end as a standalone framework.
-**Current focus:** Milestone v2.0 Asset & Media Streaming — defining roadmap (v1.0 closed at Phases 1–11: framework + npm publish + FSB swap-in)
+**Current focus:** Milestone v2.0 Asset & Media Streaming — roadmap created (Phases 12–15). Next: plan Phase 12 (Static Assets by Reference). v1.0 closed at Phases 1–11 (framework + npm publish + FSB swap-in).
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 12 — Static Assets by Reference (next; not started)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-06-20 — Milestone v2.0 started
+Status: Roadmapped — ready to plan Phase 12
+Last activity: 2026-06-20 — v2.0 roadmap created (Phases 12–15); 20/20 v2.0 requirements mapped
+
+**v2.0 phase order:** 12 → 13 → 14 → 15
+- Phase 12: Static Assets by Reference (ASST-01..05, MSEC-01, MSEC-02)
+- Phase 13: Video/Audio URL + Playback Sync (MEDIA-01..05, MWIRE-01, MWIRE-02)
+- Phase 14: Adaptive Streaming + Adapter Discovery + Fallback (MADPT-01..04) — research-phase likely
+- Phase 15: Media Security, Masking, Threat Model & Docs (MSEC-03, MSEC-04) — research-phase likely
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 57
+- Total plans completed: 57 (across v1.0 Phases 1–10; Phase 11 verified in FSB repo)
 - Average duration: -
 - Total execution time: 0 hours
 
-**By Phase:**
+**By Phase (v1.0):**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
@@ -91,61 +97,19 @@ Last activity: 2026-06-20 — Milestone v2.0 started
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
-Recent decisions affecting current work:
+Recent decisions affecting current (v2.0) work:
 
-- [Roadmap]: Differential oracle (CAPT-04) is Phase 1's first deliverable — it must exist before the serializer is extracted or behavior drift is undetectable
-- [Roadmap]: Security pipeline (Phase 3) gates anything embeddable or published; masking designed jointly with sanitization (shared serialization chokepoints)
-- [Roadmap]: Identity rework (Phase 7) precedes shadow DOM (Phase 8); shadow protocol extension designed jointly with the WeakMap Mirror
-- [Roadmap]: Publication ordering enforced as phases: demos (4–5) → 0.x publish (10) → FSB swap-in (11) → 1.0
-- [Roadmap]: Eval corpus frozen (EVAL-01) before any reported number; harness (Phase 12) feeds the paper (Phase 13) and doubles as the regression suite
-- [Phase 03]: Masking stays capture-side only; createViewer remains untouched. — SEC-03 requires masked content to be transformed before transport; renderer-side masking would be too late.
-- [Phase 03]: Blocked elements serialize as rr_width/rr_height/data-fsb-nid placeholders only. — This preserves layout/addressability without sending blocked attributes, children, or text.
-- [Phase 03]: D7-capture-sanitization is one scenario-pinned, same-index mismatch entry covering snapshot and mutation sanitization/masking.
-- [Phase 04]: Relay fan-out remains raw and transport-agnostic; payload transform/compression stays at endpoints. — Maintains D-08/D-09 and keeps future WebSocket transport responsible for endpoint compression.
-- [Phase 04]: The ws backend validates path, room, and role before room attachment and disables permessage-deflate. — Satisfies RELY-01/T-04-01/T-04-09 while preserving independently decodable PhantomStream frames.
-- [Phase 04]: Oversize and backpressure failures stay in bounded in-memory diagnostics for this phase. — Matches D-11/D-12/D-13 and keeps relay observability testable without adding an admin surface.
-- [Phase 04]: Native endpoint compression uses { _ps: 'deflate-raw', d }, while legacy { _lz, d } remains decode-only through an injected LZ codec. — Keeps relay fan-out raw and preserves FSB backward compatibility without adding a browser LZ dependency.
-- [Phase 04]: WebSocket transport send and receive paths both serialize async codec work through per-connection promise queues. — Prevents CompressionStream or injected codec latency from reordering capture/viewer frames.
-- [Phase 04]: Transport health/status telemetry exposes counters, timestamps, drops, and error codes only; mirrored payload content is omitted. — Satisfies T-04-07 while giving 04-03 enough telemetry for viewer lifecycle events.
-- [Phase 04]: Viewer lifecycle and health events stay library events only; visible UI chrome remains host/demo-owned. — The viewer should expose observable state for hosts and demos without imposing product UI.
-- [Phase 04]: Health snapshots whitelist counters, timestamps, sanitizer counters, and transport diagnostics instead of copying payload or status objects wholesale. — VIEW-02 telemetry must be useful for hosts while preserving the privacy boundary around mirrored page content.
-- [Phase 04]: The demo binds only to 127.0.0.1, prints generated room URLs, and keeps the relay raw/stateless. — PKG-01 must remain safe to run locally without introducing a remote service surface.
-- [Phase 04]: Demo static assets use no-store headers and module query versions. — Browser checkpoints should exercise current code during iterative local verification, not a cached module graph.
-- [Phase 04]: Browser relay-stop validation can record viewer state event timestamps. — Tool latency can miss a short visual stale interval, so event timestamps are the durable proof of live -> stale -> disconnected.
-- [Phase 05]: REMOTE_CONTROL_STATE is exported as a named alias so the static REMOTE_CONTROL grep returns exactly one declaration while preserving the public named export.
-- [Phase 05]: Remote-control state reasons are constrained to lowercase hyphenated identifiers to avoid accidental user-content leakage in telemetry.
-- [Phase 05]: The Playwright/CDP adapter prefers CDP replay when a CDPSession is supplied, otherwise it uses Playwright mouse and keyboard APIs. — Keeps one adapter surface for Playwright-first hosts while allowing CDP-native replay and new-document injection where available.
-- [Phase 05]: The Playwright inject artifact is checked in as a classic script with protocol constants and createCapture inlined. — Preserves the no-build path for Playwright addInitScript and CDP Page.addScriptToEvaluateOnNewDocument consumers.
-- [Phase 05]: getViewportMapping returns fresh scale, viewport, and container objects on every call so host mutations cannot alter viewer state.
-- [Phase 05]: The renderer exports coordinate helpers and mapping state only; authorization UI, control overlays, and remote-control protocol handling remain host/demo-owned.
-- [Phase 05]: The Playwright demo exposes role-specific WebSocket URLs because the Phase 04 relay backend rejects connections without role=source or role=viewer.
-- [Phase 05]: The CLI keeps phantom-stream demo behavior intact and adds phantom-stream playwright-demo as a separate command.
-- [Phase 05]: 05-04 serves minimal no-store fallback content for /playwright/viewer, /playwright/fixture, and /playwright/demo.css; full UI assets remain the scope of 05-05.
-- [Phase 05]: The Playwright demo uses existing static server paths for viewer.js and fixture.js while preserving no-store /playwright routes.
-- [Phase 05]: The exact demo title appears once as the visible H1 so the single-match acceptance grep remains meaningful.
-- [Phase 05]: The viewer marks requesting locally, but active and denied states come only from adapter REMOTE_CONTROL.STATE frames.
-- [Phase 07]: nodeIds sidecars preserve snapshot/add identity while existing diff fields remain nid-addressed.
-- [Phase 07]: Renderer bridge stamps mirror DOM from sidecars until 07-02 replaces selector lookup with a Map index.
-- [Phase 07]: Capture identity is WeakMap-backed and page-owned data-fsb-nid remains ordinary page data.
-- [Phase 07]: Renderer identity is owned by createViewer and rebuilt from nodeIds after post-parse sanitization. — Ensures only sanitized mirror nodes are addressable and keeps identity state inside the viewer lifecycle.
-- [Phase 07]: applyMutations has no nid selector fallback; callers must inject identity hooks for nid-addressed ops. — Prevents reintroducing per-op querySelector identity resolution and keeps diff.js document-parameterized.
-- [Phase 07]: Viewer tests now inspect normal page ids or sidecar metadata instead of mirror data-fsb-nid attributes. — The mirror DOM no longer carries framework identity attributes after the renderer index migration.
-- [Phase 07]: Viewer semantic resolution returns geometry and identity only. — Prevents the public semantic API from exposing mirrored HTML, text, attrs, payloads, URLs, titles, or DOM references.
-- [Phase 07]: highlightNode is local renderer overlay behavior. — Node highlighting uses the existing host overlay layer and never sends STREAM.OVERLAY or expands remote-control dispatch.
-- [Phase 07]: Capture getNodeId is live-public while internal removed-node identity remains available. — Public hosts get null for detached or inactive nodes, but capture internals can still emit correct removal diffs during mutation batching.
-- [Phase 07]: Checked-in browser inject artifacts carry the same WeakMap/nodeIds identity behavior as the ESM capture core while remaining classic scripts with bridge globals.
-- [Phase 07]: Documentation now treats data-fsb-nid stamping as the former FSB reference design; standalone identity is WeakMap capture state plus nodeIds sidecars and a renderer Map index.
-- [Phase 09]: CSSOM mode is opt-in through `styleMode: 'cssom'`; default computed mode omits `styleSources[]` and `styleStrategy` to preserve existing oracle compatibility.
-- [Phase 09]: CSSOM source capture uses explicit fallback reasons (`cssRules-blocked`, `href-relinked`, `adapter-fetch`, `computed-fallback`) and never performs hidden network fetches; `fetchStylesheet({ href, scope, ownerKind })` is host-owned.
-- [Phase 09]: Dynamic stylesheet edits stream as `DIFF_OP.STYLE_SOURCE` with `action: 'upsert' | 'replace' | 'remove'`; hook/scope failures surface as `cssom-hook-unavailable`, `cssom-style-source-stale`, or `stale-style-scope`.
-- [Phase 09]: D25 is scenario-pinned to `cssom-capture-mode`; default computed-mode oracle rows still require zero CSSOM ledger consultation.
-- [Phase 10]: Package remains source-first ESM; TypeScript is used only to generate `.d.ts` from JSDoc.
-- [Phase 10]: Real `npm publish` is an authentication/user-approval gate. Autonomous work may prepare/dry-run trusted publishing, tarball validation, and docs, but must not publish without explicit approval.
-- [Phase 10]: Trusted publishing/provenance should use GitHub-hosted Actions with OIDC (`id-token: write`) and no long-lived `NPM_TOKEN` by default.
-- [Phase 10]: Type declarations are generated for importable `src/**/*.js` modules only; CLI/bin declarations are out of scope for the export map.
-- [Phase 10]: Package validation uses `publint`, ATTW's `esm-only` profile, dry-run pack, and a tarball install smoke against every public export.
-- [Phase 10]: Package quickstarts cover embedded loopback, WebSocket demo, Playwright/CDP, MV3 extension, bookmarklet, CSSOM mode, and security checks without Phase 12 performance claims.
-- [Phase 10]: Real npm publish was not run; the package is dry-run clean and waiting for trusted publisher configuration or authenticated user approval.
+- [Roadmap v2.0]: v2.0 is a strict capability chain A→B→C→D (Phases 12→13→14→15); media rides the existing pipeline — the relay and envelope are NEVER touched (STREAM.MEDIA is one new type string + typedef + constant; old viewers ignore the unknown type by construction).
+- [Roadmap v2.0]: Media is mirrored by URL reference, not by value — the wire carries URLs + small playback state; the viewer fetches bytes from the source/CDN. Never stream media bytes over the relay (detonates the 1 MiB cap and the low-bandwidth core value).
+- [Roadmap v2.0]: Player code never lives in the no-`allow-scripts` srcdoc iframe. Native progressive playback uses the inert in-iframe element driven cross-realm from the parent; adaptive players (hls.js/dash.js) run in the PARENT realm and bind MSE to the in-iframe element. Adding `allow-scripts` would be a catastrophic XSS regression.
+- [Roadmap v2.0]: Security is THREADED, not trailing. The viewer-fetch threat model, CSP scope, fail-closed origin policy hook, and `mediaMode` are DECIDED in Phases 12–13 (static images are already a viewer-fetch surface) and COMPLETED/threat-modeled/tested in Phase 15 — Phase 15 does not begin security work.
+- [Roadmap v2.0]: hls.js is the only justified runtime add — optional `peerDependency`, lazy-imported viewer-side only (native HLS via `canPlayType` first). Do NOT bundle dash.js/shaka (host-provided-player seam only); no URL library; no media-byte inlining.
+- [Roadmap v2.0]: The drift reconciler is a pure, configurable, jsdom-unit-testable function (jsdom has no real media timeline). True playback / native-HLS / CDP manifest discovery / signed-URL/CORS/mixed-content outcomes / bandwidth are exercised in the real-Chrome/Playwright UAT.
+- [Roadmap v2.0]: Adapters own manifest discovery (CDP `Network`, extension `webRequest`) and push hints in opt-in via the `fetchStylesheet` precedent; the capture core never sniffs the network and degrades gracefully when no adapter supplies hints.
+- [Roadmap v2.0]: Phases 14 and 15 likely need `/gsd:plan-phase --research-phase` (cross-realm MSE binding feasibility / whether the child needs `connect-src` / manifest→element correlation for 14; parent-realm object-URL blast radius + default origin/private-IP denylist for 15). Phases 12–13 use established patterns.
+- [Roadmap v2.0]: Evaluation harness (EVAL-*) and research paper (PAPR-*) deferred to milestone v2.1 (provisional Phases 16–17); the old v1.0 "Phase 12 Evaluation / Phase 13 Research Paper" entries are relocated there, superseded by the v2.0 media phases.
+
+Earlier v1.0 decisions are retained in PROJECT.md Key Decisions and the prior phase summaries.
 
 ### Pending Todos
 
@@ -153,21 +117,26 @@ None yet.
 
 ### Blockers/Concerns
 
-- [Phase 12]: Baseline-fairness protocol details and the semantic-fidelity metric definition need a dedicated research pass before harness implementation
-- [Requirements]: REQUIREMENTS.md previously stated "32 total" v1 requirements; actual count is 39 — corrected during roadmap creation
-- [Phase 10]: RESOLVED 2026-06-16 — `@full-self-browsing/phantom-stream@0.1.0` published to npm (public) and confirmed installable; Phase 11 (FSB swap-in) is unblocked. Published under the existing `@full-self-browsing` npm org (the declared `@fullselfbrowsing` scope was unregistered).
+- [Phase 14]: Cross-realm MSE binding feasibility is the milestone's only genuinely uncertain area — creating `MediaSource` in the parent and binding its object URL to an in-iframe `<video>`, with hls.js running in the parent and `attachMedia`-ing the iframe element, is sound in principle but unproven across browsers. Spike in Playwright early in Phase 14; if blocked, the fallback is poster + "media not mirrorable" (already the graceful-absence path), so the milestone is not at risk — only the adaptive differentiator is.
+- [Phase 14]: Whether the child iframe needs `connect-src` (vs the parent doing all segment fetches) must be verified empirically; keep `default-src 'none'`/no `script-src` regardless.
+- [Phase 13]: Drift-tolerance thresholds (~0.25–0.5s hold band, large-drift hard-seek) are practice-based starting points — design the reconciler as a pure function so the numbers are configurable and table-tested, not baked in; tune later against the v2.1 evaluation harness.
+- [Phase 15]: The conservative default origin policy (https-only, block `localhost`/link-local/private ranges) needs a concrete denylist and host-override surface settled during Phase 15 planning.
+- [Milestone v2.1]: Baseline-fairness protocol details and the semantic-fidelity metric definition need a dedicated research pass before harness implementation (carried forward from v1.0).
+- [Phase 11]: RESOLVED 2026-06-16 — FSB swap-in verified in the FSB repo against `@full-self-browsing/phantom-stream@0.1.0`; API frozen at 1.0. No in-repo plans (FSB code stays in the FSB repo).
+- [Phase 10]: RESOLVED 2026-06-16 — `@full-self-browsing/phantom-stream@0.1.0` published to npm (public) under the existing `@full-self-browsing` org and confirmed installable.
 
 ## Deferred Items
 
-Items acknowledged and carried forward from previous milestone close:
+Items acknowledged and carried forward:
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
+| Milestone v2.1 | Evaluation corpus/harness (EVAL-01..06) + system-track paper (PAPR-01,02) | Deferred to v2.1 (provisional Phases 16–17) | 2026-06-19 |
 | Phase 06 UAT | Real MV3 watchdog service-worker eviction/recovery browser evidence | Deferred by user | 2026-06-15 |
 | Phase 06 UAT | Real bookmarklet policy/CSP blocked-injection browser evidence | Deferred by user | 2026-06-15 |
 
 ## Session Continuity
 
-Last session: 2026-06-16T15:26:18Z
-Stopped at: Phase 10 complete — @full-self-browsing/phantom-stream@0.1.0 published to npm (public); Phase 11 next
-Resume file: .planning/phases/10-npm-packaging-0-x-publish/10-05-SUMMARY.md
+Last session: 2026-06-20 — v2.0 roadmap created (Phases 12–15)
+Stopped at: Roadmap complete; 20/20 v2.0 requirements mapped; Phase 12 (Static Assets by Reference) is next to plan
+Resume file: .planning/ROADMAP.md (Phase 12 details) → run `/gsd:plan-phase 12`

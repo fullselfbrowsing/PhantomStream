@@ -2,7 +2,11 @@
 
 ## Overview
 
-PhantomStream extracts a shipped, production-proven DOM-mirroring system out of FSB into a standalone framework, npm package, and research paper. The journey is dependency-driven: build the differential oracle before touching the serializer, prove the Transport seam with a zero-infrastructure loopback mirror, land the security pipeline before anything embeddable or publishable, then go networked (`npx phantom-stream demo`), add the Playwright/CDP and extension adapters, fix all six inherited limitations (identity rework → shadow DOM/fidelity → CSSOM mode), publish 0.x, verify the FSB swap-in to freeze the API at 1.0, and finally run the frozen-corpus evaluation that feeds the system-track paper. Every phase ends runnable.
+PhantomStream extracts a shipped, production-proven DOM-mirroring system out of FSB into a standalone framework, npm package, and research paper. **Milestone v1.0 (Phases 1–11)** is shipped: the journey was dependency-driven — build the differential oracle before touching the serializer, prove the Transport seam with a zero-infrastructure loopback mirror, land the security pipeline before anything embeddable or publishable, go networked (`npx phantom-stream demo`), add the Playwright/CDP and extension adapters, fix all six inherited limitations (identity rework → shadow DOM/fidelity → CSSOM mode), publish 0.x, and verify the FSB swap-in to freeze the API at 1.0.
+
+**Milestone v2.0 (Phases 12–15) — Asset & Media Streaming** extends the mirror beyond DOM/text to media **by reference**: stream asset and media **URLs** (plus small playback-state messages), and let the viewer fetch the bytes from the original CDN/source over its own network. The relay still carries only text + URLs, so the low-bandwidth core value is preserved. Research found the by-reference asset pipeline is already ~80–90% shipped, so v2.0 concentrates on a strict capability chain — static assets → video/audio playback sync → adaptive HLS/DASH → media security completion — with the **new viewer-side-fetch security surface** threaded through the visible phases and completed at the end. Every phase ends runnable and green against `node --test` + the differential oracle.
+
+The evaluation harness and the system-track research paper are deferred to **milestone v2.1** (see Future Milestones).
 
 ## Phases
 
@@ -11,6 +15,8 @@ PhantomStream extracts a shipped, production-proven DOM-mirroring system out of 
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
 Decimal phases appear between their surrounding integers in numeric order.
+
+**Milestone v1.0 — Standalone Framework, npm Package & FSB Swap-In (Phases 1–11, shipped 2026-06-16):**
 
 - [x] **Phase 1: Capture Core Extraction + Differential Oracle** - Oracle-anchored extraction of the capture core behind the Transport seam (completed 2026-06-10)
 - [x] **Phase 2: Renderer Core + Embedded Loopback Mirror** - Embeddable viewer + first end-to-end mirror with zero infrastructure (completed 2026-06-11)
@@ -22,9 +28,14 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 8: Shadow DOM, Iframes & Fidelity Completion** - Shadow roots, same-origin iframes, input mirroring, added-node styles, subtree fetch (completed 2026-06-15)
 - [x] **Phase 9: CSSOM Capture Mode** - Flag-enabled stylesheet-centric capture (last limitation fix; the paper's ablation arm) (completed 2026-06-16)
 - [x] **Phase 10: npm Packaging & 0.x Publish** - `@full-self-browsing/phantom-stream` published to npm (public, 0.1.0) with clean types and quickstarts (completed 2026-06-16)
-- [ ] **Phase 11: FSB Swap-In → 1.0** - FSB runs on the published package; API freezes at 1.0
-- [ ] **Phase 12: Evaluation Corpus & Harness** - Frozen corpus, fair baselines, fidelity metrics; doubles as the regression suite
-- [ ] **Phase 13: Research Paper** - Submission-ready system-track draft (WWW/UIST/CHI tier)
+- [x] **Phase 11: FSB Swap-In → 1.0** - FSB runs on the published package; API frozen at 1.0 (verified in FSB repo; no in-repo plans)
+
+**Milestone v2.0 — Asset & Media Streaming (Phases 12–15):**
+
+- [ ] **Phase 12: Static Assets by Reference** - Verify/harden the already-shipped by-reference asset pipeline; `currentSrc` pinning; placeholder fallback; precise viewer CSP; front-loaded fail-closed origin policy + `mediaMode`
+- [ ] **Phase 13: Video/Audio URL + Playback Sync** - Progressive `<video>`/`<audio>` from source URL; throttled `STREAM.MEDIA` side channel; drift-corrected pure-function reconciler; autoplay-policy-correct viewer
+- [ ] **Phase 14: Adaptive Streaming + Adapter Discovery + Fallback** - Best-effort HLS/DASH via an optional, lazy, parent-realm player; opt-in adapter manifest discovery; MSE-no-manifest/DRM → poster; live-stream handling
+- [ ] **Phase 15: Media Security, Masking, Threat Model & Docs** - Complete URL/media masking + `referrerpolicy="no-referrer"`; threat-review the parent-realm object-URL blast radius; media security tests; SECURITY/ARCHITECTURE docs
 
 ## Phase Details
 
@@ -178,19 +189,19 @@ Plans:
 
 Plans:
 **Wave 0**
-- [x] 10-01-PLAN.md — RED package validation tests for exports, types, tarball contents, docs, and release workflow
+- [x] 06-01-PLAN.md — Extension/bookmarklet adapter exports, inject-artifact wiring, and adapter tests
 
-**Wave 1** *(blocked on 10-01)*
-- [x] 10-02-PLAN.md — JSDoc declaration generation, root export, and typed export map
+**Wave 1**
+- [x] 06-02-PLAN.md — MV3 content-script injection + service-worker relay client
 
-**Wave 2** *(blocked on 10-02)*
-- [x] 10-03-PLAN.md — Package validation tooling, tarball smoke, and CI package gate
+**Wave 2**
+- [x] 06-03-PLAN.md — `chrome.alarms` watchdog + `chrome.storage.session` state + eviction recovery
 
-**Wave 3** *(blocked on 10-03)*
-- [x] 10-04-PLAN.md — Quickstarts and README/package docs refresh
+**Wave 3**
+- [x] 06-04-PLAN.md — Bookmarklet loader stub + diagnostics
 
-**Wave 4** *(blocked on 10-04)*
-- [x] 10-05-PLAN.md — Trusted-publishing release workflow, release docs, dry-run, and real publish auth gate
+**Wave 4**
+- [x] 06-05-PLAN.md — Browser UAT for live mirror paths + verification evidence
 
 ### Phase 7: WeakMap Node Identity + Semantic Addressing API
 **Goal**: The observed page is no longer mutated by capture, and hosts can address mirrored elements semantically through a public API
@@ -202,7 +213,13 @@ Plans:
   2. The wire-addressing contract is preserved: the differential oracle confirms op-stream equivalence, and overlays + remote control still address nodes by nid
   3. Host can query and highlight a mirrored element through the public node-identity API (e.g. highlight the node an agent is about to touch)
   4. Renderer resolves diff ops via an incremental `Map<nid, Node>` — the per-op `querySelector` hot path is gone, enforced by a regression test
-**Plans**: TBD
+**Plans**: 4 plans
+
+Plans:
+- [x] 07-01-PLAN.md — WeakMap two-sided Mirror + nodeIds sidecars (stop writing data-fsb-nid)
+- [x] 07-02-PLAN.md — Renderer Map<nid,Node> index replacing per-op querySelector
+- [x] 07-03-PLAN.md — Public node-identity/highlight API (getNodeId, resolveNode, highlightNode, clearHighlight)
+- [x] 07-04-PLAN.md — Inject artifact identity parity + docs + oracle gate
 
 ### Phase 8: Shadow DOM, Iframes & Fidelity Completion
 **Goal**: The mirror is faithful on the modern web — shadow roots, iframes, typed input, late-added styles, and truncated regions all render correctly
@@ -283,10 +300,26 @@ Plans:
   2. `attw --pack`, `publint`, and a tarball-install smoke test pass as permanent CI jobs
   3. Quickstart docs cover each adapter (extension, Playwright/CDP, bookmarklet, embedded) with a verified < 5-minute path to a live mirror
 **Plans**: 5 plans (5 waves)
-**Publish gate**: Workflow, validation, and dry-run are complete; the public npm registry publish remains gated on explicit authenticated user approval before Phase 11.
+**Publish gate**: Workflow, validation, and dry-run are complete; the public npm registry publish was approved and `@full-self-browsing/phantom-stream@0.1.0` is live.
+
+Plans:
+**Wave 0**
+- [x] 10-01-PLAN.md — RED package validation tests for exports, types, tarball contents, docs, and release workflow
+
+**Wave 1** *(blocked on 10-01)*
+- [x] 10-02-PLAN.md — JSDoc declaration generation, root export, and typed export map
+
+**Wave 2** *(blocked on 10-02)*
+- [x] 10-03-PLAN.md — Package validation tooling, tarball smoke, and CI package gate
+
+**Wave 3** *(blocked on 10-03)*
+- [x] 10-04-PLAN.md — Quickstarts and README/package docs refresh
+
+**Wave 4** *(blocked on 10-04)*
+- [x] 10-05-PLAN.md — Trusted-publishing release workflow, release docs, dry-run, and real publish auth gate
 
 ### Phase 11: FSB Swap-In → 1.0
-**Goal**: FSB runs on the published package as its streaming layer — the demanding consumer that freezes the API at 1.0
+**Goal**: FSB runs on the published package as its streaming layer — the demanding consumer that froze the API at 1.0
 **Mode:** mvp
 **Depends on**: Phase 10 (FSB consumes the *published* 0.x package)
 **Requirements**: FSB-01
@@ -294,49 +327,102 @@ Plans:
   1. FSB's bundled streaming code is replaced by the published package and verified end-to-end: live dashboard preview, remote control, and watchdog/eviction recovery all work
   2. Wire backward compatibility holds — FSB's shipped envelope (`{_lz, d}` decode, session stamping) interoperates without dashboard-side changes beyond the swap
   3. 1.0 is published after the swap-in passes, with the missing-identity compatibility bypass hardened in the same protocol-version bump
-**Plans**: TBD
+**Plans**: None in this repo — verification lives in the FSB repo (FSB consumes the published npm package; FSB dashboard/agent code stays in the FSB repo).
 
-### Phase 12: Evaluation Corpus & Harness
-**Goal**: Reproducible evaluation numbers — frozen corpus, fair baselines, dual fidelity metrics — rerunnable as the framework's permanent regression suite
+### Phase 12: Static Assets by Reference
+**Goal**: The already-shipped by-reference asset pipeline is verified and hardened as a first-class media feature — every static visual (`<img>`/`srcset`/`<picture>`/`<source>`/SVG `<image>`/`background-image`/`<video>` poster) renders in the viewer by loading the original absolute source URL, the displayed variant is pinned, non-shareable refs degrade to placeholders, and the viewer-fetch security model (precise CSP, fail-closed origin policy, `mediaMode`) is established because static images are *already* a viewer-fetch surface
 **Mode:** mvp
-**Depends on**: Phase 9 (ablation needs CSSOM mode; harness drives via Phase 5's adapter). Corpus/baseline-protocol design may start earlier in parallel
-**Requirements**: EVAL-01, EVAL-02, EVAL-03, EVAL-04, EVAL-05
+**Depends on**: Phase 11 (rides the shipped v1.0 pipeline; lowest-risk integration — elements + URLs must be indexed before any media sync can address them)
+**Requirements**: ASST-01, ASST-02, ASST-03, ASST-04, ASST-05, MSEC-01, MSEC-02
 **Success Criteria** (what must be TRUE):
-  1. A frozen, versioned HAR-replay corpus with scripted activity levels (idle, reading, agent-driven) exists before any reported number is collected, with the experiment identity triple (corpus version + browser version + harness commit) recorded per run
-  2. Bandwidth and latency are measured for PhantomStream vs WebRTC screen capture, CDP screencast, and rrweb live mode under identical corpus conditions, following a documented baseline-configuration protocol
-  3. The style-capture ablation (full enumeration vs curated inlining vs stylesheet-centric) reports payload size, serialize latency, and fidelity per arm
-  4. Fidelity scoring combines pixel metrics (pixelmatch/SSIM) with a DOM-level semantic-fidelity metric, plus a failure taxonomy; runs report dispersion across n repetitions
-  5. The harness reruns locally and in CI as the framework's performance regression suite
+  1. Image assets (`<img>`, `srcset`, `<picture>`, `<source>`, SVG `<image>`), CSS `background-image`, and `<video>` poster URLs resolve to absolute source URLs on the wire and render in the viewer by fetching from the original CDN/source — verified that no image bytes traverse the relay
+  2. The displayed image variant is pinned via clone-only `currentSrc` enrichment so the cross-origin viewer (different DPR/viewport) loads the same asset the origin showed, not a re-negotiated one; the enrichment is ledgered in the differential oracle
+  3. Non-shareable references (`blob:`/origin-local object URLs; oversized `data:` URIs) are detected at capture and degrade to a dimensioned placeholder, never a broken reference or a `blob:` on the wire
+  4. The viewer CSP is opened precisely enough to fetch referenced assets (scoped `media-src`/confirmed `img-src`) while keeping `default-src 'none'` and no `script-src` — asserted by a srcdoc test
+  5. A fail-closed host origin/scheme policy hook (conservative default: https-only, block private/internal ranges) governs which asset URLs the viewer may fetch, and a `mediaMode` switch (`off` | `poster` | `reference`) selects the privacy/bandwidth posture with a documented default
 **Plans**: TBD
+**UI hint**: yes
+**Research**: Standard patterns — verification of shipped behavior + a small clone-only enrichment + one CSP directive + the policy-hook/`mediaMode` seam. Skip `--research-phase`.
 
-### Phase 13: Research Paper
-**Goal**: A full system-track paper draft ready for submission to a WWW/UIST/CHI-tier venue
+### Phase 13: Video/Audio URL + Playback Sync
+**Goal**: The defining v2.0 capability — progressive `<video>`/`<audio>` play in the viewer from the source URL with drift-corrected playback sync (play/pause/seek/rate) over a new throttled `STREAM.MEDIA` side channel, autoplay-policy-correct, with the relay and envelope untouched and old viewers safely ignoring the new type
 **Mode:** mvp
-**Depends on**: Phase 12 (the harness feeds the paper; numbers only from the frozen corpus)
-**Requirements**: PAPR-01, PAPR-02
+**Depends on**: Phase 12 (the media element + its URL must be on the wire and indexed by nid before sync can address it)
+**Requirements**: MEDIA-01, MEDIA-02, MEDIA-03, MEDIA-04, MEDIA-05, MWIRE-01, MWIRE-02
 **Success Criteria** (what must be TRUE):
-  1. Full draft spans abstract through discussion — design rationale, production reliability evidence, and evaluation results — in submission-ready form
-  2. Related-work treatment is grounded in primary sources: rrweb internals, co-browsing systems, CDP screencast, and agent-observability viewers
-  3. Every reported number traces to a frozen corpus version and harness commit (no live-web or training-data figures)
+  1. Progressive/direct `<video>` (mp4/webm) and `<audio>` (mp3/ogg) play in the viewer, loading bytes from the source URL never through the relay, driven cross-realm from the parent (no player code in the no-`allow-scripts` sandbox)
+  2. Initial media state (currentTime, paused, muted, volume, playbackRate, loop, duration) is captured in the snapshot as the baseline, and play/pause/seek/ratechange stream over the throttled media-sync channel and apply with drift-corrected interpolation — hard-seek only on large drift or explicit seek, never per-message
+  3. A `STREAM.MEDIA` throttled side-channel op (a structural twin of the scroll channel) carries nid-addressed, identity-stamped playback state within the raw-relay + 1 MiB-cap contract; it is envelope-backward-compatible (old FSB viewers ignore the unknown type) and the relay and envelope are unchanged
+  4. The drift reconciler is a pure, configurable function unit-tested in jsdom (in-tolerance → hold; small persistent → rate-nudge; large/loop → seek; live → rejoin-edge; `Infinity` duration → no `NaN`) with no real media timeline
+  5. The viewer honors autoplay policy — muted-autoplay default, an observable host-overlay affordance when `play()` is rejected — so the mirror never wedges on a blocked play
 **Plans**: TBD
+**UI hint**: yes
+**Research**: Standard patterns — the media-sync channel is a documented twin of the existing scroll/overlay side channels; rrweb provides the proven reconciler model; the reconciler is a pure function unit-testable in jsdom. Skip `--research-phase`.
+
+### Phase 14: Adaptive Streaming + Adapter Discovery + Fallback
+**Goal**: Best-effort adaptive playback — when an HLS (`.m3u8`) or DASH (`.mpd`) manifest is available, the viewer plays it via an optional, lazy player running in a renderer-owned **parent realm** (never inside the mirror sandbox); Playwright/CDP and extension adapters surface manifest URLs by network observation as opt-in hints with graceful absence; MSE-without-manifest/DRM degrade to poster with a documented reason; live streams are handled — the mirror never breaks
+**Mode:** mvp
+**Depends on**: Phase 13 (adaptive reuses the media element + sync channel; only the source-binding mechanism differs)
+**Requirements**: MADPT-01, MADPT-02, MADPT-03, MADPT-04
+**Success Criteria** (what must be TRUE):
+  1. When an HLS/DASH manifest URL is available, the viewer plays it via an optional, lazy player running in a renderer-owned parent-realm surface that binds cross-realm to the inert in-iframe element (only `hls.js` is added — optional, lazy; DASH via a host-provided-player seam; native HLS uses no library); the no-`allow-scripts` sandbox token is unchanged
+  2. The Playwright/CDP and extension adapters can surface manifest URLs not present as a plain element `src` (network observation), fed to the viewer as opt-in hints; absence of an adapter degrades gracefully to native-progressive-only with no errors
+  3. Media that cannot be referenced (MSE/`blob:` without a discoverable manifest, DRM/EME) degrades to poster/placeholder with an observable, documented reason — the mirror never breaks
+  4. Live streams (infinite/NaN duration) are handled — live-edge sync, no absolute seek
+**Plans**: TBD
+**UI hint**: yes
+**Research**: Likely needs `--research-phase 14` during planning — the only genuinely uncertain area. Cross-realm MSE binding (creating `MediaSource` in the parent and assigning its object URL to the in-iframe `<video>`), hls.js cross-realm `attachMedia(iframeEl)`, whether the child needs `connect-src`, and manifest→element correlation from CDP/`webRequest` initiator chains all warrant empirical Playwright validation.
+
+### Phase 15: Media Security, Masking, Threat Model & Docs
+**Goal**: Close the milestone by completing the security contract that was *threaded* through Phases 12–13 — full asset/media URL masking + `referrerpolicy="no-referrer"`, a threat-review of the parent-realm object-URL blast radius, media-specific security tests, and the SECURITY/ARCHITECTURE documentation updates (limitation #6 — `<video>`/`<audio>` no longer fully out). Security *decisions* were made earlier; this phase completes, threat-models, and tests them — it does not begin them
+**Mode:** mvp
+**Depends on**: Phase 14 (the parent-realm MSE cross-realm binding must exist to threat-review its blast radius; masking must cover every media path A–C)
+**Requirements**: MSEC-03, MSEC-04
+**Success Criteria** (what must be TRUE):
+  1. Asset/media URL masking is complete: the host masking vocabulary redacts/strips token/PII-bearing query params and `maskMediaSelector`/`blockSelector` omit private media URLs from the wire (masked media degrades to placeholder) — routed through the same fail-closed capture-side `sanitizeForWire` chokepoint
+  2. Viewer-side fetch minimizes leakage — `referrerpolicy="no-referrer"` and no credentials by default on mirrored media/img; secrets-on-the-wire implications are documented
+  3. The parent-realm object-URL blast radius is threat-reviewed and documented (the child still cannot script), the sandbox token is verified unchanged, and the `allow-scripts`-forbidden static scan covers media code paths
+  4. Media-specific security tests pass (hostile `<source src=javascript:>`, `media-src` CSP coverage with `default-src 'none'` retained and no `script-src`, masked-media-emits-no-state, late-cross-session media-sync rejected by `isCurrentStream`) and `docs/SECURITY.md`/`docs/ARCHITECTURE.md` are updated (limitation #6)
+**Plans**: TBD
+**Research**: Likely needs `--research-phase 15` during planning — the threat model is well-articulated, but the parent-realm object-URL blast-radius review and the precise default origin/private-IP denylist (concrete denylist + host-override surface) warrant a focused security pass.
+
+## Future Milestones
+
+Recorded for continuity. Not in the active phase list; phase numbers are assigned when the milestone is opened.
+
+### Milestone v2.1 — Evaluation & Research Paper (provisional Phases 16–17)
+
+Deferred from v1.0 and re-sequenced to *follow* media so the paper can evaluate the v2.0 media-by-reference story. Supersedes the old "Phase 12: Evaluation" / "Phase 13: Research Paper" entries that existed during v1.0 — those are relocated here.
+
+- **Provisional Phase 16 — Evaluation Corpus & Harness** (EVAL-01..06): a frozen, replayable HAR-record/replay site corpus with scripted activity levels; bandwidth/latency vs WebRTC screen capture, CDP screencast, and rrweb live mode under identical conditions; the style-capture ablation (full enumeration vs curated inlining vs stylesheet-centric); fidelity scoring combining pixel metrics (pixelmatch/SSIM) with a DOM-level semantic-fidelity metric plus a failure taxonomy; the harness doubling as the framework's performance regression suite; and a new media-by-reference evaluation arm (EVAL-06: URL-reference media vs CDP screencast/WebRTC pixel capture).
+- **Provisional Phase 17 — Research Paper** (PAPR-01, PAPR-02): a submission-ready full system-track paper draft (abstract through discussion: design rationale, production reliability, evaluation results) for a WWW/UIST/CHI-tier venue, with a related-work treatment grounded in primary sources (rrweb internals, co-browsing systems, CDP screencast, agent-observability viewers).
+
+**Note:** A dedicated research pass is flagged for the eval harness — the baseline-fairness protocol details and the semantic-fidelity metric definition need settling before harness implementation (carried from v1.0 STATE concerns).
+
+### Other deferred work (no milestone assigned yet)
+
+- **Fidelity & Channels** — cursor-position channel + viewer cursor rendering (FID2-01); periodic budgeted canvas refresh, opt-in (FID2-02); caret/selection mirroring in form fields (FID2-03).
+- **Ecosystem** — rrweb-format export bridge (ECO2-01); telemetry surface hardening from FSB production feedback (ECO2-02); multi-viewer scale-out patterns documentation (ECO2-03).
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13
+Phases execute in numeric order. v1.0 (1–11) is complete. v2.0 active order: 12 → 13 → 14 → 15.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Capture Core Extraction + Differential Oracle | 5/5 | Complete    | 2026-06-10 |
-| 2. Renderer Core + Embedded Loopback Mirror | 6/6 | Complete    | 2026-06-11 |
-| 3. Security Pipeline — Sanitization + Privacy Masking | 5/5 | Complete    | 2026-06-14 |
+| 1. Capture Core Extraction + Differential Oracle | 5/5 | Complete | 2026-06-10 |
+| 2. Renderer Core + Embedded Loopback Mirror | 6/6 | Complete | 2026-06-11 |
+| 3. Security Pipeline — Sanitization + Privacy Masking | 5/5 | Complete | 2026-06-14 |
 | 4. Relay, WS Transport & Two-Tab Demo | 4/4 | Complete | 2026-06-15 |
-| 5. Playwright/CDP Adapter, Remote Control & Agent Demo | 6/6 | Complete    | 2026-06-15 |
-| 6. Extension MV3 + Bookmarklet Adapters | 5/5 | Complete   | 2026-06-15 |
-| 7. WeakMap Node Identity + Semantic Addressing API | 4/4 | Complete   | 2026-06-15 |
-| 8. Shadow DOM, Iframes & Fidelity Completion | 9/9 | Complete   | 2026-06-15 |
+| 5. Playwright/CDP Adapter, Remote Control & Agent Demo | 6/6 | Complete | 2026-06-15 |
+| 6. Extension MV3 + Bookmarklet Adapters | 5/5 | Complete | 2026-06-15 |
+| 7. WeakMap Node Identity + Semantic Addressing API | 4/4 | Complete | 2026-06-15 |
+| 8. Shadow DOM, Iframes & Fidelity Completion | 9/9 | Complete | 2026-06-15 |
 | 9. CSSOM Capture Mode | 8/8 | Complete | 2026-06-16 |
-| 10. npm Packaging & 0.x Publish | 5/5 | Blocked on publish approval | - |
-| 11. FSB Swap-In → 1.0 | 0/TBD | Not started | - |
-| 12. Evaluation Corpus & Harness | 0/TBD | Not started | - |
-| 13. Research Paper | 0/TBD | Not started | - |
+| 10. npm Packaging & 0.x Publish | 5/5 | Complete | 2026-06-16 |
+| 11. FSB Swap-In → 1.0 | — | Complete (verified in FSB repo) | 2026-06-16 |
+| 12. Static Assets by Reference | 0/TBD | Not started | - |
+| 13. Video/Audio URL + Playback Sync | 0/TBD | Not started | - |
+| 14. Adaptive Streaming + Adapter Discovery + Fallback | 0/TBD | Not started | - |
+| 15. Media Security, Masking, Threat Model & Docs | 0/TBD | Not started | - |
