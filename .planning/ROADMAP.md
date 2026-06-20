@@ -346,7 +346,7 @@ Plans:
 
 Plans:
 **Wave 1**
-- [ ] 12-01-PLAN.md — Verify shipped by-reference pipeline (relay byte-identity, confirm-only CSP) + RED Wave-0 test scaffolds (ASST-01, ASST-02, ASST-05)
+- [x] 12-01-PLAN.md — Verify shipped by-reference pipeline (relay byte-identity, confirm-only CSP) + RED Wave-0 test scaffolds (ASST-01, ASST-02, ASST-05)
 
 **Wave 2** *(blocked on 12-01)*
 - [ ] 12-02-PLAN.md — Capture: ASSET_DATA_URI_MAX_BYTES + blob:/oversized-data placeholder degrade + clone-only data-ps-currentsrc + D26 oracle (ASST-03, ASST-04)
@@ -430,7 +430,7 @@ Phases execute in numeric order. v1.0 (1–11) is complete. v2.0 active order: 1
 | 9. CSSOM Capture Mode | 8/8 | Complete | 2026-06-16 |
 | 10. npm Packaging & 0.x Publish | 5/5 | Complete | 2026-06-16 |
 | 11. FSB Swap-In → 1.0 | — | Complete (verified in FSB repo) | 2026-06-16 |
-| 12. Static Assets by Reference | 0/3 | Planned (3 plans, 2 waves) | - |
+| 12. Static Assets by Reference | 1/3 | In Progress|  |
 | 13. Video/Audio URL + Playback Sync | 0/TBD | Not started | - |
 | 14. Adaptive Streaming + Adapter Discovery + Fallback | 0/TBD | Not started | - |
 | 15. Media Security, Masking, Threat Model & Docs | 0/TBD | Not started | - |

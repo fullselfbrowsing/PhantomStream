@@ -4,13 +4,13 @@ milestone: v2.0
 milestone_name: Asset & Media Streaming
 status: executing
 stopped_at: Roadmap complete; 20/20 v2.0 requirements mapped; Phase 12 (Static Assets by Reference) is next to plan
-last_updated: "2026-06-20T07:19:27.392Z"
-last_activity: 2026-06-20 -- Phase 12 planning complete
+last_updated: "2026-06-20T07:35:33.736Z"
+last_activity: 2026-06-20
 progress:
   total_phases: 15
   completed_phases: 10
   total_plans: 60
-  completed_plans: 57
+  completed_plans: 58
   percent: 67
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-19)
 
 **Core value:** A live, trustworthy, low-bandwidth, semantically addressable mirror of a real browser tab — capture → relay → render → remote-control must work end-to-end as a standalone framework.
-**Current focus:** Milestone v2.0 Asset & Media Streaming — roadmap created (Phases 12–15). Next: plan Phase 12 (Static Assets by Reference). v1.0 closed at Phases 1–11 (framework + npm publish + FSB swap-in).
+**Current focus:** Phase 12 — static-assets-by-reference
 
 ## Current Position
 
-Phase: 12 — Static Assets by Reference (next; not started)
-Plan: —
+Phase: 12 (static-assets-by-reference) — EXECUTING
+Plan: 2 of 3
 Status: Ready to execute
-Last activity: 2026-06-20 -- Phase 12 planning complete
+Last activity: 2026-06-20
 
 **v2.0 phase order:** 12 → 13 → 14 → 15
 
@@ -93,6 +93,7 @@ Last activity: 2026-06-20 -- Phase 12 planning complete
 | Phase 10 P03 | 20min | 2 tasks | 4 files |
 | Phase 10 P04 | 18min | 2 tasks | 6 files |
 | Phase 10 P05 | 20min | 2 tasks | 4 files |
+| Phase 12 P12-01 | 14min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -110,6 +111,9 @@ Recent decisions affecting current (v2.0) work:
 - [Roadmap v2.0]: Adapters own manifest discovery (CDP `Network`, extension `webRequest`) and push hints in opt-in via the `fetchStylesheet` precedent; the capture core never sniffs the network and degrades gracefully when no adapter supplies hints.
 - [Roadmap v2.0]: Phases 14 and 15 likely need `/gsd:plan-phase --research-phase` (cross-realm MSE binding feasibility / whether the child needs `connect-src` / manifest→element correlation for 14; parent-realm object-URL blast radius + default origin/private-IP denylist for 15). Phases 12–13 use established patterns.
 - [Roadmap v2.0]: Evaluation harness (EVAL-*) and research paper (PAPR-*) deferred to milestone v2.1 (provisional Phases 16–17); the old v1.0 "Phase 12 Evaluation / Phase 13 Research Paper" entries are relocated there, superseded by the v2.0 media phases.
+
+- [Phase 12-01]: RED Wave-0 scaffolds use dynamic `import()` inside test bodies so missing exports/modules fail as named per-test failures (not link/load/syntax errors), satisfying both the parse-check verify and the plan's "failing tests, not a syntax error" contract. Full suite excluding the 3 scaffolds is green (416/416); the 3 scaffolds are intentionally RED (30 tests) until Plans 12-02/12-03 land.
+- [Phase 12-01]: SC#1 (no image bytes traverse the relay) and ASST-05 (confirm-only CSP — img-src present, default-src 'none', NO script-src, NO media-src) are pinned by automated tests from the first commit; `CSP_META` in `src/renderer/snapshot.js` left byte-unchanged (string assertion; real CSP enforcement is Playwright UAT, may be deferred).
 
 Earlier v1.0 decisions are retained in PROJECT.md Key Decisions and the prior phase summaries.
 
@@ -139,6 +143,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-06-20 — v2.0 roadmap created (Phases 12–15)
+Last session: 2026-06-20T07:32:30.099Z
 Stopped at: Roadmap complete; 20/20 v2.0 requirements mapped; Phase 12 (Static Assets by Reference) is next to plan
-Resume file: .planning/ROADMAP.md (Phase 12 details) → run `/gsd:plan-phase 12`
+Resume file: None
