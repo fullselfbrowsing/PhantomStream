@@ -37,7 +37,32 @@
 // injected identity hooks owned by createViewer.
 
 import { DIFF_OP } from '../protocol/messages.js';
-import { sanitizeFragment, sanitizeAttrValue } from './sanitize.js';
+import { sanitizeFragment, sanitizeAttrValue, parseSrcsetCandidates } from './sanitize.js';
+
+/**
+ * True when any candidate in a srcset value is blocked by the injected fetch
+ * gate. Reuses the shared per-candidate parser so the ATTR branch gates srcset
+ * with the same vocabulary as the snapshot/fragment gates (review WR-03).
+ * Unparseable input fails closed (treated as blocked).
+ * @param {string} srcset
+ * @param {(url: string, kind: string) => { allow: boolean }} gateAssetUrl
+ * @returns {boolean}
+ */
+function srcsetHasBlockedCandidate(srcset, gateAssetUrl) {
+  if (!srcset) return false;
+  try {
+    var candidates = parseSrcsetCandidates(srcset);
+    for (var i = 0; i < candidates.length; i++) {
+      var url = candidates[i].url;
+      if (!url) continue;
+      var verdict = gateAssetUrl(url, 'image');
+      if (!verdict || !verdict.allow) return true;
+    }
+    return false;
+  } catch (e) {
+    return true; // unparseable srcset: fail closed
+  }
+}
 
 function installShadowRootDirect(doc, host, payload, sanitizeCounters, logger, indexSubtree, removeSubtree) {
   var p = payload || {};
@@ -346,6 +371,22 @@ export function applyMutations(doc, mutations, counters, hooks) {
               if (!assetVerdict || !assetVerdict.allow) {
                 sanitizeCounters.blockedUrls += 1;
                 logger.warn('[Renderer] attr op asset blocked by origin gate', {
+                  nid: m.nid || '', attr: m.attr || ''
+                });
+                target.removeAttribute(m.attr);
+                break;
+              }
+            }
+            // PRE-WRITE FETCH GATE (MSEC-01, review WR-03): srcset is a
+            // first-class multi-candidate fetchable attribute -- on a live
+            // <img> the browser may select and GET a candidate. Gate every
+            // candidate; if ANY is blocked, drop the whole srcset (the
+            // remaining src/placeholder path covers display) so no blocked
+            // origin reaches the live DOM.
+            if (gateAssetUrl && attrName === 'srcset') {
+              if (srcsetHasBlockedCandidate(scrubbed.value, gateAssetUrl)) {
+                sanitizeCounters.blockedUrls += 1;
+                logger.warn('[Renderer] attr op srcset candidate blocked by origin gate', {
                   nid: m.nid || '', attr: m.attr || ''
                 });
                 target.removeAttribute(m.attr);
