@@ -2,15 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Asset & Media Streaming
-status: roadmapped
-last_updated: "2026-06-20T05:10:00.000Z"
-last_activity: 2026-06-20
+status: executing
+stopped_at: Roadmap complete; 20/20 v2.0 requirements mapped; Phase 12 (Static Assets by Reference) is next to plan
+last_updated: "2026-06-20T07:19:27.392Z"
+last_activity: 2026-06-20 -- Phase 12 planning complete
 progress:
-  total_phases: 4
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_phases: 15
+  completed_phases: 10
+  total_plans: 60
+  completed_plans: 57
+  percent: 67
 ---
 
 # Project State
@@ -26,10 +27,11 @@ See: .planning/PROJECT.md (updated 2026-06-19)
 
 Phase: 12 — Static Assets by Reference (next; not started)
 Plan: —
-Status: Roadmapped — ready to plan Phase 12
-Last activity: 2026-06-20 — v2.0 roadmap created (Phases 12–15); 20/20 v2.0 requirements mapped
+Status: Ready to execute
+Last activity: 2026-06-20 -- Phase 12 planning complete
 
 **v2.0 phase order:** 12 → 13 → 14 → 15
+
 - Phase 12: Static Assets by Reference (ASST-01..05, MSEC-01, MSEC-02)
 - Phase 13: Video/Audio URL + Playback Sync (MEDIA-01..05, MWIRE-01, MWIRE-02)
 - Phase 14: Adaptive Streaming + Adapter Discovery + Fallback (MADPT-01..04) — research-phase likely
