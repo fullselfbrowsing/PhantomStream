@@ -47,3 +47,15 @@ export const READY_PROBE_BUDGET_MS = 5000;
 
 /** Inline <style> tags larger than this are skipped during snapshot capture. */
 export const INLINE_STYLE_MAX_BYTES = 500000;
+
+/**
+ * Maximum UTF-8 byte length of an inline `data:` image URI that capture will
+ * emit verbatim on the wire. 262144 = 256 KiB -- roughly a quarter of the
+ * per-message cap headroom (SNAPSHOT_BUDGET_BYTES is ~838 KiB, the 80%
+ * truncation budget of the 1 MiB relay cap), so a single inline asset cannot
+ * crowd out the rest of the snapshot. A `data:` image larger than this degrades
+ * to a dimensioned placeholder; small inline icons/sprites (<= cap) pass through
+ * byte-identical, preserving the existing `data:image/*` pass-through and the
+ * differential oracle. (Phase 12 ASST-04.)
+ */
+export const ASSET_DATA_URI_MAX_BYTES = 262144; // 256 KiB

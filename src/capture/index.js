@@ -48,6 +48,7 @@ import {
   MUTATION_STALE_THRESHOLD_MS,
   WATCHDOG_TICK_MS,
   INLINE_STYLE_MAX_BYTES,
+  ASSET_DATA_URI_MAX_BYTES,
 } from '../protocol/constants.js';
 import { STREAM, CONTROL, DIFF_OP, createStreamSessionId } from '../protocol/messages.js';
 
@@ -184,6 +185,88 @@ function hasDangerousScheme(value) {
   return compact.indexOf('javascript:') === 0
     || compact.indexOf('vbscript:') === 0
     || compact.indexOf('data:text/html') === 0;
+}
+
+/**
+ * Count UTF-8 bytes of a string (module-scope twin of the createCapture-inner
+ * utf8ByteLength; both exist because classifyAssetRef is a pure module-level
+ * export and the inner degrade hooks reuse it). Surrogate pairs count as 4
+ * bytes; lone surrogates as 3.
+ * @param {string} text
+ * @returns {number}
+ */
+function assetUtf8ByteLength(text) {
+  var str = String(text == null ? '' : text);
+  var bytes = 0;
+  for (var i = 0; i < str.length; i++) {
+    var code = str.charCodeAt(i);
+    if (code < 0x80) {
+      bytes += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (code >= 0xD800 && code <= 0xDBFF && i + 1 < str.length) {
+      var next = str.charCodeAt(i + 1);
+      if (next >= 0xDC00 && next <= 0xDFFF) {
+        bytes += 4;
+        i++;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
+
+/**
+ * Classify an asset URL by FETCHABILITY (Phase 12 ASST-04). This is a control
+ * distinct from hasDangerousScheme (injection): a URL can be injection-safe yet
+ * non-shareable as a mirrored reference. Two non-shareable classes degrade to a
+ * dimensioned placeholder at capture so a dead/blob reference never reaches the
+ * wire and one giant inline image cannot blow the per-message cap:
+ *   - `blob:`/origin-local object URLs (always non-shareable -- they are
+ *     origin-local and dead at the cross-origin viewer);
+ *   - `data:` URIs whose UTF-8 byte length exceeds `capBytes`.
+ * Everything else (http/https, small inline `data:`, relative URLs that
+ * absolutify) is shareable and passes through untouched -- benign small `data:`
+ * icons stay byte-identical (Pitfall 5: no over-degrade).
+ * @param {string} url            the (resolved or raw) asset reference
+ * @param {number} capBytes       byte cap for inline `data:` (ASSET_DATA_URI_MAX_BYTES)
+ * @returns {{ok: true}|{ok: false, reason: 'blob'|'oversized-data'}}
+ */
+export function classifyAssetRef(url, capBytes) {
+  if (!url || typeof url !== 'string') return { ok: true };
+  // Match the whitespace-obfuscation discipline of hasDangerousScheme: a
+  // "blo\tb:" or " data:" form normalizes at parse time, so strip <= 0x20
+  // before scheme-matching.
+  var compact = stripLowChars(url).toLowerCase();
+  if (compact.indexOf('blob:') === 0) {
+    return { ok: false, reason: 'blob' };
+  }
+  if (compact.indexOf('data:') === 0) {
+    var cap = capBytes || 0;
+    if (assetUtf8ByteLength(url) > cap) {
+      return { ok: false, reason: 'oversized-data' };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * Pure predicate (Phase 12 ASST-03): true only when a resolved `currentSrc`
+ * is present AND differs from the resolved plain `src`, i.e. a responsive
+ * `srcset`/`<picture>` actually negotiated a non-default variant worth pinning.
+ * Empty `currentSrc` (jsdom returns "") never enriches; an equal value never
+ * enriches (plain `<img src>` stays byte-identical on the wire).
+ * @param {string} resolvedCurrentSrc  absolutified currentSrc
+ * @param {string} resolvedSrc         absolutified src
+ * @returns {boolean}
+ */
+export function currentSrcDiffers(resolvedCurrentSrc, resolvedSrc) {
+  if (!resolvedCurrentSrc || typeof resolvedCurrentSrc !== 'string') return false;
+  if (resolvedCurrentSrc === '') return false;
+  return resolvedCurrentSrc !== (resolvedSrc || '');
 }
 
 /**
@@ -1442,6 +1525,7 @@ export function createCapture(config) {
     var cloneDescendants = bodyClone.querySelectorAll('*');
     var toRemove = [];
     var blockedPairs = [];
+    var assetUnavailablePairs = [];
 
     for (var i = 0; i < liveDescendants.length; i++) {
       var live = liveDescendants[i];
@@ -1484,6 +1568,21 @@ export function createCapture(config) {
       }
       var srcsetVal = clone.getAttribute('srcset');
       if (srcsetVal) clone.setAttribute('srcset', absolutifySrcset(srcsetVal, frameDoc));
+
+      // ASST-04 degrade + ASST-03 currentSrc pin (same treatment as the main
+      // snapshot pair walk), clone-only -- the live frame node is never touched.
+      var frameDegradeReason = assetDegradeReason(clone);
+      if (frameDegradeReason) {
+        assetUnavailablePairs.push({ orig: live, clone: clone, reason: frameDegradeReason });
+      } else if (tag === 'img') {
+        var frameResolvedCurrent = absolutifyUrl(live.currentSrc || '', frameDoc);
+        var frameResolvedSrc = clone.getAttribute('src') || '';
+        if (currentSrcDiffers(frameResolvedCurrent, frameResolvedSrc)
+            && !hasDangerousScheme(frameResolvedCurrent)) {
+          clone.setAttribute('data-ps-currentsrc', frameResolvedCurrent);
+        }
+      }
+
       if (styleMode !== 'cssom') captureComputedStyles(live, clone);
       sanitizeForWire('element', { orig: live, clone: clone });
     }
@@ -1496,6 +1595,15 @@ export function createCapture(config) {
         blockedPairs[b].orig,
         blockedPairs[b].clone,
         readBlockRect(blockedPairs[b].orig),
+        cloneToNid
+      );
+    }
+    for (var aub = 0; aub < assetUnavailablePairs.length; aub++) {
+      replaceWithAssetUnavailablePlaceholder(
+        assetUnavailablePairs[aub].orig,
+        assetUnavailablePairs[aub].clone,
+        readBlockRect(assetUnavailablePairs[aub].orig),
+        assetUnavailablePairs[aub].reason,
         cloneToNid
       );
     }
@@ -2367,6 +2475,98 @@ export function createCapture(config) {
     return placeholder;
   }
 
+  /**
+   * Build the placeholder for a non-shareable asset (ASST-04). Mirrors
+   * createBlockPlaceholder (dimension-only <div>, identity in the nodeIds
+   * sidecar) plus a machine-readable reason attribute so the renderer/viewer
+   * can show a neutral, dimensioned gap instead of a broken/dead reference.
+   * @param {Document} doc
+   * @param {{width: number, height: number}} rect
+   * @param {'blob'|'oversized-data'} reason
+   * @returns {Element}
+   */
+  function createAssetUnavailablePlaceholder(doc, rect, reason) {
+    var placeholder = doc.createElement('div');
+    placeholder.setAttribute('rr_width', String(rect.width || 0) + 'px');
+    placeholder.setAttribute('rr_height', String(rect.height || 0) + 'px');
+    placeholder.setAttribute('data-ps-asset-unavailable', reason);
+    return placeholder;
+  }
+
+  /**
+   * Replace a detached clone element with its asset-unavailable placeholder,
+   * transferring the nid in cloneToNid exactly like replaceWithBlockPlaceholder.
+   * The LIVE element is never touched (clone-only; Phase 7 no-mutation
+   * invariant -- Pitfall 4).
+   * @param {Element} liveEl
+   * @param {Element} cloneEl
+   * @param {{width: number, height: number}} rect
+   * @param {'blob'|'oversized-data'} reason
+   * @param {Map<Element, string>} [cloneToNid]
+   * @returns {Element|null}
+   */
+  function replaceWithAssetUnavailablePlaceholder(liveEl, cloneEl, rect, reason, cloneToNid) {
+    if (!cloneEl || !cloneEl.parentNode) return null;
+    var nid = cloneToNid && cloneToNid.get(cloneEl);
+    if (!nid) nid = getTrackedNodeId(liveEl) || '';
+    var placeholder = createAssetUnavailablePlaceholder(cloneEl.ownerDocument, rect, reason);
+    cloneEl.parentNode.replaceChild(placeholder, cloneEl);
+    if (cloneToNid) {
+      cloneToNid.delete(cloneEl);
+      if (nid) cloneToNid.set(placeholder, nid);
+    }
+    sanitizeCounters.blockedSubtrees++;
+    return placeholder;
+  }
+
+  /**
+   * Decide whether a clone's URL-bearing attributes make it a non-shareable
+   * asset that must degrade to a placeholder (ASST-04). Inspects the wire
+   * clone's already-absolutified `src`/`poster`/`srcset` and returns the
+   * degrade reason, or '' when the asset is shareable. Pure read of the clone;
+   * never mutates anything.
+   * @param {Element} cloneEl  the detached wire clone (post-absolutify)
+   * @returns {'blob'|'oversized-data'|''}
+   */
+  function assetDegradeReason(cloneEl) {
+    if (!cloneEl || !cloneEl.getAttribute) return '';
+    // Scalar src/poster: classify the value directly.
+    var scalarAttrs = ['src', 'poster'];
+    for (var s = 0; s < scalarAttrs.length; s++) {
+      var v = cloneEl.getAttribute(scalarAttrs[s]);
+      if (v) {
+        var c = classifyAssetRef(v, ASSET_DATA_URI_MAX_BYTES);
+        if (!c.ok) return c.reason;
+      }
+    }
+    // srcset: classify each candidate; a single non-shareable candidate
+    // degrades the element (the whole responsive set is unusable as a
+    // reference when one variant is blob:/oversized-data).
+    var srcset = cloneEl.getAttribute('srcset');
+    if (srcset) {
+      var reason = assetDegradeReasonForSrcset(srcset);
+      if (reason) return reason;
+    }
+    return '';
+  }
+
+  /**
+   * Classify a raw srcset string by fetchability: returns the degrade reason of
+   * the first non-shareable candidate, or '' when every candidate is shareable.
+   * Used by the mutation attr branch (which has the raw value, not a clone).
+   * @param {string} srcset
+   * @returns {'blob'|'oversized-data'|''}
+   */
+  function assetDegradeReasonForSrcset(srcset) {
+    if (!srcset) return '';
+    var candidates = parseSrcsetCandidates(srcset);
+    for (var k = 0; k < candidates.length; k++) {
+      var rc = classifyAssetRef(candidates[k].url, ASSET_DATA_URI_MAX_BYTES);
+      if (!rc.ok) return rc.reason;
+    }
+    return '';
+  }
+
   function createTruncatedPlaceholder(doc) {
     var placeholder = doc.createElement('div');
     placeholder.setAttribute('data-phantomstream-truncated', 'true');
@@ -3164,6 +3364,11 @@ export function createCapture(config) {
     // Elements to remove from clone (scripts, noscript, host-flagged elements)
     var toRemove = [];
     var blockedPairs = [];
+    // ASST-04: clones whose absolutified asset refs are non-shareable
+    // (blob:/oversized-data:). Collected during the walk, their live rects
+    // read together below (single-pass layout discipline), then swapped for a
+    // dimensioned placeholder after the walk -- exactly like blockedPairs.
+    var assetUnavailablePairs = [];
 
     for (var i = 0; i < pairs.length; i++) {
       var orig = pairs[i].orig;
@@ -3269,6 +3474,29 @@ export function createCapture(config) {
         cl.setAttribute('srcset', absolutifySrcset(srcsetVal));
       }
 
+      // ASST-04: detect non-shareable asset refs (blob:/oversized-data:) on the
+      // already-absolutified clone. If the element degrades, record it for the
+      // post-walk placeholder swap and skip the currentSrc enrich (the clone is
+      // about to be replaced wholesale). The live element is never touched.
+      var degradeReason = assetDegradeReason(cl);
+      if (degradeReason) {
+        assetUnavailablePairs.push({ orig: orig, clone: cl, reason: degradeReason });
+      } else if (tag === 'img') {
+        // ASST-03: clone-only data-ps-currentsrc variant pin. Enrich ONLY when
+        // the live element's currentSrc is present AND differs from the
+        // resolved src (a responsive srcset/<picture> negotiated a non-default
+        // variant). currentSrc is set on the CLONE, never the live page
+        // (Pitfall 4: preserves the Phase 7 no-mutation invariant). jsdom
+        // returns currentSrc === "" so this never fires under unit/oracle tests
+        // unless the scenario injects a divergent currentSrc.
+        var resolvedCurrent = absolutifyUrl(orig.currentSrc || '');
+        var resolvedSrc = cl.getAttribute('src') || '';
+        if (currentSrcDiffers(resolvedCurrent, resolvedSrc)
+            && !hasDangerousScheme(resolvedCurrent)) {
+          cl.setAttribute('data-ps-currentsrc', resolvedCurrent);
+        }
+      }
+
       // Capture generated computed styles only in the default compatibility mode.
       if (styleMode !== 'cssom') captureComputedStyles(orig, cl);
 
@@ -3287,6 +3515,12 @@ export function createCapture(config) {
     for (var bp = 0; bp < blockedPairs.length; bp++) {
       blockedRects.push(readBlockRect(blockedPairs[bp].orig));
     }
+    // ASST-04: read non-shareable asset rects in the same single-pass region
+    // (dimensions from the ORIG live element, never the detached clone).
+    var assetUnavailableRects = [];
+    for (var ap = 0; ap < assetUnavailablePairs.length; ap++) {
+      assetUnavailableRects.push(readBlockRect(assetUnavailablePairs[ap].orig));
+    }
 
     // Remove marked elements
     for (var r = 0; r < toRemove.length; r++) {
@@ -3297,6 +3531,17 @@ export function createCapture(config) {
 
     for (var br = 0; br < blockedPairs.length; br++) {
       replaceWithBlockPlaceholder(blockedPairs[br].orig, blockedPairs[br].clone, blockedRects[br], cloneToNid);
+    }
+    // ASST-04: swap each non-shareable asset clone for its dimensioned
+    // placeholder, transferring the nid (clone-only; live page untouched).
+    for (var aur = 0; aur < assetUnavailablePairs.length; aur++) {
+      replaceWithAssetUnavailablePlaceholder(
+        assetUnavailablePairs[aur].orig,
+        assetUnavailablePairs[aur].clone,
+        assetUnavailableRects[aur],
+        assetUnavailablePairs[aur].reason,
+        cloneToNid
+      );
     }
 
     // Collect stylesheet URLs from document.head
@@ -3560,6 +3805,50 @@ export function createCapture(config) {
         appendStyleDeclaration(cloneDescendants[c], descStyleText);
       }
     }
+
+    // ASST-03/04 on the added-node path. CRITICAL (Pitfall 4): the live node
+    // was mutated above for URL absolutify (reference parity), but the
+    // currentSrc enrich and the asset-unavailable degrade land on the
+    // wireClone ONLY -- never the live node, so the framework attributes never
+    // leak to the observed page. Descendants first (parent-replacement is safe
+    // on the detached clone), then the root.
+    for (var ce = 0; ce < liveDescendants.length; ce++) {
+      var liveDesc2 = liveDescendants[ce];
+      var cloneDesc2 = cloneDescendants[ce];
+      if (!cloneDesc2) continue;
+      var descReason = assetDegradeReason(cloneDesc2);
+      if (descReason) {
+        replaceWithAssetUnavailablePlaceholder(
+          liveDesc2, cloneDesc2, readBlockRect(liveDesc2), descReason, cloneToNid
+        );
+      } else if (cloneDesc2.tagName && String(cloneDesc2.tagName).toLowerCase() === 'img') {
+        var descCurrent = absolutifyUrl(liveDesc2.currentSrc || '', liveDesc2.ownerDocument || baseDoc);
+        var descSrc = cloneDesc2.getAttribute('src') || '';
+        if (currentSrcDiffers(descCurrent, descSrc) && !hasDangerousScheme(descCurrent)) {
+          cloneDesc2.setAttribute('data-ps-currentsrc', descCurrent);
+        }
+      }
+    }
+    // Root: the detached wireClone has no parent, so a degrade swaps the
+    // reference held by `wireClone` (preserving rootNid in cloneToNid) rather
+    // than calling replaceWithAssetUnavailablePlaceholder.
+    var rootReason = assetDegradeReason(wireClone);
+    if (rootReason) {
+      var rootPlaceholder = createAssetUnavailablePlaceholder(
+        wireClone.ownerDocument || document, readBlockRect(el), rootReason
+      );
+      cloneToNid.delete(wireClone);
+      if (rootNid) cloneToNid.set(rootPlaceholder, rootNid);
+      sanitizeCounters.blockedSubtrees++;
+      wireClone = rootPlaceholder;
+    } else if (rootTag === 'img') {
+      var rootCurrent = absolutifyUrl(el.currentSrc || '', baseDoc);
+      var rootSrc = wireClone.getAttribute('src') || '';
+      if (currentSrcDiffers(rootCurrent, rootSrc) && !hasDangerousScheme(rootCurrent)) {
+        wireClone.setAttribute('data-ps-currentsrc', rootCurrent);
+      }
+    }
+
     prepareIframeWireShellsForClone(el, wireClone);
     var subtreeResult = sanitizeForWire('subtree', {
       root: wireClone,
@@ -3847,6 +4136,28 @@ export function createCapture(config) {
         }
         if (m.attributeName === 'srcset' && attrVal) {
           attrVal = absolutifySrcset(attrVal, m.target.ownerDocument);
+        }
+
+        // ASST-04: a mutation that sets src/poster/srcset to a non-shareable
+        // ref (blob:/oversized-data:) must NOT ship the dead reference. Drop
+        // the offending URL from the wire (empty value) and emit a sibling
+        // data-ps-asset-unavailable op so the viewer shows the dimensioned
+        // placeholder instead of fetching a dead ref. The live element is
+        // unchanged (we only shape the wire diff).
+        var attrIsAssetUrl = (attrNameLower === 'src' || attrNameLower === 'poster' || attrNameLower === 'srcset');
+        if (attrIsAssetUrl && attrVal) {
+          var mutClass = (attrNameLower === 'srcset')
+            ? assetDegradeReasonForSrcset(attrVal)
+            : (function () { var c = classifyAssetRef(attrVal, ASSET_DATA_URI_MAX_BYTES); return c.ok ? '' : c.reason; })();
+          if (mutClass) {
+            diffs.push(scopeFrameDiff({
+              op: 'attr',
+              nid: targetNid,
+              attr: 'data-ps-asset-unavailable',
+              val: mutClass
+            }, frameRecord));
+            attrVal = '';
+          }
         }
 
         // SEC-01: route through the chokepoint AFTER absolutification so
@@ -4412,6 +4723,71 @@ export function createCapture(config) {
     resume: resume,
     handleControl: handleControl,
     getNodeId: getNodeId,
-    getObservedFrameDocuments: getObservedFrameDocuments
+    getObservedFrameDocuments: getObservedFrameDocuments,
+    // One-shot snapshot serializer over the ambient document. Exposed for the
+    // serializeSnapshot() top-level helper (capture-asset-degrade unit tests)
+    // and any host that wants a single payload without arming observers.
+    serializeSnapshot: serializeDOM
   };
+}
+
+// Ambient globals the snapshot serializer dereferences (audited from the
+// reference source, mirrors the differential harness AMBIENT_GLOBALS). The
+// serializeSnapshot() helper swaps these from the passed document's window for
+// the duration of one serialization, then restores them unconditionally.
+var SNAPSHOT_AMBIENT_GLOBALS = [
+  'window', 'document', 'Node', 'NodeFilter', 'MutationObserver',
+  'requestAnimationFrame', 'cancelAnimationFrame', 'CustomEvent',
+  'ShadowRoot', 'location', 'getComputedStyle', 'URL'
+];
+
+/**
+ * Serialize ONE snapshot of the given document and return the snapshot payload
+ * (`{ html, nodeIds, ... }`). A convenience top-level entry that swaps the
+ * ambient globals from `doc.defaultView` for the lifetime of one serialization
+ * (mirroring the differential harness's createExtractedSide), runs a fresh
+ * capture's serializer against it, and restores the globals unconditionally.
+ *
+ * This is the no-observer path used by the capture-asset-degrade unit tests to
+ * prove the clone-only currentSrc enrichment and the blob:/oversized-data:
+ * placeholder degrade WITHOUT mutating the live document.
+ *
+ * @param {Document} doc  the document to snapshot (must have a defaultView)
+ * @returns {{html: string, nodeIds: string[]}} the snapshot payload
+ */
+export function serializeSnapshot(doc) {
+  var win = doc && doc.defaultView;
+  if (!win) throw new Error('serializeSnapshot-requires-document-with-defaultView');
+
+  var saved = SNAPSHOT_AMBIENT_GLOBALS.map(function (name) {
+    return {
+      name: name,
+      had: Object.prototype.hasOwnProperty.call(globalThis, name),
+      value: globalThis[name]
+    };
+  });
+  function restore() {
+    for (var i = 0; i < saved.length; i++) {
+      if (saved[i].had) {
+        globalThis[saved[i].name] = saved[i].value;
+      } else {
+        delete globalThis[saved[i].name];
+      }
+    }
+  }
+
+  for (var g = 0; g < SNAPSHOT_AMBIENT_GLOBALS.length; g++) {
+    var n = SNAPSHOT_AMBIENT_GLOBALS[g];
+    globalThis[n] = n === 'window' ? win : win[n];
+  }
+
+  try {
+    var capture = createCapture({
+      transport: { send: function () {} },
+      logger: { info: function () {}, warn: function () {}, error: function () {} }
+    });
+    return capture.serializeSnapshot();
+  } finally {
+    restore();
+  }
 }
