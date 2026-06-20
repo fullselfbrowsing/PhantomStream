@@ -36,7 +36,7 @@
 
 import { buildSnapshotHtml, buildFramePlaceholderHtml, gateSnapshotAssets } from './snapshot.js';
 import { applyMutations } from './diff.js';
-import { sanitizeFragment, scrubCssText } from './sanitize.js';
+import { sanitizeFragment, scrubCssText, parseSrcsetCandidates } from './sanitize.js';
 import { createOverlays, mapRectToHost, OVERLAY_CSS } from './overlays.js';
 import { classifyAssetOrigin } from './asset-policy.js';
 import { STREAM, CONTROL, isCurrentStream } from '../protocol/messages.js';
@@ -73,6 +73,31 @@ function assetUrlHost(url) {
     return new URL(String(url)).hostname.toLowerCase();
   } catch (e) {
     return '';
+  }
+}
+
+/**
+ * True when any candidate in a srcset value is blocked by the supplied gate.
+ * Reuses the shared per-candidate parser so the fragment gate covers srcset
+ * with the same vocabulary as the snapshot/diff gates (review WR-03/WR-04).
+ * Unparseable input fails closed (treated as blocked).
+ * @param {string} srcset
+ * @param {(url: string, kind: string) => { allow: boolean }} gateAsset
+ * @returns {boolean}
+ */
+function srcsetHasBlockedCandidate(srcset, gateAsset) {
+  if (!srcset) return false;
+  try {
+    var candidates = parseSrcsetCandidates(srcset);
+    for (var i = 0; i < candidates.length; i++) {
+      var url = candidates[i].url;
+      if (!url) continue;
+      var verdict = gateAsset(url, 'image');
+      if (!verdict || !verdict.allow) return true;
+    }
+    return false;
+  } catch (e) {
+    return true; // unparseable srcset: fail closed
   }
 }
 
@@ -354,6 +379,22 @@ export function createViewer(options) {
         if (effective && !gateAsset(effective, 'image').allow) {
           var ph = buildAssetPlaceholderEl(ownerDoc, el);
           if (el.parentNode) el.parentNode.replaceChild(ph, el);
+          continue;
+        }
+        // srcset gate (review WR-04): an <img srcset> with NO src (and no
+        // currentsrc pin, which removes srcset above) is otherwise imported
+        // with its blocked candidate intact, where the browser can fetch it.
+        // Gate every candidate; if any is blocked, replace with the
+        // placeholder when there is no allowed src, else strip srcset so only
+        // the allowed src can fetch.
+        var srcset = el.getAttribute('srcset');
+        if (srcset && srcsetHasBlockedCandidate(srcset, gateAsset)) {
+          if (!effective) {
+            var phSrcset = buildAssetPlaceholderEl(ownerDoc, el);
+            if (el.parentNode) el.parentNode.replaceChild(phSrcset, el);
+          } else {
+            el.removeAttribute('srcset');
+          }
         }
       } catch (e) {
         logger.warn('[Renderer] asset gate pass failed for an element', {
