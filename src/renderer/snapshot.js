@@ -69,11 +69,27 @@ import { scrubCssText, parseSrcsetCandidates } from './sanitize.js';
 // start tag by consuming `"..."` / `'...'` spans atomically, so a `>` inside
 // quotes never terminates the tag. If a tag end cannot be found (an unbalanced
 // quote runs to EOF), the opener is treated as unparseable and FAILS CLOSED
-// (its asset attributes are neutralized) rather than passing through.
+// (its asset attributes are neutralized) rather than passing through. The one
+// remaining scanner/parser divergence -- a backtick-unquoted value carrying a
+// `>` (backtick is not an HTML quote char, so the scanner stops INSIDE it) --
+// is ALSO failed closed: attrsBlobIsUnreliable detects the unbalanced backtick
+// and gateOneImgTag emits the placeholder instead of re-emitting the opener
+// (review WR-01), so no `<img>` shape re-emits unmodified.
 
 /**
  * Find the index of the `>` that closes an `<img` start tag, honoring quoted
- * attribute values (a `>` inside `"..."` or `'...'` does not end the tag).
+ * attribute values (a `>` inside `"..."`, `'...'`, or a backtick span does not
+ * end the tag).
+ *
+ * Backtick handling (review WR-01): the backtick is NOT an HTML quote char, so
+ * a real parser ends the tag at the FIRST `>` even when it sits inside a
+ * backtick-unquoted value (`alt=` + "`a>b`"). Treating the backtick as a third
+ * delimiter here makes the scanner deliberately stop LATER than the parser --
+ * it reads the trailing `src` as an attribute and gates it. That is the SAFE
+ * divergence direction (over-block: a URL the real parser would render inert is
+ * still blocked) and it never lets a later fetchable `src` slip past the gate.
+ * A genuine `>`-terminated tag a real browser would fetch from is found by the
+ * `"`/`'` rules unchanged.
  * @param {string} html  The full markup.
  * @param {number} from  Index just past the `<img` token (the matched opener).
  * @returns {number} Index of the closing `>`, or -1 if none (unbalanced quote).
@@ -83,16 +99,45 @@ function findImgTagEnd(html, from) {
   for (var i = from; i < html.length; i++) {
     var ch = html.charAt(i);
     if (quote !== null) {
-      if (ch === quote) quote = null; // matching close quote
+      if (ch === quote) quote = null; // matching close quote (incl. backtick)
       continue;
     }
-    if (ch === '"' || ch === "'") {
-      quote = ch; // entering a quoted attribute value
+    if (ch === '"' || ch === "'" || ch === '`') {
+      quote = ch; // entering a quoted (or backtick-unquoted) attribute value
       continue;
     }
     if (ch === '>') return i;
   }
   return -1;
+}
+
+/**
+ * True when a bounded <img> attribute blob cannot be confidently parsed, so the
+ * scanner's tag boundary may disagree with a real HTML parser's and the tag
+ * must FAIL CLOSED instead of being re-emitted (review WR-01).
+ *
+ * findImgTagEnd treats only `"` and `'` as quote delimiters (correct per the
+ * HTML tokenizer). A backtick is NOT a quote char, so an unquoted attribute
+ * value containing a backtick AND a `>` (`alt=` + "`a>b`") makes the scanner
+ * stop at the `>` INSIDE the backticks -- the bounded blob ends mid-value and a
+ * later `src` is excluded from the gate. A real browser instead reads the
+ * unquoted value up to the FIRST `>` (so that later `src` is inert text, never
+ * a fetch), which is why this is a fail-closed-intent drift, not a live SSRF.
+ * The reliable, parser-free signal is an ODD number of backticks in the bounded
+ * blob: a backtick opened a value but its partner sits beyond the `>` the
+ * scanner stopped at. When detected we emit the dimensioned placeholder rather
+ * than re-emit the opener, accepting a vanishingly rare fidelity loss for
+ * legitimate backtick attribute content (backticks are not HTML quote chars).
+ * @param {string} attrs  The bounded img attribute blob.
+ * @returns {boolean}
+ */
+function attrsBlobIsUnreliable(attrs) {
+  if (typeof attrs !== 'string' || attrs.indexOf('`') === -1) return false;
+  var backticks = 0;
+  for (var i = 0; i < attrs.length; i++) {
+    if (attrs.charAt(i) === '`') backticks++;
+  }
+  return (backticks % 2) === 1; // unbalanced backtick -> scanner boundary suspect
 }
 
 /** Match the START of an <img start tag only (`<img` + a name boundary). */
@@ -175,6 +220,13 @@ function srcsetHasBlockedCandidate(srcset, gate) {
  * @returns {string}
  */
 function gateOneImgTag(attrs, gate) {
+  // Fail closed when the bounded blob is unreliable (review WR-01): a backtick-
+  // unquoted value containing `>` truncates the scanner's boundary so a later
+  // src/srcset is excluded from the gate. Rather than re-emit the (possibly
+  // fetchable) opener unchanged, neutralize the whole tag to a placeholder.
+  if (attrsBlobIsUnreliable(attrs)) {
+    return assetUnavailablePlaceholderTag(attrs);
+  }
   var pinned = readTagAttr(attrs, 'data-ps-currentsrc');
   var src = readTagAttr(attrs, 'src');
   var srcset = readTagAttr(attrs, 'srcset');
