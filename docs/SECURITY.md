@@ -132,8 +132,82 @@ Hosts embedding PhantomStream must preserve these rules:
   `textContent`; custom renderers should do the same.
 - Never add an opt-out switch for the capture or render sanitizers.
 - Never weaken the adopted CSP policy below script-blocking.
+- Never relax the fail-closed asset-origin policy into an allow-by-default posture, and
+  never move the asset fetch gate after the URL is written into the mirror (a post-write
+  gate is too late -- the browser has already issued the GET). Widen reachable origins
+  only through `allowAssetOrigins` / the `assetOriginPolicy` hook.
 
-## 6. Residual Risks
+## 6. Viewer-side resource fetching
+
+v2.0 changes the viewer's verb from **render-inert to fetch**. In v1 the mirror only rendered
+attacker-influenced markup inertly; from Phase 12 on, a mirrored `<img>` / `<source>` / `<video>`
+poster / CSS `background-image` causes the **viewer's own browser** to issue a GET from the
+viewer's (possibly privileged) network. Static images are the first instance of this fetch
+surface, so the viewer-fetch security model lands here. Mirrored asset bytes never traverse the
+relay -- the wire carries URL strings only; the viewer fetches directly from the source/CDN.
+
+**Fail-closed origin policy (MSEC-01).** A pure, fail-closed origin classifier
+(`classifyAssetOrigin` in `src/renderer/asset-policy.js`) decides which asset URLs the viewer may
+fetch. It is a *fetch* control, distinct from the *injection* control `hasDangerousScheme`: an
+`https://` URL to an internal host passes the injection check yet is a blind-SSRF / tracking
+surface, which this classifier blocks. The default posture is **https-only plus a private /
+internal denylist**; anything not provably public-https is blocked:
+
+- scheme must be `https:` (non-`http(s)` and plain `http:` are blocked);
+- hosts denied: `localhost`, `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`,
+  `192.168.0.0/16`, `169.254.0.0/16` (link-local), `::1`, `fc00::/7` (`fc..`/`fd..` ULA), and
+  `.local` / unqualified (dotless) hosts;
+- any parse error fails closed (blocked).
+
+A blocked origin is replaced by a dimensioned `data-ps-asset-unavailable="blocked-origin"`
+placeholder, so the viewer's browser **never issues the GET** -- no tracking beacon fires and no
+internal host is probed.
+
+**Host override surface.** Two seams widen the conservative default, never relax it below
+fail-closed:
+
+- `assetOriginPolicy(url, ctx) => boolean` -- a host hook that **fails closed**: it blocks on a
+  thrown error or any non-`true` return (it can never open a URL the classifier would allow only
+  by throwing). This mirrors the capture-side `compileMaskSelector` fail-closed-and-loud
+  precedent.
+- `allowAssetOrigins` -- a convenience host allowlist; a listed host passes the gate even if the
+  classifier would otherwise deny it.
+
+**`mediaMode` switch (MSEC-02).** A `createViewer` config option selects the privacy / bandwidth
+posture: `off` (no viewer asset fetch at all -- every asset becomes a placeholder), `poster`
+(posters/placeholders only; full-asset fetch withheld), and `reference` (full by-reference
+fetch). The **default is `reference`** -- media-by-reference is on by default (the milestone's
+purpose) and the fail-closed origin policy is the safety net. In Phase 12 `poster` still permits
+poster *images* to fetch (gated by origin); the full poster / full-asset split matures in Phase
+13 when the `<video>`/`<audio>` element ships. An invalid `mediaMode` throws at viewer-factory
+time (the sanctioned throw site).
+
+**Pre-write timing (the non-negotiable rule).** The gate runs **before** the asset URL is written
+into the mirror DOM, so a blocked origin never reaches a fetch. For diffs this is pre-`setAttribute`
+(ATTR) and pre-`importNode` (ADD / subtree, over inert template content). For the **snapshot** it
+is gated at the **string / payload layer**, before the srcdoc is assembled (`gateSnapshotAssets`
+in `src/renderer/snapshot.js`): a real browser's HTML parser begins fetching `<img src>` *during*
+srcdoc parse, before the post-parse scrub can run, so a post-parse-only gate would let the initial
+snapshot image GET fire for a blocked origin. This string-layer rewrite operates on the typed
+asset values being emitted -- it is **not** the scrub-then-reparse mutation-XSS anti-pattern
+(`payload.html` stays raw for everything else); the post-parse DOM gate remains as
+defense-in-depth.
+
+**Variant pinning (ASST-03).** When a mirrored element carries the clone-only `data-ps-currentsrc`
+enrichment, the renderer sets the element's effective `src` to that value and neutralizes
+`srcset` / `sizes`, so the cross-origin viewer (different DPR/viewport) loads the same asset the
+origin displayed rather than re-negotiating a different variant.
+
+**Unchanged sandbox / CSP (no widening).** Phase 12 adds **no** sandbox or CSP-script change. The
+iframe sandbox remains exactly `allow-same-origin` (never `allow-scripts`; the asset code contains
+no `allow-scripts` literal and the static scan stays green), and the srcdoc CSP is unchanged:
+`default-src 'none'`, the existing `img-src http: https: data:` already covers every static image
+surface (including `<video>` poster), there is **no `script-src`**, and there is **no `media-src`**
+-- the scoped `media-src` directive is deferred to Phase 13 (when `<video>`/`<audio>` actually
+needs it). Capture-side asset/media URL **masking** and `referrerpolicy` completion are Phase 15
+(MSEC-03/MSEC-04); Phase 12 makes the fetch-gate decisions, not the masking.
+
+## 7. Residual Risks
 
 Snapshot `payload.html` remains string-raw at the srcdoc assembly layer by design. Scrubbing an
 HTML string and then asking the browser to parse it again is the mutation-XSS failure mode. The

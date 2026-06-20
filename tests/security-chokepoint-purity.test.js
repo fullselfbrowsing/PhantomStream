@@ -221,6 +221,12 @@ test('docs/SECURITY.md exists and carries the embed security contract markers', 
     'allow-scripts',
     'default-src \'none\'',
     'style-src http: https: \'unsafe-inline\'',
+    // Phase 12 (ASST-05/MSEC-02): pin the static-asset CSP surface and the
+    // viewer-fetch security section so a future edit cannot silently widen the
+    // img-src directive or drop the documented fail-closed origin policy.
+    'img-src http: https: data:',
+    'Viewer-side resource fetching',
+    'mediaMode',
     'maskTextSelector',
     'Host must-nevers',
     'frame-ancestors',
