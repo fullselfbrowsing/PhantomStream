@@ -17,8 +17,8 @@ Each maps to exactly one roadmap phase.
 
 - [x] **ASST-01**: Image assets (`<img>`, `srcset`, `<picture>`, `<source>`, SVG `<image>`) are mirrored by reference and render in the viewer by loading the original absolute source URL — no image bytes traverse the relay
 - [x] **ASST-02**: CSS `background-image` and `<video>` poster URLs resolve to absolute source URLs on the wire and render in the viewer
-- [ ] **ASST-03**: The displayed image variant is pinned via `currentSrc` so the cross-origin viewer (different DPR/viewport) loads the same asset the origin showed, not a re-negotiated one
-- [ ] **ASST-04**: Non-shareable references (`blob:`/origin-local object URLs; oversized `data:` URIs) are detected and degrade to a dimensioned placeholder, never a broken reference
+- [x] **ASST-03**: The displayed image variant is pinned via `currentSrc` so the cross-origin viewer (different DPR/viewport) loads the same asset the origin showed, not a re-negotiated one
+- [x] **ASST-04**: Non-shareable references (`blob:`/origin-local object URLs; oversized `data:` URIs) are detected and degrade to a dimensioned placeholder, never a broken reference
 - [x] **ASST-05**: The viewer CSP is opened precisely enough to fetch referenced assets (scoped `media-src`/`img-src`) while keeping `default-src 'none'` and no `script-src`
 
 ### Time-Based Media + Playback Sync (MEDIA)
@@ -102,8 +102,8 @@ Which phases cover which requirements. Finalized during roadmap creation.
 |-------------|-------|--------|
 | ASST-01 | Phase 12 | Complete |
 | ASST-02 | Phase 12 | Complete |
-| ASST-03 | Phase 12 | Pending |
-| ASST-04 | Phase 12 | Pending |
+| ASST-03 | Phase 12 | Complete |
+| ASST-04 | Phase 12 | Complete |
 | ASST-05 | Phase 12 | Complete |
 | MSEC-01 | Phase 12 | Pending |
 | MSEC-02 | Phase 12 | Pending |

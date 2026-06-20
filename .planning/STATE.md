@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Asset & Media Streaming
 status: executing
-stopped_at: Roadmap complete; 20/20 v2.0 requirements mapped; Phase 12 (Static Assets by Reference) is next to plan
-last_updated: "2026-06-20T07:35:33.736Z"
+stopped_at: Phase 12 Plan 12-02 complete (ASST-03/04 capture-complete; D26 oracle GREEN); Plan 12-03 (renderer gate + mediaMode) is next to execute
+last_updated: "2026-06-20T07:54:07.801Z"
 last_activity: 2026-06-20
 progress:
   total_phases: 15
   completed_phases: 10
   total_plans: 60
-  completed_plans: 58
+  completed_plans: 59
   percent: 67
 ---
 
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-06-19)
 ## Current Position
 
 Phase: 12 (static-assets-by-reference) — EXECUTING
-Plan: 2 of 3
-Status: Ready to execute
+Plan: 3 of 3
+Status: 12-02 complete (capture-side ASST-03/04 + D26 oracle GREEN); 12-03 (renderer fetch-gate + mediaMode + CSP confirm) next
 Last activity: 2026-06-20
 
 **v2.0 phase order:** 12 → 13 → 14 → 15
@@ -94,6 +94,7 @@ Last activity: 2026-06-20
 | Phase 10 P04 | 18min | 2 tasks | 6 files |
 | Phase 10 P05 | 20min | 2 tasks | 4 files |
 | Phase 12 P12-01 | 14min | 2 tasks | 6 files |
+| Phase 12 P12-02 | 38min | 2 tasks tasks | 5 files files |
 
 ## Accumulated Context
 
@@ -116,6 +117,9 @@ Recent decisions affecting current (v2.0) work:
 - [Phase 12-01]: SC#1 (no image bytes traverse the relay) and ASST-05 (confirm-only CSP — img-src present, default-src 'none', NO script-src, NO media-src) are pinned by automated tests from the first commit; `CSP_META` in `src/renderer/snapshot.js` left byte-unchanged (string assertion; real CSP enforcement is Playwright UAT, may be deferred).
 
 Earlier v1.0 decisions are retained in PROJECT.md Key Decisions and the prior phase summaries.
+
+- [Phase 12-02]: D26 only, no D27: the static-assets fixture surfaces ONE same-index SNAPSHOT mismatch (clone-only data-ps-currentsrc pin + blob-degrade + oversized-degrade all in the html field); compareStreams compares the whole message and ledgerCovers returns the first match, so a second D27 entry could never fire and would fail stale-entry detection. D26's predicate recognizes the combined extracted-only divergence (data-ps-currentsrc OR data-ps-asset-unavailable present in ext, absent in ref).
+- [Phase 12-02]: ASST-03 (clone-only data-ps-currentsrc variant pin) and ASST-04 (blob:/oversized-data: -> dimensioned data-ps-asset-unavailable placeholder; small data: byte-identical, ASSET_DATA_URI_MAX_BYTES=256 KiB) are capture-complete at all 4 serialization sites; the live page is never mutated (clone-only; the added-node wireClone is the trap). Capture-degrade suite + differential oracle (firing D26) GREEN; renderer fetch-gate/mediaMode/CSP remain Plan 12-03.
 
 ### Pending Todos
 
@@ -143,6 +147,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-06-20T07:32:30.099Z
+Last session: 2026-06-20T07:53:50.700Z
 Stopped at: Roadmap complete; 20/20 v2.0 requirements mapped; Phase 12 (Static Assets by Reference) is next to plan
 Resume file: None
