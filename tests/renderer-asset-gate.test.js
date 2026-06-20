@@ -160,3 +160,131 @@ test("allowAssetOrigins:['cdn.example.com'] lets that origin pass the gate (MSEC
   });
   assert.equal(gate.allow, true, 'an explicitly allowlisted origin passes the gate');
 });
+
+// ---- Review CR-02: snapshot string gate must be quote-aware (tag-split bypass) ----
+// A `>` inside a quoted attribute value before `src` previously terminated the
+// naive `/<img\b([^>]*)>/` match short of the src, so the blocked URL slipped
+// through unchanged and the parser fetched it. These are the EXACT payloads the
+// reviewer verified against the shipped code; each must now be BLOCKED.
+const TAG_SPLIT_PAYLOADS = [
+  { html: '<img data-fsb-nid="1" alt="a>b" src="https://169.254.169.254/x.png">', host: '169.254', note: 'alt with > before metadata src' },
+  { html: '<img data-fsb-nid="1" data-x="a>b" src="https://10.0.0.1/x.png">', host: '10.0.0.1', note: 'data-* with > before private src' },
+  { html: '<img data-fsb-nid="1" title=">" src="https://169.254.169.254/x.png">', host: '169.254', note: 'title=">" before metadata src' },
+  { html: "<img data-fsb-nid=\"1\" alt='a>b' src='https://10.0.0.1/x.png'>", host: '10.0.0.1', note: 'single-quoted alt with > before private src' },
+  { html: '<img data-fsb-nid="1" data-ps-currentsrc="x>y" src="https://169.254.169.254/x.png">', host: '169.254', note: 'data-ps-currentsrc with > then blocked src' },
+];
+
+for (const payload of TAG_SPLIT_PAYLOADS) {
+  test('snapshot gate BLOCKS tag-split bypass: ' + payload.note + ' (CR-02)', async () => {
+    const renderer = await import(RENDERER_MODULE);
+    const host = makeHost();
+    const viewer = renderer.createViewer({ document: host.document, mount: host.mount, mediaMode: 'reference' });
+    viewer.handleSnapshot(snapshotWith(payload.html));
+    const cd = glueMirror(host.mount.querySelector('iframe'));
+    assert.equal(
+      cd.querySelector('img[src*="' + payload.host + '"]'),
+      null,
+      'the blocked-origin src after an in-attribute ">" must never reach the mirror (no GET): ' + payload.note
+    );
+    assert.ok(
+      cd.querySelector('[data-ps-asset-unavailable="blocked-origin"]'),
+      'a dimensioned placeholder replaces the tag-split <img>: ' + payload.note
+    );
+  });
+}
+
+test('snapshot gate fails CLOSED on an <img> with an unbalanced quote (CR-02)', async () => {
+  const renderer = await import(RENDERER_MODULE);
+  const host = makeHost();
+  const viewer = renderer.createViewer({ document: host.document, mount: host.mount, mediaMode: 'reference' });
+  // The first quote never closes; the naive regex would have terminated at the
+  // first '>' and emitted a fetchable blocked src. The quote-aware scan can't
+  // bound the tag, so it fails closed -> placeholder, no fetchable blocked URL.
+  viewer.handleSnapshot(snapshotWith('<img data-fsb-nid="1" alt="oops src="https://169.254.169.254/x.png">'));
+  const cd = glueMirror(host.mount.querySelector('iframe'));
+  assert.equal(cd.querySelector('img[src*="169.254"]'), null, 'an unparseable <img> never emits a fetchable blocked src');
+  assert.ok(cd.querySelector('[data-ps-asset-unavailable]'), 'an unparseable <img> degrades to a placeholder (fail-closed)');
+});
+
+test('snapshot gate keeps an allowed src even when an earlier attribute contains ">" (CR-02 fidelity)', async () => {
+  const renderer = await import(RENDERER_MODULE);
+  const host = makeHost();
+  const viewer = renderer.createViewer({ document: host.document, mount: host.mount, mediaMode: 'reference' });
+  viewer.handleSnapshot(snapshotWith('<img data-fsb-nid="1" alt="a>b" src="https://cdn.example.com/a.png">'));
+  const cd = glueMirror(host.mount.querySelector('iframe'));
+  const img = cd.querySelector('img[data-fsb-nid="1"]');
+  assert.ok(img, 'the allowed <img> survives the quote-aware scan');
+  assert.equal(img.getAttribute('src'), 'https://cdn.example.com/a.png', 'allowed src is preserved despite the in-attribute ">"');
+});
+
+// ---- Review WR-03/WR-04: srcset must be origin-gated on every write site ----
+
+test('snapshot gate replaces an <img srcset> (no src) whose only candidate is blocked (WR-04)', async () => {
+  const renderer = await import(RENDERER_MODULE);
+  const host = makeHost();
+  const viewer = renderer.createViewer({ document: host.document, mount: host.mount, mediaMode: 'reference' });
+  viewer.handleSnapshot(snapshotWith('<img data-fsb-nid="1" srcset="https://169.254.169.254/x.png 2x">'));
+  const cd = glueMirror(host.mount.querySelector('iframe'));
+  assert.equal(cd.querySelector('img[srcset*="169.254"]'), null, 'a blocked srcset candidate (no src) must never reach the mirror');
+  assert.ok(cd.querySelector('[data-ps-asset-unavailable]'), 'a src-less <img> with a blocked srcset degrades to a placeholder');
+});
+
+// The diff ATTR gate is exercised through the exported applyMutations seam
+// (the same seam createViewer wires into the live mirror via
+// identity.gateAssetUrl) so the test does not need a wire transport. The gate
+// closure mirrors createViewer's gateAsset binding exactly.
+function makeDiffDoc(innerHtml) {
+  const dom = new JSDOM('<!DOCTYPE html><html><body>' + innerHtml + '</body></html>');
+  return dom.window.document;
+}
+
+test('diff ATTR gate BLOCKS a srcset mutation pointing at a blocked origin (WR-03)', async () => {
+  const renderer = await import(RENDERER_MODULE);
+  const doc = makeDiffDoc('<img id="t" data-fsb-nid="1" src="https://cdn.example.com/a.png">');
+  const img = doc.getElementById('t');
+  const counters = { staleMisses: 0, applyFailures: 0 };
+  renderer.applyMutations(doc, [
+    { op: 'attr', nid: '1', attr: 'srcset', val: 'https://169.254.169.254/x.png 2x' },
+  ], counters, {
+    logger: { warn: function () {} },
+    identity: {
+      resolve: function (nid) { return String(nid) === '1' ? img : null; },
+      gateAssetUrl: function (url, kind) { return renderer.gateAssetUrl(url, { mediaMode: 'reference', kind: kind }); },
+    },
+  });
+  assert.equal(img.getAttribute('srcset'), null, 'a blocked srcset mutation is dropped, never written to the live DOM (no GET)');
+});
+
+test('diff ATTR gate keeps an allowed srcset mutation (WR-03 fidelity)', async () => {
+  const renderer = await import(RENDERER_MODULE);
+  const doc = makeDiffDoc('<img id="t" data-fsb-nid="1" src="https://cdn.example.com/a.png">');
+  const img = doc.getElementById('t');
+  const counters = { staleMisses: 0, applyFailures: 0 };
+  renderer.applyMutations(doc, [
+    { op: 'attr', nid: '1', attr: 'srcset', val: 'https://cdn.example.com/2x.png 2x' },
+  ], counters, {
+    logger: { warn: function () {} },
+    identity: {
+      resolve: function (nid) { return String(nid) === '1' ? img : null; },
+      gateAssetUrl: function (url, kind) { return renderer.gateAssetUrl(url, { mediaMode: 'reference', kind: kind }); },
+    },
+  });
+  assert.equal(img.getAttribute('srcset'), 'https://cdn.example.com/2x.png 2x', 'an all-allowed srcset mutation is written through');
+});
+
+test('diff ATTR gate BLOCKS a srcset mutation where only ONE candidate is internal (WR-03)', async () => {
+  const renderer = await import(RENDERER_MODULE);
+  const doc = makeDiffDoc('<img id="t" data-fsb-nid="1" src="https://cdn.example.com/a.png">');
+  const img = doc.getElementById('t');
+  const counters = { staleMisses: 0, applyFailures: 0 };
+  renderer.applyMutations(doc, [
+    { op: 'attr', nid: '1', attr: 'srcset', val: 'https://cdn.example.com/1x.png 1x, https://169.254.169.254/2x.png 2x' },
+  ], counters, {
+    logger: { warn: function () {} },
+    identity: {
+      resolve: function (nid) { return String(nid) === '1' ? img : null; },
+      gateAssetUrl: function (url, kind) { return renderer.gateAssetUrl(url, { mediaMode: 'reference', kind: kind }); },
+    },
+  });
+  assert.equal(img.getAttribute('srcset'), null, 'a single blocked candidate drops the WHOLE srcset (no GET on the blocked variant)');
+});

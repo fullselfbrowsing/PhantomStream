@@ -93,7 +93,18 @@ function hasDangerousScheme(value) {
     || probe.indexOf('data:text/html') === 0;
 }
 
-function parseSrcsetCandidates(srcset) {
+/**
+ * Minimal srcset candidate parser for the URL+descriptor forms this project
+ * emits (mirror of the capture-side parser). Unlike split(','), it keeps
+ * commas inside data:image URLs attached to the URL token, so a benign data
+ * candidate cannot turn into a bogus relative fetch candidate. Exported so the
+ * Phase-12 renderer fetch gates (diff ATTR branch, gateFragmentAssets, the
+ * snapshot string layer) gate srcset per-candidate through ONE parser and the
+ * attribute coverage cannot drift between sites (review WR-03/WR-04).
+ * @param {string} srcset
+ * @returns {{url: string, descriptor: string}[]}
+ */
+export function parseSrcsetCandidates(srcset) {
   var raw = String(srcset == null ? '' : srcset);
   var out = [];
   var i = 0;

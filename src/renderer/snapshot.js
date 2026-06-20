@@ -36,7 +36,7 @@
 //                                        contract says number, but wire
 //                                        values are not trusted
 
-import { scrubCssText } from './sanitize.js';
+import { scrubCssText, parseSrcsetCandidates } from './sanitize.js';
 
 /** @typedef {import('../protocol/messages.js').SnapshotPayload} SnapshotPayload */
 
@@ -58,8 +58,45 @@ import { scrubCssText } from './sanitize.js';
 // only into a non-fetchable dimensioned placeholder or a pinned same-origin
 // value. No DOM is constructed here (this module stays DOM-free by contract).
 
-/** Match an <img ...> start tag (self-closing or not); group 1 is its attrs. */
-var IMG_TAG_RE = /<img\b([^>]*)>/gi;
+// ---- Quote-aware <img> start-tag locator (review CR-02) ----
+//
+// A regex over HTML (`/<img\b([^>]*)>/`) is the wrong tool for a security
+// boundary: `[^>]*` terminates the tag at the FIRST literal `>`, but `>` is
+// legal inside a quoted attribute value (`<img alt="a>b" src="https://...">`)
+// and does NOT end the start tag for a real parser. That split let a blocked
+// `src` AFTER the in-attribute `>` slip through the gate unchanged and fetch
+// during srcdoc parse. The scanner below finds the REAL end of each `<img`
+// start tag by consuming `"..."` / `'...'` spans atomically, so a `>` inside
+// quotes never terminates the tag. If a tag end cannot be found (an unbalanced
+// quote runs to EOF), the opener is treated as unparseable and FAILS CLOSED
+// (its asset attributes are neutralized) rather than passing through.
+
+/**
+ * Find the index of the `>` that closes an `<img` start tag, honoring quoted
+ * attribute values (a `>` inside `"..."` or `'...'` does not end the tag).
+ * @param {string} html  The full markup.
+ * @param {number} from  Index just past the `<img` token (the matched opener).
+ * @returns {number} Index of the closing `>`, or -1 if none (unbalanced quote).
+ */
+function findImgTagEnd(html, from) {
+  var quote = null; // null = outside a quoted value; else the open-quote char
+  for (var i = from; i < html.length; i++) {
+    var ch = html.charAt(i);
+    if (quote !== null) {
+      if (ch === quote) quote = null; // matching close quote
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch; // entering a quoted attribute value
+      continue;
+    }
+    if (ch === '>') return i;
+  }
+  return -1;
+}
+
+/** Match the START of an <img start tag only (`<img` + a name boundary). */
+var IMG_OPEN_RE = /<img\b/gi;
 /** Pull a double/single/unquoted attribute value out of an attrs blob. */
 function readTagAttr(attrs, name) {
   var re = new RegExp(name + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s"\'>]+))', 'i');
@@ -104,18 +141,95 @@ function assetUnavailablePlaceholderTag(attrs) {
 }
 
 /**
+ * True when a srcset value contains a candidate the gate blocks. Reuses the
+ * shared per-candidate parser so the snapshot string layer gates srcset with
+ * the same vocabulary as the diff/fragment gates (review WR-03/WR-04). Any
+ * unparseable input fails closed (treated as blocked).
+ * @param {string} srcset
+ * @param {(url: string, kind: string) => { allow: boolean }} gate
+ * @returns {boolean}
+ */
+function srcsetHasBlockedCandidate(srcset, gate) {
+  if (!srcset) return false;
+  try {
+    var candidates = parseSrcsetCandidates(srcset);
+    for (var i = 0; i < candidates.length; i++) {
+      var url = candidates[i].url;
+      if (!url) continue;
+      var verdict = gate(url, 'image');
+      if (!verdict || !verdict.allow) return true;
+    }
+    return false;
+  } catch (e) {
+    return true; // unparseable srcset: fail closed
+  }
+}
+
+/**
+ * Gate the bounded attribute blob of a single <img> start tag and return the
+ * replacement markup for the whole tag. Applies the ASST-03 currentSrc pin,
+ * then gates the effective src AND srcset; any blocked fetchable URL -> the
+ * dimensioned blocked-origin placeholder (no fetchable attribute emitted).
+ * @param {string} attrs  The img attribute blob (already correctly bounded).
+ * @param {(url: string, kind: string) => { allow: boolean }} gate
+ * @returns {string}
+ */
+function gateOneImgTag(attrs, gate) {
+  var pinned = readTagAttr(attrs, 'data-ps-currentsrc');
+  var src = readTagAttr(attrs, 'src');
+  var srcset = readTagAttr(attrs, 'srcset');
+  var nextAttrs = attrs;
+  var effective = src;
+  if (pinned) {
+    // ASST-03: pin the displayed variant and neutralize re-negotiation.
+    effective = pinned;
+    nextAttrs = setTagAttr(nextAttrs, 'src', pinned);
+    nextAttrs = stripTagAttr(nextAttrs, 'srcset');
+    nextAttrs = stripTagAttr(nextAttrs, 'sizes');
+    nextAttrs = stripTagAttr(nextAttrs, 'data-ps-currentsrc');
+    srcset = null; // neutralized above; nothing left to gate
+  }
+  if (effective) {
+    var verdict = gate(effective, 'image');
+    if (!verdict || !verdict.allow) {
+      // Blocked origin -> dimensioned placeholder; no fetchable src emitted.
+      return assetUnavailablePlaceholderTag(attrs);
+    }
+  }
+  // srcset gate (WR-03/WR-04): a blocked candidate on a src-less or src-allowed
+  // <img> would still let the parser fetch a responsive variant. If any
+  // candidate is blocked AND no allowed src remains, fall back to the
+  // placeholder; otherwise strip srcset so only the (allowed) src can fetch.
+  if (srcset && srcsetHasBlockedCandidate(srcset, gate)) {
+    if (!effective) return assetUnavailablePlaceholderTag(attrs);
+    nextAttrs = stripTagAttr(nextAttrs, 'srcset');
+  }
+  return '<img' + nextAttrs + '>';
+}
+
+/**
  * Rewrite fetchable <img> assets in a raw snapshot HTML string against an
  * injected pre-write fetch gate (MSEC-01) and apply the ASST-03 currentSrc
  * pin. For each <img>:
  *   1. currentSrc pin: if data-ps-currentsrc is present, the effective src
  *      becomes that value and srcset/sizes are neutralized (removed) so the
  *      cross-origin viewer's DPR cannot re-negotiate a different variant.
- *   2. fetch gate: gate(effectiveSrc, 'image'); if !allow, the entire <img>
- *      is replaced by the dimensioned blocked-origin placeholder so the
- *      parser never sees a fetchable src.
- * An <img> with no src/currentsrc is left untouched. The gate is fail-closed
- * by construction (createViewer's gateAssetUrl); a missing gate leaves the
- * markup unchanged (no-op) so this stays a pure string transform.
+ *   2. fetch gate: gate(effectiveSrc, 'image') and gate every srcset
+ *      candidate; if blocked, the entire <img> is replaced by the dimensioned
+ *      blocked-origin placeholder (or srcset is stripped when an allowed src
+ *      remains) so the parser never sees a fetchable blocked URL.
+ * An <img> with no src/currentsrc/srcset is left untouched.
+ *
+ * QUOTE-AWARE TAG SCAN (review CR-02): the start tag is located with a
+ * quote-aware scanner (findImgTagEnd), NOT a `[^>]*` regex -- a `>` inside a
+ * quoted attribute value (`alt="a>b"`) does not terminate the tag, so a
+ * blocked `src` after such a `>` can no longer slip through unmodified. An
+ * `<img` opener whose tag end cannot be located (an unbalanced quote running
+ * to EOF) is FAILED CLOSED: it is replaced by the dimensioned placeholder
+ * rather than passed through, so a malformed shape can never emit a fetchable
+ * blocked URL. The gate is fail-closed by construction (createViewer's
+ * gateAssetUrl); a missing gate leaves the markup unchanged (no-op) so this
+ * stays a pure string transform.
  * @param {string} html  Raw payload.html (string layer, pre-srcdoc).
  * @param {(url: string, kind: string) => { allow: boolean }} gate
  * @returns {string}
@@ -123,28 +237,34 @@ function assetUnavailablePlaceholderTag(attrs) {
 export function gateSnapshotAssets(html, gate) {
   if (typeof html !== 'string' || !html) return html;
   if (typeof gate !== 'function') return html;
-  return html.replace(IMG_TAG_RE, function (whole, attrs) {
-    var pinned = readTagAttr(attrs, 'data-ps-currentsrc');
-    var src = readTagAttr(attrs, 'src');
-    var nextAttrs = attrs;
-    var effective = src;
-    if (pinned) {
-      // ASST-03: pin the displayed variant and neutralize re-negotiation.
-      effective = pinned;
-      nextAttrs = setTagAttr(nextAttrs, 'src', pinned);
-      nextAttrs = stripTagAttr(nextAttrs, 'srcset');
-      nextAttrs = stripTagAttr(nextAttrs, 'sizes');
-      nextAttrs = stripTagAttr(nextAttrs, 'data-ps-currentsrc');
+  var out = '';
+  var cursor = 0; // index of the next un-copied char in html
+  IMG_OPEN_RE.lastIndex = 0;
+  var open;
+  while ((open = IMG_OPEN_RE.exec(html)) !== null) {
+    var tagStart = open.index;          // index of '<' in '<img'
+    var attrsStart = IMG_OPEN_RE.lastIndex; // index just past '<img'
+    // Copy everything before this opener verbatim.
+    out += html.slice(cursor, tagStart);
+    var tagEnd = findImgTagEnd(html, attrsStart); // quote-aware
+    if (tagEnd === -1) {
+      // Unbalanced quote: the tag never closes. Fail closed -- emit a
+      // placeholder for the remainder so no fetchable blocked URL survives,
+      // and stop (the rest of the string is inside an unterminated tag).
+      out += assetUnavailablePlaceholderTag(html.slice(attrsStart));
+      cursor = html.length;
+      break;
     }
-    if (effective) {
-      var verdict = gate(effective, 'image');
-      if (!verdict || !verdict.allow) {
-        // Blocked origin -> dimensioned placeholder; no fetchable src emitted.
-        return assetUnavailablePlaceholderTag(attrs);
-      }
-    }
-    return '<img' + nextAttrs + '>';
-  });
+    var attrs = html.slice(attrsStart, tagEnd); // bounded attribute blob
+    // A self-closing '/' just before '>' is part of the blob; the helpers
+    // tolerate a trailing '/' (it is not a quote/value char), and re-emitting
+    // '<img' + attrs + '>' preserves it.
+    out += gateOneImgTag(attrs, gate);
+    cursor = tagEnd + 1; // resume just past this tag's '>'
+    IMG_OPEN_RE.lastIndex = cursor;     // continue scanning after the real end
+  }
+  out += html.slice(cursor);
+  return out;
 }
 
 // The ADOPTED srcdoc CSP (backstop behind both sanitization chokepoints,
