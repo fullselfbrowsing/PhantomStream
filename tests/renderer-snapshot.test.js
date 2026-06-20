@@ -65,6 +65,39 @@ test('the exact adopted CSP meta is the FIRST element after <head>, before the c
   );
 });
 
+// Phase 12 (plan 12-01, ASST-05): CSP is CONFIRM-ONLY for static assets. The
+// existing img-src already covers every static image surface (<img>, srcset,
+// <picture>/<source>, SVG <image>, background-image, <video> poster), so this
+// phase adds NO directive -- it pins the shape so an accidental future widening
+// fails loudly. In particular: media-src is deferred to Phase 13 (when the real
+// <video>/<audio> element ships and actually needs it) and script-src must never
+// appear (default-src 'none' governs scripts; a script-src would be a sandbox
+// regression). CSP_META in src/renderer/snapshot.js stays byte-unchanged here.
+test('the srcdoc CSP allows images but blocks scripts and defers media-src (12-01, ASST-05)', () => {
+  const html = buildSnapshotHtml(minimalPayload());
+  // (i) images fetch by reference: img-src is present and scoped to http(s)+data:
+  assert.ok(
+    html.includes('img-src http: https: data:'),
+    'CSP keeps img-src http: https: data: so assets render by reference'
+  );
+  // (ii) the deny-by-default backstop still governs every other fetch
+  assert.ok(
+    html.includes("default-src 'none'"),
+    "CSP keeps default-src 'none' so non-image fetches and scripts stay blocked"
+  );
+  // (iii) no script execution surface is ever introduced
+  assert.ok(
+    !html.includes('script-src'),
+    'CSP has NO script-src (default-src none governs scripts; a script-src would regress the sandbox)'
+  );
+  // (iv) media-src is intentionally absent -- proving the Phase-13 deferral is
+  // deliberate, not forgotten. Adding it here is forbidden (Phase 12 confirm-only).
+  assert.ok(
+    !html.includes('media-src'),
+    'CSP has NO media-src yet -- the media-src directive is Phase 13, not Phase 12'
+  );
+});
+
 test('the CSP meta contains no meta-unsupported directives (Pitfall 8)', () => {
   const html = buildSnapshotHtml(minimalPayload());
   // frame-ancestors / sandbox / report-uri are silently dropped when
