@@ -59,14 +59,24 @@ const CSP_CONTENT = "default-src 'none'; img-src http: https: data:; "
   + "media-src http: https: data: blob:; "
   + "style-src http: https: 'unsafe-inline'; font-src http: https: data:";
 
-test('the exact adopted CSP meta is the FIRST element after <head>, before the charset meta', () => {
+// Phase 15 (15-02, MSEC-04): a document-level <meta name="referrer"
+// content="no-referrer"> is injected IMMEDIATELY after CSP_META (and before the
+// charset meta / any subresource fetch). CSP stays the FIRST element after
+// <head>; the referrer meta is the second, so the exact head prefix is now
+// <head> + CSP + referrer + charset. This still pins the "policy metas precede
+// any parser-initiated fetch" invariant -- it just adds the referrer policy to
+// the policy-first block. (The dedicated ordering/no-crossorigin pins live in
+// tests/renderer-media-csp.test.js.)
+test('the exact adopted CSP meta is the FIRST element after <head>, then the no-referrer meta, before the charset meta', () => {
   const html = buildSnapshotHtml(minimalPayload());
   assert.ok(
     html.includes(
       '<head><meta http-equiv="Content-Security-Policy" content="'
-        + CSP_CONTENT + '"><meta charset="UTF-8">'
+        + CSP_CONTENT + '">'
+        + '<meta name="referrer" content="no-referrer">'
+        + '<meta charset="UTF-8">'
     ),
-    'CSP meta pinned verbatim, positioned before any parser-initiated fetch'
+    'CSP meta pinned verbatim FIRST, then the no-referrer meta, both before any parser-initiated fetch'
   );
 });
 

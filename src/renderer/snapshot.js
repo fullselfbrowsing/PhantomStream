@@ -670,7 +670,18 @@ export function buildSnapshotHtml(payload) {
 
   // CSP meta FIRST after <head> so the policy applies before any
   // parser-initiated fetch (03-RESEARCH "CSP meta injection").
-  return '<!DOCTYPE html><html' + htmlAttrs + '><head>' + CSP_META + '<meta charset="UTF-8">' +
+  // MSEC-04 (Phase 15-02): a document-level no-referrer meta IMMEDIATELY after
+  // CSP_META (before charset/viewport/stylesheets/payload <img>) so the policy
+  // is parsed before any viewer-side subresource fetch (img/video/source/poster/
+  // background-image). One control covers every parser- and CSS-initiated fetch,
+  // so the mirrored page URL (which can carry signed tokens) never leaks in a
+  // Referer header to third-party origins. No `crossorigin` is added: the
+  // allow-same-origin sandbox + no crossorigin already omits credentials, and
+  // forcing crossorigin="anonymous" would break non-CORS assets. Live referrer/
+  // credential suppression is the deferred real-browser UAT (15-RESEARCH A2);
+  // the string contract is unit-pinned in tests/renderer-media-csp.test.js.
+  return '<!DOCTYPE html><html' + htmlAttrs + '><head>' + CSP_META +
+    '<meta name="referrer" content="no-referrer">' + '<meta charset="UTF-8">' +
     '<meta name="viewport" content="width=' + (parseInt(p.viewportWidth, 10) || 1920) + '">' +
     stylesheetLinks +
     inlineStyleTags +
@@ -687,7 +698,11 @@ export function buildFramePlaceholderHtml(frame) {
   var meta = '';
   if (origin) meta += '<p>Origin: ' + origin + '</p>';
   if (src) meta += '<p>Source: ' + src + '</p>';
-  return '<!DOCTYPE html><html><head>' + CSP_META + '<meta charset="UTF-8">' +
+  // MSEC-04 (Phase 15-02): same document-level no-referrer meta after CSP_META
+  // as buildSnapshotHtml -- this container-less variant is also a viewer-rendered
+  // srcdoc, so the referrer policy must precede any subresource fetch here too.
+  return '<!DOCTYPE html><html><head>' + CSP_META +
+    '<meta name="referrer" content="no-referrer">' + '<meta charset="UTF-8">' +
     '<style>body{margin:0;font:13px system-ui,sans-serif;color:#30333a;background:#f6f7f9;}' +
     '.ps-frame-placeholder{box-sizing:border-box;min-height:100vh;display:flex;flex-direction:column;gap:6px;' +
     'justify-content:center;align-items:center;text-align:center;border:1px dashed #9aa3af;padding:16px;}' +
