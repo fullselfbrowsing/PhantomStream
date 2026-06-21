@@ -493,3 +493,152 @@ test('adapter source avoids DOM synthetic event replay APIs', async () => {
   assert.doesNotMatch(combined, /element\.click/);
   assert.doesNotMatch(combined, /document\.querySelector\(.*\)\.click/);
 });
+
+// --- Opt-in manifest discovery (MADPT-02, Plan 14-04) -----------------------
+
+// Build a synthetic Playwright Response. headers() returns a lowercased map
+// (Playwright contract); request().frame() exposes the initiator frame.
+function fakeResponse(url, contentType, frame) {
+  const headers = {};
+  if (typeof contentType === 'string') headers['content-type'] = contentType;
+  return {
+    url() { return url; },
+    headers() { return headers; },
+    request() { return { frame() { return frame || null; } }; },
+  };
+}
+
+function lastHint(transport) {
+  const hints = transport.sent.filter((entry) => entry.type === STREAM.MEDIA_HINT);
+  return hints.length ? hints[hints.length - 1].payload : null;
+}
+
+test('discovery off by default: no response listener and no media hint', async () => {
+  const page = createFakePage();
+  const transport = createRecordingTransport();
+  const adapter = createPlaywrightAdapter({ page, transport });
+  await adapter.install();
+
+  // The existing framenavigated/load listeners are present; 'response' is NOT.
+  assert.ok(page.calls.some((call) => call.method === 'on' && call.event === 'framenavigated'));
+  assert.equal(page.calls.some((call) => call.method === 'on' && call.event === 'response'), false);
+
+  // Even if a manifest response is somehow emitted, nothing is sent.
+  page.emit('response', fakeResponse('https://cdn.test/master.m3u8', 'application/vnd.apple.mpegurl'));
+  await tick();
+  assert.equal(transport.sent.some((entry) => entry.type === STREAM.MEDIA_HINT), false);
+});
+
+test('opt-in .m3u8 response emits a page-scope HLS media hint', async () => {
+  const page = createFakePage();
+  const transport = createRecordingTransport();
+  const adapter = createPlaywrightAdapter({ page, transport, discoverManifests: true });
+  await adapter.install();
+
+  assert.ok(page.calls.some((call) => call.method === 'on' && call.event === 'response'),
+    'opt-in registers a response listener via addPageListener');
+
+  page.emit('response', fakeResponse('https://cdn.test/live/master.m3u8?token=abc'));
+  await tick();
+
+  const hint = lastHint(transport);
+  assert.ok(hint, 'opt-in .m3u8 response emits STREAM.MEDIA_HINT');
+  assert.equal(hint.kind, 'hls');
+  assert.equal(hint.manifestUrl, 'https://cdn.test/live/master.m3u8?token=abc');
+  assert.equal(hint.scope, 'page');
+  assert.equal(Object.prototype.hasOwnProperty.call(hint, 'nid'), false);
+  // Identity stamps default to the empty/zero stream identity when unseen.
+  assert.equal(typeof hint.streamSessionId, 'string');
+  assert.equal(typeof hint.snapshotId, 'number');
+});
+
+test('opt-in extensionless dash+xml content-type emits a DASH hint', async () => {
+  const page = createFakePage();
+  const transport = createRecordingTransport();
+  const adapter = createPlaywrightAdapter({ page, transport, discoverManifests: true });
+  await adapter.install();
+
+  page.emit('response', fakeResponse('https://cdn.test/signed/stream', 'application/dash+xml; charset=utf-8'));
+  await tick();
+
+  const hint = lastHint(transport);
+  assert.ok(hint, 'dash content-type emits a hint even without a .mpd extension');
+  assert.equal(hint.kind, 'dash');
+  assert.equal(hint.manifestUrl, 'https://cdn.test/signed/stream');
+  assert.equal(hint.contentType, 'application/dash+xml; charset=utf-8');
+});
+
+test('opt-in non-manifest responses emit no hint', async () => {
+  const page = createFakePage();
+  const transport = createRecordingTransport();
+  const adapter = createPlaywrightAdapter({ page, transport, discoverManifests: true });
+  await adapter.install();
+
+  page.emit('response', fakeResponse('https://cdn.test/clip.mp4', 'video/mp4'));
+  page.emit('response', fakeResponse('https://cdn.test/poster.jpg', 'image/jpeg'));
+  page.emit('response', fakeResponse('https://cdn.test/app.js', 'application/javascript'));
+  await tick();
+
+  assert.equal(transport.sent.some((entry) => entry.type === STREAM.MEDIA_HINT), false);
+});
+
+test('opt-in single-active correlation yields an element-scope hint with the nid', async () => {
+  const page = createFakePage();
+  const transport = createRecordingTransport();
+  let activeNid = null;
+  const adapter = createPlaywrightAdapter({
+    page,
+    transport,
+    discoverManifests: true,
+    resolveActiveMediaNid: () => activeNid,
+  });
+  await adapter.install();
+
+  // Ambiguous (no single active element) -> page scope.
+  page.emit('response', fakeResponse('https://cdn.test/a.m3u8'));
+  await tick();
+  let hint = lastHint(transport);
+  assert.equal(hint.scope, 'page');
+  assert.equal(Object.prototype.hasOwnProperty.call(hint, 'nid'), false);
+
+  // A single active opaque element is signalled -> element scope with the nid.
+  activeNid = '57';
+  page.emit('response', fakeResponse('https://cdn.test/b.m3u8'));
+  await tick();
+  hint = lastHint(transport);
+  assert.equal(hint.scope, 'element');
+  assert.equal(hint.nid, '57');
+});
+
+test('opt-in hint carries the most recently forwarded stream identity', async () => {
+  const page = createFakePage();
+  const transport = createRecordingTransport();
+  const adapter = createPlaywrightAdapter({ page, transport, discoverManifests: true });
+  await adapter.install();
+
+  // The adapter forwards a SNAPSHOT through the bridge, which carries identity.
+  const bridge = page.bindings.get('__phantomStreamBridge');
+  const token = installedBridgeToken(page);
+  await bridge(
+    { page, frame: page.mainFrameValue },
+    { token, type: STREAM.SNAPSHOT, payload: { streamSessionId: 'stream_live_1', snapshotId: 909 } }
+  );
+
+  page.emit('response', fakeResponse('https://cdn.test/master.m3u8'));
+  await tick();
+
+  const hint = lastHint(transport);
+  assert.equal(hint.streamSessionId, 'stream_live_1');
+  assert.equal(hint.snapshotId, 909);
+});
+
+test('opt-in is graceful when the page cannot register listeners', async () => {
+  const page = createFakePage();
+  page.on = undefined; // addPageListener returns early when page.on is absent
+  const transport = createRecordingTransport();
+  const adapter = createPlaywrightAdapter({ page, transport, discoverManifests: true });
+
+  // Install must not throw, and no hint can be emitted (no listener attached).
+  await adapter.install();
+  assert.equal(transport.sent.some((entry) => entry.type === STREAM.MEDIA_HINT), false);
+});

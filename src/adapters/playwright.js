@@ -13,6 +13,7 @@ import {
   REMOTE_CONTROL,
   REMOTE_CONTROL_STATE,
   STREAM,
+  classifyManifest,
   createRemoteControlStateEvent,
   isRemoteControlType,
   validateRemoteControlMessage,
@@ -86,6 +87,19 @@ export function createPlaywrightAdapter(options) {
     warn: function () {},
     error: function () {}
   };
+
+  // Opt-in, off-by-default adaptive-manifest discovery (MADPT-02). When false/
+  // absent: register NO response listener and emit NO hints (graceful absence —
+  // the progressive path is untouched). The correlation hook is best-effort: it
+  // returns the nid of a single active opaque media element, or null/undefined
+  // for the always-safe page-scope default.
+  var discoverManifests = cfg.discoverManifests === true;
+  var resolveActiveMediaNid = typeof cfg.resolveActiveMediaNid === 'function'
+    ? cfg.resolveActiveMediaNid
+    : function () { return null; };
+  // The hint is stamped with the same stream identity the adapter already
+  // forwards on STREAM messages, snooped from the bridge payloads it relays.
+  var currentIdentity = { streamSessionId: '', snapshotId: 0 };
 
   var installed = false;
   var disposed = false;
@@ -198,12 +212,95 @@ export function createPlaywrightAdapter(options) {
       return { ok: false, error: 'bridge-type-invalid' };
     }
     try {
+      observeStreamIdentity(msg.payload);
       transport.send(msg.type, msg.payload || {});
       emit('bridge', { type: msg.type });
       return { ok: true };
     } catch (err) {
       safeLog('error', '[PlaywrightAdapter] bridge forward failed', { reason: 'bridge-forward-failed' });
       return { ok: false, error: 'bridge-forward-failed' };
+    }
+  }
+
+  // Snoop the stream identity off the side-channel payloads the adapter relays,
+  // so an emitted media hint carries the same identity as the messages around
+  // it. Missing fields are ignored (the viewer's isCurrentStream accepts a hint
+  // with empty identity until a real stream identity has been observed).
+  function observeStreamIdentity(payload) {
+    if (!payload || Object(payload) !== payload) return;
+    if (typeof payload.streamSessionId === 'string' && payload.streamSessionId) {
+      currentIdentity.streamSessionId = payload.streamSessionId;
+    }
+    if (typeof payload.snapshotId === 'number' && Number.isFinite(payload.snapshotId)) {
+      currentIdentity.snapshotId = payload.snapshotId;
+    }
+  }
+
+  // Best-effort manifest observation. Reads the response url + content-type,
+  // classifies via the pure classifyManifest filter, and on a non-null kind
+  // emits STREAM.MEDIA_HINT through the same transport.send path the bridge
+  // uses. Fully contained: a hostile/odd response can never wedge the observer.
+  function handleManifestResponse(response) {
+    if (disposed || !discoverManifests) return;
+    try {
+      if (!response || typeof response.url !== 'function') return;
+      var url = response.url();
+      var contentType = '';
+      if (typeof response.headers === 'function') {
+        var headers = response.headers() || {};
+        // Playwright lowercases header names; be tolerant of either casing.
+        contentType = headers['content-type'] || headers['Content-Type'] || '';
+      }
+      var kind = classifyManifest({ url: url, contentType: contentType });
+      if (!kind) return;
+      emitMediaHint(url, kind, contentType);
+    } catch (err) {
+      safeLog('warn', '[PlaywrightAdapter] manifest observe failed', { reason: 'manifest-observe-failed' });
+    }
+  }
+
+  // CDP Network.responseReceived secondary path: { response: { url, headers,
+  // mimeType } }. Same opt-in, same classifier, same emission as the page hook.
+  function handleCDPResponseReceived(event) {
+    if (disposed || !discoverManifests) return;
+    try {
+      var resp = event && event.response;
+      if (!resp || typeof resp.url !== 'string') return;
+      var headers = resp.headers || {};
+      var contentType = headers['content-type'] || headers['Content-Type']
+        || (typeof resp.mimeType === 'string' ? resp.mimeType : '');
+      var kind = classifyManifest({ url: resp.url, contentType: contentType });
+      if (!kind) return;
+      emitMediaHint(resp.url, kind, contentType);
+    } catch (err) {
+      safeLog('warn', '[PlaywrightAdapter] cdp manifest observe failed', { reason: 'manifest-observe-failed' });
+    }
+  }
+
+  function emitMediaHint(manifestUrl, kind, contentType) {
+    var payload = {
+      scope: 'page',
+      manifestUrl: manifestUrl,
+      kind: kind,
+      streamSessionId: currentIdentity.streamSessionId,
+      snapshotId: currentIdentity.snapshotId
+    };
+    if (contentType) payload.contentType = contentType;
+    var nid = null;
+    try {
+      nid = resolveActiveMediaNid();
+    } catch (err) {
+      nid = null; // correlation is best-effort; failure -> page scope
+    }
+    if (typeof nid === 'string' && nid) {
+      payload.scope = 'element';
+      payload.nid = nid;
+    }
+    try {
+      transport.send(STREAM.MEDIA_HINT, payload);
+      emit('mediahint', { kind: kind, scope: payload.scope });
+    } catch (err) {
+      safeLog('error', '[PlaywrightAdapter] media hint send failed', { reason: 'media-hint-send-failed' });
     }
   }
 
@@ -304,6 +401,16 @@ export function createPlaywrightAdapter(options) {
       addPageListener('framenavigated', handleNavigation);
       addPageListener('domcontentloaded', function () { handleNavigation(null); });
       addPageListener('load', function () { handleNavigation(null); });
+
+      // Opt-in manifest observation: only when discovery is enabled do we attach
+      // the 'response' listener (off by default -> no listener, graceful absence).
+      if (discoverManifests) {
+        addPageListener('response', handleManifestResponse);
+        if (session && typeof session.on === 'function') {
+          // CDP secondary path (same opt-in, same filter + emission).
+          session.on('Network.responseReceived', handleCDPResponseReceived);
+        }
+      }
 
       if (transport && typeof transport.onMessage === 'function') {
         unsubscribeTransport = transport.onMessage(function (type, payload) {
