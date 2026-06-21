@@ -38,6 +38,7 @@ import * as sanitizeDivergence from './scenarios/sanitize-divergence.js';
 import * as phase8ProtocolExtensions from './scenarios/phase8-protocol-extensions.js';
 import * as cssomCaptureMode from './scenarios/cssom-capture-mode.js';
 import * as staticAssets from './scenarios/static-assets.js';
+import * as mediaPlaybackSync from './scenarios/media-playback-sync.js';
 
 /**
  * The full fixture x scenario matrix. Every reliability defense from the
@@ -62,6 +63,7 @@ const MATRIX = [
   { fixture: 'phase8-fidelity.html', scenario: phase8ProtocolExtensions, config: {} },
   { fixture: 'cssom-mode.html', scenario: cssomCaptureMode, config: { styleMode: 'cssom' } },
   { fixture: 'static-assets.html', scenario: staticAssets, config: {} },
+  { fixture: 'media-playback-sync.html', scenario: mediaPlaybackSync, config: {} },
 ];
 
 function loadFixture(fixtureFile) {
