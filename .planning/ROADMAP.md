@@ -35,7 +35,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 12: Static Assets by Reference** - Verify/harden the already-shipped by-reference asset pipeline; `currentSrc` pinning; placeholder fallback; precise viewer CSP; front-loaded fail-closed origin policy + `mediaMode` (completed 2026-06-20)
 - [x] **Phase 13: Video/Audio URL + Playback Sync** - Progressive `<video>`/`<audio>` from source URL; throttled `STREAM.MEDIA` side channel; drift-corrected pure-function reconciler; autoplay-policy-correct viewer (completed 2026-06-21)
-- [ ] **Phase 14: Adaptive Streaming + Adapter Discovery + Fallback** - Best-effort HLS/DASH via an optional, lazy, parent-realm player; opt-in adapter manifest discovery; MSE-no-manifest/DRM → poster; live-stream handling
+- [x] **Phase 14: Adaptive Streaming + Adapter Discovery + Fallback** - Best-effort HLS/DASH via an optional, lazy, parent-realm player; opt-in adapter manifest discovery; MSE-no-manifest/DRM → poster; live-stream handling (completed 2026-06-21)
 - [ ] **Phase 15: Media Security, Masking, Threat Model & Docs** - Complete URL/media masking + `referrerpolicy="no-referrer"`; threat-review the parent-realm object-URL blast radius; media security tests; SECURITY/ARCHITECTURE docs
 
 ## Phase Details
@@ -495,7 +495,7 @@ Plans:
 **Wave 3** *(blocked on Wave 2 completion)*
 
 - [x] 14-03-PLAN.md — Renderer wiring: STREAM.MEDIA_HINT dispatch + hint consumption + player teardown + live reuse + State-C media-poster wire
-- [ ] 14-05-PLAN.md — Packaging: optional hls.js peerDependency (never a hard dep) + zero-hard-dep package:smoke proof
+- [x] 14-05-PLAN.md — Packaging: optional hls.js peerDependency (never a hard dep) + zero-hard-dep package:smoke proof
 
 **UI hint**: yes
 **Research**: Likely needs `--research-phase 14` during planning — the only genuinely uncertain area. Cross-realm MSE binding (creating `MediaSource` in the parent and assigning its object URL to the in-iframe `<video>`), hls.js cross-realm `attachMedia(iframeEl)`, whether the child needs `connect-src`, and manifest→element correlation from CDP/`webRequest` initiator chains all warrant empirical Playwright validation.
@@ -554,5 +554,5 @@ Phases execute in numeric order. v1.0 (1–11) is complete. v2.0 active order: 1
 | 11. FSB Swap-In → 1.0 | — | Complete (verified in FSB repo) | 2026-06-16 |
 | 12. Static Assets by Reference | 3/3 | Complete   | 2026-06-20 |
 | 13. Video/Audio URL + Playback Sync | 4/4 | Complete    | 2026-06-21 |
-| 14. Adaptive Streaming + Adapter Discovery + Fallback | 4/5 | In Progress|  |
+| 14. Adaptive Streaming + Adapter Discovery + Fallback | 5/5 | Complete   | 2026-06-21 |
 | 15. Media Security, Masking, Threat Model & Docs | 0/TBD | Not started | - |
