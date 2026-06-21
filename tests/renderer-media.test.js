@@ -655,6 +655,54 @@ test('mediaMode reference: string layer preserves allowed-origin <video src>/<so
   }
 });
 
+// Codex P1 (WR-04 parity): a responsive <picture><source srcset> is prefetched
+// by the parser exactly like <img srcset>, so a blocked (link-local SSRF)
+// candidate on a srcset-only <source> must be neutralized at the STRING layer
+// before srcdoc parse -- the per-tag src gate alone left it untouched.
+test('string layer gates <source srcset> -- a blocked candidate never reaches srcdoc (Codex P1)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(
+      createViewer,
+      env,
+      { mediaMode: 'reference', allowAssetOrigins: ['cdn.example.test'] },
+      {
+        html: '<picture><source srcset="https://169.254.169.254/x.png 2x">'
+          + '<img src="https://cdn.example.test/fallback.png"></picture>',
+      }
+    );
+    const srcdoc = ctx.iframe.getAttribute('srcdoc');
+    assert.equal(srcdoc.includes('169.254'), false, 'a blocked <source srcset> candidate must not survive pre-parse');
+    assert.equal(srcdoc.includes('cdn.example.test/fallback.png'), true, 'the allowed <picture> fallback <img> is kept (surgical, not a wholesale block)');
+  } finally {
+    env.teardown();
+  }
+});
+
+// Counterpoint: a <source> with an allowed src and a blocked srcset keeps the
+// src and strips only the offending srcset (mirrors the <img> strip path).
+test('string layer strips a blocked <source srcset> but keeps an allowed src (Codex P1)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(
+      createViewer,
+      env,
+      { mediaMode: 'reference', allowAssetOrigins: ['cdn.example.test'] },
+      {
+        html: '<picture><source src="https://cdn.example.test/a.png"'
+          + ' srcset="https://169.254.169.254/x.png 2x"></picture>',
+      }
+    );
+    const srcdoc = ctx.iframe.getAttribute('srcdoc');
+    assert.equal(srcdoc.includes('169.254'), false, 'the blocked srcset candidate is stripped');
+    assert.equal(srcdoc.includes('cdn.example.test/a.png'), true, 'the allowed src is preserved');
+  } finally {
+    env.teardown();
+  }
+});
+
 test('driver holds while element.seeking is true (skips a new seek -- Pitfall 6)', async () => {
   const { createViewer } = await import(RENDERER_MODULE);
   const env = setupEnv();

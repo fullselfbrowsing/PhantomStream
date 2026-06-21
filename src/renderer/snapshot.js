@@ -357,6 +357,7 @@ function gateOneMediaTag(tagName, attrs, gate) {
   }
   var nextAttrs = attrs;
   var src = readTagAttr(attrs, 'src');
+  var srcAllowed = false; // a usable (allowed, not stripped) src survives the gate
   if (src) {
     // Distinct kinds so the gate can apply mode-aware policy: a <video src>
     // gates as 'media' and a <source src> as 'source'. In poster mode the gate
@@ -370,6 +371,22 @@ function gateOneMediaTag(tagName, attrs, gate) {
       } else {
         return assetUnavailablePlaceholderTag(attrs);
       }
+    } else {
+      srcAllowed = true;
+    }
+  }
+  // <source srcset> (responsive <picture> candidates) is prefetched by the
+  // parser exactly like <img srcset>, so it must be gated with the same per-
+  // candidate vocabulary (review WR-04 parity) -- a srcset-only <source> would
+  // otherwise re-emit a blocked candidate unchanged. <video>/<audio> carry no
+  // srcset, so this only matters for <source>. If any candidate is blocked and
+  // no allowed src remains, fall back to the placeholder; otherwise strip srcset
+  // so only the (allowed) src can fetch.
+  if (tagName === 'source') {
+    var srcset = readTagAttr(attrs, 'srcset');
+    if (srcset && srcsetHasBlockedCandidate(srcset, gate)) {
+      if (!srcAllowed) return assetUnavailablePlaceholderTag(attrs);
+      nextAttrs = stripTagAttr(nextAttrs, 'srcset');
     }
   }
   // <video poster> is a fetchable image; <source> has no poster. A blocked
