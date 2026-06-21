@@ -39,7 +39,7 @@ Each maps to exactly one roadmap phase.
 - [x] **MADPT-01**: Best-effort adaptive playback — when an HLS (`.m3u8`) or DASH (`.mpd`) manifest URL is available, the viewer plays it via an optional, lazy player running in a renderer-owned, **parent-realm** surface (never inside the mirror sandbox); only `hls.js` is added (optional, lazy), DASH via a host-provided-player seam
 - [x] **MADPT-02**: The Playwright/CDP and extension adapters can surface manifest URLs not present as a plain element `src` (network observation), fed to the viewer as opt-in hints with graceful absence
 - [x] **MADPT-03**: Media that cannot be referenced (MSE/`blob:` without a discoverable manifest, DRM/EME) degrades to poster/placeholder with an observable, documented reason — the mirror never breaks
-- [ ] **MADPT-04**: Live streams (infinite/NaN duration) are handled — live-edge sync, no absolute seek
+- [x] **MADPT-04**: Live streams (infinite/NaN duration) are handled — live-edge sync, no absolute seek
 
 ### Media Security & Privacy (MSEC)
 
@@ -117,7 +117,7 @@ Which phases cover which requirements. Finalized during roadmap creation.
 | MADPT-01 | Phase 14 | Complete |
 | MADPT-02 | Phase 14 | Complete |
 | MADPT-03 | Phase 14 | Complete |
-| MADPT-04 | Phase 14 | Pending |
+| MADPT-04 | Phase 14 | Complete |
 | MSEC-03 | Phase 15 | Pending |
 | MSEC-04 | Phase 15 | Pending |
 

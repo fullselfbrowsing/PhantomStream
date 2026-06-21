@@ -494,7 +494,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 14-03-PLAN.md — Renderer wiring: STREAM.MEDIA_HINT dispatch + hint consumption + player teardown + live reuse + State-C media-poster wire
+- [x] 14-03-PLAN.md — Renderer wiring: STREAM.MEDIA_HINT dispatch + hint consumption + player teardown + live reuse + State-C media-poster wire
 - [ ] 14-05-PLAN.md — Packaging: optional hls.js peerDependency (never a hard dep) + zero-hard-dep package:smoke proof
 
 **UI hint**: yes
@@ -554,5 +554,5 @@ Phases execute in numeric order. v1.0 (1–11) is complete. v2.0 active order: 1
 | 11. FSB Swap-In → 1.0 | — | Complete (verified in FSB repo) | 2026-06-16 |
 | 12. Static Assets by Reference | 3/3 | Complete   | 2026-06-20 |
 | 13. Video/Audio URL + Playback Sync | 4/4 | Complete    | 2026-06-21 |
-| 14. Adaptive Streaming + Adapter Discovery + Fallback | 3/5 | In Progress|  |
+| 14. Adaptive Streaming + Adapter Discovery + Fallback | 4/5 | In Progress|  |
 | 15. Media Security, Masking, Threat Model & Docs | 0/TBD | Not started | - |

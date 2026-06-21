@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Asset & Media Streaming
 status: executing
-stopped_at: Completed 14-04-PLAN.md
-last_updated: "2026-06-21T11:27:00.705Z"
+stopped_at: Completed 14-03-PLAN.md
+last_updated: "2026-06-21T11:45:40.923Z"
 last_activity: 2026-06-21
 progress:
   total_phases: 15
   completed_phases: 12
   total_plans: 69
-  completed_plans: 67
+  completed_plans: 68
   percent: 80
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-06-19)
 ## Current Position
 
 Phase: 14 (Adaptive Streaming + Adapter Discovery + Fallback) — EXECUTING
-Plan: 4 of 5
-Status: 14-01 (protocol + filter spine) + 14-02 (parent-realm player + fallback + CSP blob:) + 14-04 (adapter opt-in manifest discovery -> STREAM.MEDIA_HINT) complete; ready to execute 14-03 (renderer player wiring + handleMediaHint + media-unavailable overlay)
-Last activity: 2026-06-21 -- Completed 14-04 (opt-in Playwright page.on('response')/CDP + extension chrome.webRequest manifest discovery emitting STREAM.MEDIA_HINT; off by default, graceful absence)
+Plan: 5 of 5
+Status: 14-01 (protocol) + 14-02 (parent-realm player + fallback + CSP blob:) + 14-04 (adapter discovery -> STREAM.MEDIA_HINT) + 14-03 (renderer player wiring + handleMediaHint + page correlation + destroyAll + State-C caption) complete; ready to execute 14-05 (packaging: hls.js optional peerDependency)
+Last activity: 2026-06-21 -- Completed 14-03 (STREAM.MEDIA_HINT dispatch + parent-realm player wiring + re-gate + page->element correlation + re-snapshot teardown + live rejoin-edge reuse + Phase-13 State-C media-poster caption; full suite 659/659, oracle 48/48)
 
 **v2.0 phase order:** 12 → 13 → 14 → 15
 
@@ -104,6 +104,7 @@ Last activity: 2026-06-21 -- Completed 14-04 (opt-in Playwright page.on('respons
 | Phase 14 P01 | 18min | 3 tasks | 4 files |
 | Phase 14 P02 | 14min | 3 tasks | 6 files |
 | Phase 14 P04 | 11min | 2 tasks | 4 files |
+| Phase 14 P03 | 6min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -144,6 +145,9 @@ Earlier v1.0 decisions are retained in PROJECT.md Key Decisions and the prior ph
 - [Phase ?]: [Phase 14-02]: createMediaPlayer attach() runs native-HLS-first -> host playerFactory -> optional lazy import('hls.js') -> degrade-to-poster, all try/catch-contained to a single degrade(nid,reason) sink; attach() never rethrows. hls.js referenced ONLY via a guarded dynamic import (no top-level import) so the renderer stays importable with hls.js absent (package:smoke exit 0; dependencies stays { ws }). Wired the internal lazy-hls adapter now (graceful-absence proven by degrade('no-player')-when-null).
 - [Phase ?]: [Phase 14-02]: media-unavailable overlay is a passive textContent-only clone of renderMediaPoster (reason via data-ps-reason setAttribute, never markup -> innerHTML allowlist unchanged at 4). CSP media-src gains blob: ONLY (default-src 'none'/no script-src/no connect-src retained; sandbox allow-same-origin unchanged). DRM (encrypted event + hls.js KEY_SYSTEM_ERROR) -> degrade('drm'); emeEnabled never true. Full suite 624/624; differential oracle 48/48; live cross-realm MSE proof is the documented deferred UAT (poster is the never-break net).
 - [Phase ?]: [Phase 14-04]: Both adapters surface manifest URLs by opt-in network observation (Playwright page.on('response')+CDP Network.responseReceived; extension chrome.webRequest.onCompleted), off by default; classifyManifest filters .m3u8/.mpd by URL-OR-content-type; correlation best-effort via an injectable resolveActiveMediaNid hook (single-active -> element scope, ambiguous -> page scope); identity snooped off forwarded STREAM frames; emitted via transport.send(STREAM.MEDIA_HINT) with NO allowlist edit; validateChrome requires chrome.webRequest ONLY when opted in and degrades gracefully when absent. dependencies stays { ws }; differential oracle 48/48; full suite 640/640.
+- [Phase ?]: [Phase 14-03]: STREAM.MEDIA_HINT wired into the renderer dispatch -> handleMediaHint re-gates manifestUrl through the SAME fail-closed gateAsset BEFORE binding (V12/SSRF defense in depth; blocked origin -> degrade('no-manifest'), never fetched); element-scope binds immediately, page-scope stores most-recent-wins-per-kind in pendingHints consumed by an MSE-opaque (source-less) element on play (best-effort correlation, idempotent per generation); old viewers ignore the unknown op via the dispatch default.
+- [Phase ?]: [Phase 14-03]: createMediaPlayer constructed in createViewer (parent realm; sandbox stays exactly allow-same-origin); playerFactory + onMediaUnavailable are the config-callback family (function-or-ignored), onMediaUnavailable double-contained (safeInvokeMediaHook + the player degrade sink). mediaPlayer.destroyAll() on a new-identity snapshot (Pattern 2) tears down every parent-realm player before the document swap (no orphaned players / object-URL leak).
+- [Phase ?]: [Phase 14-03]: Live handling is ASSERTED reuse, not new code (MADPT-04) -- media-reconcile pins live:true -> rejoin-edge with NO absolute toTime, and applyMediaAction seeks seekable.end (live edge) ONLY under seekable.length>0, never to the payload absolute time. Closed the Phase-13 UI-review Fix 1 BLOCKER: the registered-but-dead State-C media-poster caption is now driven from handleMedia poster-mode (shown IFF no surviving poster). Full suite 659/659, oracle 48/48, package:smoke exit 0 with hls.js absent, dependencies stays { ws }.
 
 ### Pending Todos
 
@@ -171,6 +175,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-06-21T11:27:00.700Z
+Last session: 2026-06-21T11:44:43.106Z
 Stopped at: Completed 14-04-PLAN.md
 Resume file: None
