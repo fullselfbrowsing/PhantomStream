@@ -62,10 +62,14 @@ import { reconcileMediaDrift, DEFAULT_MEDIA_RECONCILE_CONFIG } from '../protocol
 //                                       unless (2) widened it.
 //   4. assetOriginPolicy(url, ctx)  -> host hook, fail-closed: a throw OR any
 //                                       non-true return BLOCKS (never opens).
-//   5. mediaMode 'poster' | 'reference' -> poster images pass under 'poster'
-//                                       (the full poster/full-asset split
-//                                       matures in Phase 13 when <video>
-//                                       ships); both pass under 'reference'.
+//   5. mediaMode 'poster' | 'reference' -> in 'poster' mode the playable-media
+//                                       kinds ('media' = <video src>, 'source'
+//                                       = <source src>) are BLOCKED so no media
+//                                       GET issues (Phase 13 CR-01: the poster
+//                                       image is the only fetch poster mode
+//                                       permits); poster images and <img>
+//                                       pass under 'poster'. 'reference' permits
+//                                       all by-reference assets.
 var VALID_MEDIA_MODES = { off: true, poster: true, reference: true };
 
 /** Extract a lowercased hostname from a URL string, or '' on parse failure. */
@@ -146,8 +150,22 @@ export function gateAssetUrl(url, ctx) {
     if (ok !== true) return { allow: false, reason: 'hook-denied' };
   }
 
-  // (5) posture: 'poster' permits poster images (P12 scope; the full split is
-  // Phase 13). 'reference' permits all by-reference assets.
+  // (5) posture: in 'poster' mode the ONLY fetch poster mode permits is the
+  // poster image itself -- no playable media source may issue a GET (CR-01 /
+  // 13-RESEARCH Open Q3). A playable source fetches the full media bytes, which
+  // is exactly the GET poster mode exists to suppress; this MUST be enforced at
+  // the STRING layer (the authoritative pre-srcdoc gate -- the parser prefetches
+  // <video src>/<source src> DURING parse, before any post-parse scrub can run).
+  // kinds 'media' (<video src>) and 'source' (<source src>) are the playable-
+  // source kinds; 'poster' and 'image' stay allowed (the poster image is the
+  // one thing poster mode renders). 'reference' mode permits all by-reference
+  // assets and is unaffected. Fail-closed posture, mirroring the gate's other
+  // explicit denies.
+  if (mode === 'poster' && (c.kind === 'media' || c.kind === 'source')) {
+    return { allow: false, reason: 'poster-mode-media' };
+  }
+
+  // 'poster' permits poster images; 'reference' permits all by-reference assets.
   return { allow: true, reason: 'ok' };
 }
 

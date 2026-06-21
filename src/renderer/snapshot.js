@@ -271,16 +271,27 @@ function gateOneImgTag(attrs, gate) {
  * return the replacement markup. Phase 13 (MEDIA-01 / V12 SSRF): a real
  * browser's parser prefetches <video src>, <video poster>, and <source src>
  * DURING srcdoc parse -- exactly like <img src> -- so any blocked fetchable URL
- * here must be neutralized at the string layer before the parser sees it. If
- * EITHER the `src` OR (for <video>) the `poster` is blocked, the whole tag is
- * replaced by the dimensioned blocked-origin placeholder (no fetchable
- * attribute emitted) -- the same fail-closed posture as the <img> path. The
- * void <source> has no closing tag and no meaningful dimensions, but the
- * placeholder <div> is inert and harmless inside a <video> (it is a non-source
- * child, so the element simply has no selectable source -- zero media GET).
+ * here must be neutralized at the string layer before the parser sees it.
+ *
+ * Two distinct deny shapes, distinguished by the gate's reason (CR-01):
+ *   - POSTER-MODE SOURCE STRIP (reason 'poster-mode-media'): poster mode fetches
+ *     the poster image and nothing else, so the playable source must not issue a
+ *     GET, but the <video poster> SHOULD still render. The `src` attribute is
+ *     stripped from the START TAG (and a <source src> likewise) while the tag
+ *     itself is KEPT -- mirroring the post-parse gateFragmentMedia poster strip
+ *     (src/renderer/index.js), but at the string layer so the parser never sees
+ *     a playable src. The poster passes its own gate and is preserved.
+ *   - BLOCKED ORIGIN (any other deny reason): a fetchable URL the policy forbids
+ *     outright. The whole tag is replaced by the dimensioned blocked-origin
+ *     placeholder (no fetchable attribute emitted) -- the same fail-closed
+ *     posture as the <img> path.
+ *
+ * A blocked `poster` (its own origin denied) always forces the placeholder: the
+ * poster is the one fetch poster mode permits, so if it is forbidden there is
+ * nothing left to render.
  * @param {string} tagName  'video' or 'source' (re-emit token when allowed).
  * @param {string} attrs    The attribute blob (already correctly bounded).
- * @param {(url: string, kind: string) => { allow: boolean }} gate
+ * @param {(url: string, kind: string) => { allow: boolean, reason?: string }} gate
  * @returns {string}
  */
 function gateOneMediaTag(tagName, attrs, gate) {
@@ -290,14 +301,26 @@ function gateOneMediaTag(tagName, attrs, gate) {
   if (attrsBlobIsUnreliable(attrs)) {
     return assetUnavailablePlaceholderTag(attrs);
   }
+  var nextAttrs = attrs;
   var src = readTagAttr(attrs, 'src');
   if (src) {
-    var srcVerdict = gate(src, tagName === 'source' ? 'media' : 'media');
+    // Distinct kinds so the gate can apply mode-aware policy: a <video src>
+    // gates as 'media' and a <source src> as 'source'. In poster mode the gate
+    // denies both with reason 'poster-mode-media' (no playable media GET; the
+    // poster still renders), so the src is STRIPPED but the tag kept. Any other
+    // deny is a blocked origin -> placeholder (fail closed, same as <img>).
+    var srcVerdict = gate(src, tagName === 'source' ? 'source' : 'media');
     if (!srcVerdict || !srcVerdict.allow) {
-      return assetUnavailablePlaceholderTag(attrs);
+      if (srcVerdict && srcVerdict.reason === 'poster-mode-media') {
+        nextAttrs = stripTagAttr(nextAttrs, 'src');
+      } else {
+        return assetUnavailablePlaceholderTag(attrs);
+      }
     }
   }
-  // <video poster> is a fetchable image; <source> has no poster.
+  // <video poster> is a fetchable image; <source> has no poster. A blocked
+  // poster origin forces the placeholder (the poster is the only thing poster
+  // mode renders, so a forbidden poster leaves nothing to show).
   if (tagName === 'video') {
     var poster = readTagAttr(attrs, 'poster');
     if (poster) {
@@ -307,7 +330,7 @@ function gateOneMediaTag(tagName, attrs, gate) {
       }
     }
   }
-  return '<' + tagName + nextSelfClose(attrs);
+  return '<' + tagName + nextSelfClose(nextAttrs);
 }
 
 /**

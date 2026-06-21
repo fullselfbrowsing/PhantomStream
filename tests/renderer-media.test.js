@@ -508,6 +508,69 @@ test('mediaMode poster: handleMedia binds no source, calls no play(), shows no a
   }
 });
 
+// CR-01 (BLOCKER): poster mode must NOT let the browser issue a media GET. The
+// authoritative control is the STRING-layer gate (the parser prefetches
+// <video src>/<source src> DURING srcdoc parse, before any post-parse scrub can
+// run), so this asserts on the EMITTED srcdoc string -- not merely that the
+// playback driver no-ops (jsdom never prefetches, so the driver-only assertion
+// above is vacuous w.r.t. the fetch). The allowed origin (cdn.example.test) is
+// widened so this is NOT an origin block: it proves poster mode strips the
+// playable source even for an origin reference mode would happily fetch, while
+// the poster image (the one fetch poster mode permits) is KEPT.
+test('mediaMode poster: string layer neutralizes <video src>/<source src> pre-parse, keeps poster (CR-01)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(
+      createViewer,
+      env,
+      { mediaMode: 'poster', allowAssetOrigins: ['cdn.example.test'] },
+      {
+        html: '<video src="https://cdn.example.test/clip.mp4" poster="https://cdn.example.test/poster.jpg">'
+          + '<source src="https://cdn.example.test/clip.webm"></video>',
+      }
+    );
+    const srcdoc = ctx.iframe.getAttribute('srcdoc');
+    // The playable media bytes must NOT survive into the parsed markup -- a real
+    // browser would prefetch either URL during parse.
+    assert.equal(srcdoc.includes('clip.mp4'), false, 'poster mode must strip the <video src> media URL pre-parse');
+    assert.equal(srcdoc.includes('clip.webm'), false, 'poster mode must strip the <source src> media URL pre-parse');
+    // The poster image is the only thing poster mode fetches -- it is kept.
+    assert.equal(srcdoc.includes('poster.jpg'), true, 'poster mode keeps the gated poster image');
+    // The <video> tag itself survives (poster strip is surgical, not a
+    // wholesale placeholder swap) and is well-formed: exactly one opener, one
+    // closer, no orphaned </video> (WR-03 parity for the poster path).
+    assert.equal((srcdoc.match(/<video\b/gi) || []).length, 1, 'exactly one <video> opener');
+    assert.equal((srcdoc.match(/<\/video>/gi) || []).length, 1, 'exactly one </video> close tag');
+  } finally {
+    env.teardown();
+  }
+});
+
+// Reference mode is the by-reference fetch model: an allowed-origin media src is
+// preserved (the counterpoint that proves the poster strip above is mode-scoped,
+// not a blanket media kill).
+test('mediaMode reference: string layer preserves allowed-origin <video src>/<source src> (CR-01 counterpoint)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(
+      createViewer,
+      env,
+      { mediaMode: 'reference', allowAssetOrigins: ['cdn.example.test'] },
+      {
+        html: '<video src="https://cdn.example.test/clip.mp4">'
+          + '<source src="https://cdn.example.test/clip.webm"></video>',
+      }
+    );
+    const srcdoc = ctx.iframe.getAttribute('srcdoc');
+    assert.equal(srcdoc.includes('clip.mp4'), true, 'reference mode keeps the allowed-origin <video src>');
+    assert.equal(srcdoc.includes('clip.webm'), true, 'reference mode keeps the allowed-origin <source src>');
+  } finally {
+    env.teardown();
+  }
+});
+
 test('driver holds while element.seeking is true (skips a new seek -- Pitfall 6)', async () => {
   const { createViewer } = await import(RENDERER_MODULE);
   const env = setupEnv();
