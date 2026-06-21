@@ -369,7 +369,7 @@ Plans:
 
 Plans:
 **Wave 1**
-- [ ] 13-01-PLAN.md — Protocol spine: STREAM.MEDIA op + MEDIA_SYNC_THROTTLE_MS + media typedefs + the PURE reconcileMediaDrift function and its table tests (envelope/relay untouched) (MWIRE-01, MWIRE-02, MEDIA-03)
+- [x] 13-01-PLAN.md — Protocol spine: STREAM.MEDIA op + MEDIA_SYNC_THROTTLE_MS + media typedefs + the PURE reconcileMediaDrift function and its table tests (envelope/relay untouched) (MWIRE-01, MWIRE-02, MEDIA-03)
 
 **Wave 2** *(blocked on 13-01)*
 - [ ] 13-02-PLAN.md — Capture slice: media[] snapshot baseline (Infinity->null-safe) + startMediaTracker per-element listeners (immediate events + throttled heartbeat, added-node + teardown) (MEDIA-02, MEDIA-04, MWIRE-01)
@@ -442,6 +442,6 @@ Phases execute in numeric order. v1.0 (1–11) is complete. v2.0 active order: 1
 | 10. npm Packaging & 0.x Publish | 5/5 | Complete | 2026-06-16 |
 | 11. FSB Swap-In → 1.0 | — | Complete (verified in FSB repo) | 2026-06-16 |
 | 12. Static Assets by Reference | 3/3 | Complete   | 2026-06-20 |
-| 13. Video/Audio URL + Playback Sync | 0/4 | Not started | - |
+| 13. Video/Audio URL + Playback Sync | 1/4 | In Progress|  |
 | 14. Adaptive Streaming + Adapter Discovery + Fallback | 0/TBD | Not started | - |
 | 15. Media Security, Masking, Threat Model & Docs | 0/TBD | Not started | - |

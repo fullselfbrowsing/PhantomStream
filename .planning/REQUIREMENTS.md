@@ -25,14 +25,14 @@ Each maps to exactly one roadmap phase.
 
 - [ ] **MEDIA-01**: Progressive/direct `<video>` (mp4/webm) plays in the viewer, loading bytes from the source URL — never through the relay
 - [ ] **MEDIA-02**: Initial media state (currentTime, paused, muted, volume, playbackRate, loop, duration) is captured in the snapshot as the baseline for deltas
-- [ ] **MEDIA-03**: Playback changes (play/pause, seek, ratechange) stream over the throttled media-sync channel and are applied in the viewer with drift-corrected interpolation — hard-seek only on large drift, never per-message
+- [x] **MEDIA-03**: Playback changes (play/pause, seek, ratechange) stream over the throttled media-sync channel and are applied in the viewer with drift-corrected interpolation — hard-seek only on large drift, never per-message
 - [ ] **MEDIA-04**: `<audio>` elements are mirrored by the same URL + playback-state model as video
 - [ ] **MEDIA-05**: The viewer honors autoplay policy (muted-autoplay default; observable affordance when `play()` is rejected) — the mirror never wedges on a blocked play
 
 ### Media Protocol & Sync Contract (MWIRE)
 
-- [ ] **MWIRE-01**: A `STREAM.MEDIA` throttled side-channel op carries nid-addressed playback state, envelope-backward-compatible (old viewers ignore the unknown type), within the raw-relay + 1 MiB-cap contract — relay and envelope are untouched
-- [ ] **MWIRE-02**: The drift reconciler is a pure, configurable, jsdom-unit-testable function (sync logic verified without a real media timeline)
+- [x] **MWIRE-01**: A `STREAM.MEDIA` throttled side-channel op carries nid-addressed playback state, envelope-backward-compatible (old viewers ignore the unknown type), within the raw-relay + 1 MiB-cap contract — relay and envelope are untouched
+- [x] **MWIRE-02**: The drift reconciler is a pure, configurable, jsdom-unit-testable function (sync logic verified without a real media timeline)
 
 ### Adaptive Streaming + Fallback (MADPT)
 
@@ -109,11 +109,11 @@ Which phases cover which requirements. Finalized during roadmap creation.
 | MSEC-02 | Phase 12 | Complete |
 | MEDIA-01 | Phase 13 | Pending |
 | MEDIA-02 | Phase 13 | Pending |
-| MEDIA-03 | Phase 13 | Pending |
+| MEDIA-03 | Phase 13 | Complete |
 | MEDIA-04 | Phase 13 | Pending |
 | MEDIA-05 | Phase 13 | Pending |
-| MWIRE-01 | Phase 13 | Pending |
-| MWIRE-02 | Phase 13 | Pending |
+| MWIRE-01 | Phase 13 | Complete |
+| MWIRE-02 | Phase 13 | Complete |
 | MADPT-01 | Phase 14 | Pending |
 | MADPT-02 | Phase 14 | Pending |
 | MADPT-03 | Phase 14 | Pending |

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Asset & Media Streaming
 status: executing
-stopped_at: Phase 13 UI-SPEC approved
-last_updated: "2026-06-21T03:15:52.444Z"
-last_activity: 2026-06-21 -- Phase 13 planning complete
+stopped_at: Completed 13-01-PLAN.md
+last_updated: "2026-06-21T03:27:02.404Z"
+last_activity: 2026-06-21 -- Phase 13 Plan 01 complete (STREAM.MEDIA wire + pure drift reconciler)
 progress:
   total_phases: 15
   completed_phases: 11
   total_plans: 64
-  completed_plans: 60
+  completed_plans: 61
   percent: 73
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-19)
 
 **Core value:** A live, trustworthy, low-bandwidth, semantically addressable mirror of a real browser tab — capture → relay → render → remote-control must work end-to-end as a standalone framework.
-**Current focus:** Phase 12 — static-assets-by-reference
+**Current focus:** Phase 13 — Video/Audio URL + Playback Sync
 
 ## Current Position
 
-Phase: 12 (static-assets-by-reference) — COMPLETE (3/3 plans)
-Plan: 3 of 3 (12-03 complete)
+Phase: 13 (Video/Audio URL + Playback Sync) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
-Last activity: 2026-06-21 -- Phase 13 planning complete
+Last activity: 2026-06-21 -- Phase 13 Plan 01 complete (STREAM.MEDIA wire + pure drift reconciler)
 
 **v2.0 phase order:** 12 → 13 → 14 → 15
 
@@ -96,6 +96,7 @@ Last activity: 2026-06-21 -- Phase 13 planning complete
 | Phase 12 P12-01 | 14min | 2 tasks | 6 files |
 | Phase 12 P12-02 | 38min | 2 tasks tasks | 5 files files |
 | Phase 12 P12-03 | 42min | 3 tasks | 8 files |
+| Phase 13 P01 | 9min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -123,6 +124,8 @@ Earlier v1.0 decisions are retained in PROJECT.md Key Decisions and the prior ph
 - [Phase 12-02]: ASST-03 (clone-only data-ps-currentsrc variant pin) and ASST-04 (blob:/oversized-data: -> dimensioned data-ps-asset-unavailable placeholder; small data: byte-identical, ASSET_DATA_URI_MAX_BYTES=256 KiB) are capture-complete at all 4 serialization sites; the live page is never mutated (clone-only; the added-node wireClone is the trap). Capture-degrade suite + differential oracle (firing D26) GREEN; renderer fetch-gate/mediaMode/CSP remain Plan 12-03.
 - [Phase 12-03]: Viewer-side-fetch security model is GREEN. classifyAssetOrigin (src/renderer/asset-policy.js) is a PURE fail-closed https-only + private-range classifier (denies localhost/127/10/172.16.0.0-12 incl. /12 boundary/192.168/169.254/::1/fc00::-7/.local/unqualified; parse-error blocks), exported for Phase-15 reuse. gateAssetUrl(url, ctx) precedence: mediaMode 'off' blocks all -> allowAssetOrigins host widen -> classifier deny authoritative -> assetOriginPolicy hook fail-closed (throw OR non-true blocks) -> posture allow. mediaMode default 'reference' (off|poster|reference; invalid throws at factory time). Gate runs PRE-write at all 4 sites: snapshot at the STRING layer (Pitfall 1 -- parser fetches during parse, before post-parse scrub) + diff ADD/ATTR + subtree; blocked -> data-ps-asset-unavailable="blocked-origin" placeholder. ASST-03 currentSrc pin (effective src = data-ps-currentsrc, srcset/sizes neutralized) viewer-side. Sandbox token + CSP_META byte-unchanged (no script-src, no media-src -- media-src is Phase 13); no allow-scripts literal.
 - [Phase 12-03]: VERIFIED jsdom/URL realities baked into the implementation: Node's WHATWG URL does NOT strip IPv6 brackets (new URL('https://[::1]/').hostname === '[::1]') -- isPrivateOrLocalHost strips them before its IPv6 checks; .local routes to 'unqualified-host' not 'private-host'. createViewer gained a host-driven API (mount alias + optional no-op transport + handleSnapshot on the handle, envelope-or-bare-payload tolerant) while the wire-driven cfg.container path keeps transport REQUIRED. Placeholders carry NO live identity attr (positional nid pairing preserved -- Phase 7). Playwright asset UAT DEFERRED (jsdom never parses srcdoc/enforces CSP/fetches) per the project UAT-deferral precedent.
+- [Phase ?]: [Phase 13-01]: STREAM.MEDIA='ext:dom-media' (scroll-twin op) + MEDIA_SYNC_THROTTLE_MS=250 + MediaBaselineEntry/MediaSyncPayload typedefs (duration|live mutually exclusive, Infinity->null fix); envelope+relay byte-unchanged, STREAM.MEDIA round-trips raw under the 1 MiB cap.
+- [Phase ?]: [Phase 13-01]: reconcileMediaDrift is a pure zero-import fn in src/protocol/media-reconcile.js (hold|pause|nudge|seek|rejoin-edge); 0.25s hold band, +/-5%-capped sign-correct nudge, hard-seek clamps to [0,duration], explicit-seeked short-circuit, live branch before duration math; no field ever NaN (6561-case hostile sweep). No D27 ledger entry yet (lands with 13-02 capture fixture).
 
 ### Pending Todos
 
@@ -150,6 +153,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-06-21T02:39:40.436Z
-Stopped at: Phase 13 UI-SPEC approved
-Resume file: .planning/phases/13-video-audio-url-playback-sync/13-UI-SPEC.md
+Last session: 2026-06-21T03:27:02.373Z
+Stopped at: Completed 13-01-PLAN.md
+Resume file: None
