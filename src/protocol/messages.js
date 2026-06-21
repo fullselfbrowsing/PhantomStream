@@ -21,6 +21,8 @@ export const STREAM = {
   MUTATIONS: 'ext:dom-mutations',
   /** Scroll position. Payload: { scrollX, scrollY, streamSessionId, snapshotId } */
   SCROLL: 'ext:dom-scroll',
+  /** Media playback state. Payload: MediaSyncPayload */
+  MEDIA: 'ext:dom-media',
   /** Automation overlay state. Payload: { glow, progress, streamSessionId, snapshotId } */
   OVERLAY: 'ext:dom-overlay',
   /** Native dialog mirroring. Payload: { dialog: DialogPayload } */
@@ -173,6 +175,58 @@ export const NID_ATTR = 'data-fsb-nid';
  * @property {boolean} [checked]        Checked state for checkbox/radio controls
  * @property {string[]} [selectedValues] Selected option values for select controls (masked when maskInputs is on, so renderers must not treat these as a selection key)
  * @property {number[]} [selectedIndexes] Authoritative positional identity of selected options; preferred over selectedValues because option indexes never carry page content and stay unambiguous under masking
+ */
+
+/**
+ * Captured live playback state of a single <video>/<audio> element, keyed by
+ * nid. Models the DIFF_OP.VALUE side-channel-property-state precedent: live
+ * media properties travel as side-channel data, never serialized into the HTML
+ * clone (preserves the Phase 7 no-mutation invariant + HTML byte-identity).
+ *
+ * Live/Infinity-duration encoding: `duration` is present ONLY when finite;
+ * non-finite (streaming) durations are encoded as `live: true` instead, never
+ * both. This sidesteps the JSON Infinity -> null trap (JSON.stringify(Infinity)
+ * === "null") so the reconciler can branch on `live` before any duration math
+ * and never compute NaN.
+ *
+ * @typedef {Object} MediaBaselineEntry
+ * @property {string} nid                 Element nid the playback state addresses
+ * @property {number} currentTime         Playback position in seconds
+ * @property {boolean} paused             Whether the element is paused
+ * @property {boolean} muted              Whether audio output is muted
+ * @property {number} volume              Audio volume in [0, 1]
+ * @property {number} playbackRate        Effective playback rate (1 = normal)
+ * @property {boolean} loop               Whether the element loops
+ * @property {boolean} ended              Whether playback reached the end
+ * @property {number} [duration]          Media duration in seconds; present ONLY when finite
+ * @property {boolean} [live]             true when duration is non-finite (stream); mutually exclusive with duration
+ */
+
+/**
+ * One STREAM.MEDIA wire message: a MediaBaselineEntry enriched with the event
+ * that triggered emission, a capture-side monotonic timestamp for latency
+ * compensation, and the stream identity stamps every side channel carries.
+ *
+ * The reconciler predicts the expected position from `currentTime`,
+ * `playbackRate`, and `(now - sentAt)`; `streamSessionId`/`snapshotId` let the
+ * renderer reject stale cross-generation frames via isCurrentStream (Plan 03).
+ * One message is emitted per media element per tick (scroll-like granularity).
+ *
+ * @typedef {Object} MediaSyncPayload
+ * @property {string} nid                 Element nid the playback state addresses
+ * @property {'play'|'pause'|'seeked'|'ratechange'|'ended'|'volumechange'|'loadedmetadata'|'timeupdate'} event Triggering media event
+ * @property {number} currentTime         Playback position in seconds at capture
+ * @property {boolean} paused             Whether the element is paused
+ * @property {boolean} muted              Whether audio output is muted
+ * @property {number} volume              Audio volume in [0, 1]
+ * @property {number} playbackRate        Effective playback rate (1 = normal)
+ * @property {boolean} loop               Whether the element loops
+ * @property {boolean} ended              Whether playback reached the end
+ * @property {number} [duration]          Media duration in seconds; present ONLY when finite
+ * @property {boolean} [live]             true when duration is non-finite (stream); mutually exclusive with duration
+ * @property {number} sentAt              Capture-side monotonic ms stamp for latency compensation
+ * @property {string} streamSessionId     Identity: minted per stream session
+ * @property {number} snapshotId          Identity: minted per snapshot
  */
 
 /**

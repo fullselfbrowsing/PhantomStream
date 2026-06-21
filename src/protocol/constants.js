@@ -29,6 +29,18 @@ export const TRUNCATION_VIEWPORT_MULTIPLIER = 3;
 /** Scroll side-channel throttle: at most one event per this many ms. */
 export const SCROLL_THROTTLE_MS = 200;
 
+/**
+ * Media side-channel heartbeat throttle: while a tracked <video>/<audio> is
+ * playing, a `timeupdate` heartbeat (STREAM.MEDIA) is emitted at most once per
+ * this many ms for drift correction. 250 ms is a practice-based co-watching
+ * cadence (~4 Hz) -- frequent enough for the reconciler to converge sub-second
+ * drift, sparse enough to stay well under the relay cap. Discrete transitions
+ * (play/pause/seeked/ratechange/ended/volumechange/loadedmetadata) bypass this
+ * throttle and flush immediately; the value is tunable against the v2.1
+ * evaluation harness (Phase 13 concern).
+ */
+export const MEDIA_SYNC_THROTTLE_MS = 250;
+
 /** Overlay side-channel throttle: at most one broadcast per this many ms. */
 export const OVERLAY_THROTTLE_MS = 500;
 
