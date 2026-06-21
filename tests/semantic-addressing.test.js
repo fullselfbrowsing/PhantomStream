@@ -235,9 +235,10 @@ test('viewer resolves and locally highlights nodes by opaque nid', () => {
 });
 
 test('semantic addressing does not expand renderer remote-control dispatch behavior', () => {
+  const overlaysSource = readFileSync(new URL('../src/renderer/overlays.js', import.meta.url), 'utf8');
   const rendererSource = [
     readFileSync(new URL('../src/renderer/index.js', import.meta.url), 'utf8'),
-    readFileSync(new URL('../src/renderer/overlays.js', import.meta.url), 'utf8'),
+    overlaysSource,
   ].join('\n');
 
   for (const forbidden of ['REMOTE_CONTROL', 'Request control', 'Authorization hook']) {
@@ -257,10 +258,27 @@ test('semantic addressing does not expand renderer remote-control dispatch behav
       'renderer must not add a new ' + eventName + ' input-forwarding listener'
     );
   }
-  // Defense for the affordance click/keydown listeners: assert none of the
-  // renderer's addEventListener callbacks forward over the wire. The media
-  // affordance handlers (overlays.js wireActivation) invoke a local onActivate
-  // only; there is no transport.send / safeSend reachable from a DOM listener.
+  // WR-04 (PRIMARY, structural): the affordance click/keydown listeners live in
+  // overlays.js (wireActivation), and that module is wired to the renderer ONLY
+  // through a local onActivate callback -- it holds NO transport reference by
+  // design. Pin that invariant directly: overlays.js must contain no wire-send
+  // token whatsoever (`transport`, `safeSend`, or a `.send(` call). This is a
+  // far stronger guarantee than a textual-distance heuristic -- if any future
+  // edit threads the wire into the overlay module, a DOM listener there COULD
+  // forward input, and this assertion fails immediately. (index.js legitimately
+  // owns transport.send/safeSend -- it is the renderer that drives the wire --
+  // so the structural ban is scoped to the overlay module alone.)
+  for (const wireToken of ['transport', 'safeSend', '.send(']) {
+    assert.equal(
+      overlaysSource.includes(wireToken),
+      false,
+      'overlays.js must not reach the wire (found "' + wireToken + '"): affordance listeners are local-only'
+    );
+  }
+  // SECONDARY (kept as defense-in-depth): no addEventListener callback in the
+  // combined renderer source sits within a short lexical window of a wire send.
+  // The structural ban above is the authoritative check; this catches a
+  // hypothetical regression where a listener and a send land in the same module.
   assert.equal(
     /addEventListener\([^)]*\)[\s\S]{0,400}?(?:transport\.send|safeSend)\s*\(/.test(rendererSource),
     false,
