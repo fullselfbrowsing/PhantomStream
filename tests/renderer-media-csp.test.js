@@ -1,9 +1,11 @@
-// Phase 13 Plan 03 Task 1: media-src CSP add + the STRING-layer media URL gate.
+// Phase 13 Plan 03 Task 1 (Phase 14 Plan 02 Task 3: media-src gains blob:).
 //
 // Two security contracts:
-//   1. CSP: the assembled srcdoc head must carry `media-src http: https: data:`
-//      (no `blob:` -- Phase 14), while retaining `default-src 'none'` and NO
-//      `script-src` / `img-src` regression.
+//   1. CSP: the assembled srcdoc head must carry `media-src http: https: data:
+//      blob:` (Phase 14 adds `blob:` for the parent-minted MSE object URL),
+//      while retaining `default-src 'none'`, NO `script-src`, NO `connect-src`
+//      (Pitfall 5: the iframe fetches nothing in the MSE path -- the parent
+//      fetches segments; the child plays the blob), and no `img-src` regression.
 //   2. Pre-parse gate: <video src>, <video poster>, and <source src> pointing
 //      at a BLOCKED origin (the shipped classifyAssetOrigin denylist) must be
 //      neutralized to the dimensioned blocked-origin placeholder form at the
@@ -33,23 +35,32 @@ async function referenceGate() {
   };
 }
 
-test('CSP_META (via buildSnapshotHtml) adds media-src http: https: data: with no blob:', async () => {
+test('CSP_META (via buildSnapshotHtml) media-src gains blob: (Phase 14 MSE object URL)', async () => {
   const snap = await import(SNAPSHOT_MODULE);
   const srcdoc = snap.buildSnapshotHtml({ html: '<p>x</p>' });
+  // Phase 14 FLIP: media-src now carries `blob:` (was http: https: data: only).
   assert.ok(
-    /media-src\s+http:\s+https:\s+data:/.test(srcdoc),
-    'srcdoc CSP must contain exactly `media-src http: https: data:`'
+    /media-src\s+http:\s+https:\s+data:\s+blob:/.test(srcdoc),
+    'srcdoc CSP must contain `media-src http: https: data: blob:`'
   );
-  assert.ok(srcdoc.indexOf('blob:') === -1, 'media-src must NOT contain blob: this phase (Phase 14)');
+  assert.ok(srcdoc.indexOf('blob:') !== -1, 'blob: must be present (the parent-minted MSE object URL)');
+  // blob: must live INSIDE the media-src directive (not leaked into another one).
+  const mediaDirective = srcdoc.slice(srcdoc.indexOf('media-src'), srcdoc.indexOf(';', srcdoc.indexOf('media-src')));
+  assert.ok(mediaDirective.indexOf('blob:') !== -1, 'blob: is scoped to the media-src directive');
 });
 
-test('media-src add does not regress default-src or leak a script-src', async () => {
+test('media-src add does not regress default-src, leak a script-src, or widen connect-src', async () => {
   const snap = await import(SNAPSHOT_MODULE);
   const srcdoc = snap.buildSnapshotHtml({ html: '<p>x</p>' });
   assert.ok(srcdoc.indexOf("default-src 'none'") !== -1, "default-src 'none' must be retained");
   assert.ok(srcdoc.indexOf('script-src') === -1, 'no script-src directive may be introduced');
-  // img-src must not regress.
+  // Pitfall 5: the iframe fetches nothing in the MSE path (parent fetches
+  // segments; child plays the blob), so NO connect-src may be added.
+  assert.ok(srcdoc.indexOf('connect-src') === -1, 'no connect-src directive may be introduced (Pitfall 5)');
+  // img-src must not regress -- blob: is added to media-src ONLY, not img-src.
   assert.ok(/img-src\s+http:\s+https:\s+data:/.test(srcdoc), 'img-src must be retained unchanged');
+  const imgDirective = srcdoc.slice(srcdoc.indexOf('img-src'), srcdoc.indexOf(';', srcdoc.indexOf('img-src')));
+  assert.ok(imgDirective.indexOf('blob:') === -1, 'blob: is NOT added to img-src (media-src only)');
 });
 
 test('<video src> to a blocked origin is neutralized at the STRING layer pre-parse', async () => {

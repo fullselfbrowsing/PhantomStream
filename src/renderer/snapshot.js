@@ -537,15 +537,21 @@ function nextAssetOpener(html, from) {
 // (plan 03-05).
 // Phase 13 (MEDIA-01/V14): media-src is the twin of img-src, added so the
 // viewer's browser may fetch <video>/<audio>/<source> bytes from the source
-// origin (the by-reference media model). NO `blob:` this phase -- that is
-// Phase 14's MSE concern; `data:` is for small poster data URIs only (media
-// bytes are never inlined). default-src 'none' and the absence of script-src
-// are untouched (the string-layer gateSnapshotAssets is the primary control;
-// CSP is the backstop -- 13-RESEARCH V14).
+// origin (the by-reference media model). `data:` is for small poster data URIs
+// only (media bytes are never inlined). default-src 'none' and the absence of
+// script-src are untouched (the string-layer gateSnapshotAssets is the primary
+// control; CSP is the backstop -- 13-RESEARCH V14).
+// Phase 14 (MADPT-01): media-src gains `blob:` ONLY -- it lets the inert in-
+// iframe <video> PLAY the parent-realm MediaSource object URL the adaptive
+// player mints (the cross-realm MSE bind; 14-RESEARCH "CSP / connect-src").
+// This is the ONLY Phase-14 CSP edit. NO `connect-src` is added (Pitfall 5: the
+// iframe issues no network request in the MSE path -- the PARENT fetches all
+// segments and the child only plays the blob; it has no script anyway), and NO
+// `script-src` is introduced. `blob:` is added to media-src ONLY (not img-src).
 var CSP_META = '<meta http-equiv="Content-Security-Policy" content="'
   + "default-src 'none'; "
   + 'img-src http: https: data:; '
-  + 'media-src http: https: data:; '
+  + 'media-src http: https: data: blob:; '
   + "style-src http: https: 'unsafe-inline'; "
   + 'font-src http: https: data:'
   + '">';
