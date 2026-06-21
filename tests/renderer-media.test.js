@@ -777,3 +777,257 @@ function streamingMediaViewerFactory(createViewer, env, cfg, snapshotExtra) {
   const video = cd.querySelector('video');
   return { transport, viewer, iframe, cd, video };
 }
+
+// ---------------------------------------------------------------------------
+// Phase 14 Plan 03 Task 1: STREAM.MEDIA_HINT dispatch + handleMediaHint
+// (re-gate -> element-scope bind / page-scope store-then-consume), the
+// playerFactory + onMediaUnavailable config keys, backward-compat + graceful
+// absence. The viewer constructs createMediaPlayer internally; a fake
+// playerFactory records attach() so the host-factory branch is observable in
+// jsdom with no real media engine.
+// ---------------------------------------------------------------------------
+
+const HINT_IDENTITY = { streamSessionId: 's1', snapshotId: 1 };
+const HLS_MANIFEST = 'https://cdn.example.test/live/master.m3u8';
+
+/** A recording playerFactory: every attach/destroy/onError is captured. */
+function recordingPlayerFactory() {
+  const calls = { attaches: [], destroys: 0, contexts: [] };
+  const factory = function (ctx) {
+    calls.contexts.push(ctx);
+    return {
+      attach(videoEl, manifestUrl, c) {
+        calls.attaches.push({ videoEl, manifestUrl, ctx: c });
+      },
+      destroy() { calls.destroys++; },
+      onError() { /* not exercised here */ },
+    };
+  };
+  return { factory, calls };
+}
+
+test('createViewer accepts playerFactory + onMediaUnavailable config keys (function or ignored)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    // Both keys present (functions): no throw, viewer is live.
+    const a = streamingMediaViewerFactory(createViewer, env, {
+      mediaMode: 'reference',
+      playerFactory: recordingPlayerFactory().factory,
+      onMediaUnavailable() {},
+    });
+    assert.ok(a.viewer, 'viewer constructed with the new config keys');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('createViewer ignores non-function playerFactory/onMediaUnavailable and the progressive path is unchanged (graceful absence)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    // Non-function values are ignored; a normal STREAM.MEDIA flow with NO hints
+    // and NO factory is the Phase 13 path, zero errors.
+    const ctx = streamingMediaViewerFactory(createViewer, env, {
+      mediaMode: 'reference',
+      playerFactory: 'not-a-fn',
+      onMediaUnavailable: 42,
+    });
+    const rec = stubMediaElement(env, ctx.video, { paused: false });
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 5, paused: true, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), ...HINT_IDENTITY,
+    });
+    assert.equal(rec.pauses, 1, 'progressive STREAM.MEDIA flow unchanged with no factory/hints');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('STREAM.MEDIA_HINT element-scope binds via the player: factory.attach(el, manifestUrl) with ctx.nid + ctx.kind', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const pf = recordingPlayerFactory();
+    const ctx = streamingMediaViewerFactory(createViewer, env, {
+      mediaMode: 'reference',
+      allowAssetOrigins: ['cdn.example.test'], // manifest origin must pass the re-gate
+      playerFactory: pf.factory,
+    });
+    ctx.transport.emit('ext:dom-media-hint', {
+      scope: 'element', nid: '1', manifestUrl: HLS_MANIFEST, kind: 'hls',
+      ...HINT_IDENTITY,
+    });
+    assert.equal(pf.calls.attaches.length, 1, 'an element-scope hint attaches via the player');
+    const a = pf.calls.attaches[0];
+    assert.equal(a.manifestUrl, HLS_MANIFEST, 'attach received the manifest URL');
+    assert.equal(a.videoEl, ctx.video, 'attach received the resolved in-iframe <video> at nid 1');
+    assert.equal(a.ctx && a.ctx.nid, '1', 'ctx.nid is the element nid');
+    assert.equal(a.ctx && a.ctx.kind, 'hls', 'ctx.kind === payload.kind');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('STREAM.MEDIA_HINT with mismatched stream identity is dropped (no attach, staleness guard)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const pf = recordingPlayerFactory();
+    const ctx = streamingMediaViewerFactory(createViewer, env, {
+      mediaMode: 'reference',
+      allowAssetOrigins: ['cdn.example.test'],
+      playerFactory: pf.factory,
+    });
+    ctx.transport.emit('ext:dom-media-hint', {
+      scope: 'element', nid: '1', manifestUrl: HLS_MANIFEST, kind: 'hls',
+      streamSessionId: 'STALE', snapshotId: 999,
+    });
+    assert.equal(pf.calls.attaches.length, 0, 'a stale-identity hint never attaches');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('STREAM.MEDIA_HINT with a blocked-origin manifestUrl does NOT attach and degrades to no-manifest (re-gated at the viewer)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const pf = recordingPlayerFactory();
+    const reasons = [];
+    const ctx = streamingMediaViewerFactory(createViewer, env, {
+      mediaMode: 'reference',
+      // NOTE: no allowAssetOrigins -> a private/internal host is blocked by the
+      // fail-closed classifier; the hint is attacker-influenced and re-gated.
+      playerFactory: pf.factory,
+      onMediaUnavailable(nid, reason) { reasons.push({ nid, reason }); },
+    });
+    ctx.transport.emit('ext:dom-media-hint', {
+      scope: 'element', nid: '1',
+      manifestUrl: 'http://10.0.0.5/internal/master.m3u8', // private range -> blocked
+      kind: 'hls', ...HINT_IDENTITY,
+    });
+    assert.equal(pf.calls.attaches.length, 0, 'a blocked-origin manifest is never attached (never fetched)');
+    assert.deepEqual(reasons, [{ nid: '1', reason: 'no-manifest' }], 'blocked manifest degrades to no-manifest');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('STREAM.MEDIA_HINT scope page is stored (not attached immediately) then consumed when an opaque element plays', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const pf = recordingPlayerFactory();
+    const ctx = streamingMediaViewerFactory(createViewer, env, {
+      mediaMode: 'reference',
+      allowAssetOrigins: ['cdn.example.test'],
+      playerFactory: pf.factory,
+    });
+    // A page-scope hint (nid omitted): stored, NOT attached yet.
+    ctx.transport.emit('ext:dom-media-hint', {
+      scope: 'page', manifestUrl: HLS_MANIFEST, kind: 'hls', ...HINT_IDENTITY,
+    });
+    assert.equal(pf.calls.attaches.length, 0, 'a page-scope hint is stored, not attached on arrival');
+
+    // An MSE-opaque element (no resolvable source) "plays" via STREAM.MEDIA;
+    // the stored page hint is consumed and attach() fires for that element.
+    stubMediaElement(env, ctx.video, { paused: false });
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 0, paused: false, playbackRate: 1, live: true,
+      sentAt: Date.now(), ...HINT_IDENTITY,
+    });
+    assert.equal(pf.calls.attaches.length, 1, 'the page hint is consumed when an opaque element plays');
+    assert.equal(pf.calls.attaches[0].manifestUrl, HLS_MANIFEST, 'the consumed hint binds its manifest');
+    assert.equal(pf.calls.attaches[0].ctx && pf.calls.attaches[0].ctx.nid, '1', 'the consumed hint binds to the opaque element nid');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('a page hint is NOT consumed by an element that already has a resolvable source (only MSE-opaque elements consume)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const pf = recordingPlayerFactory();
+    // The snapshot <video> carries an allowed-origin src -> it is NOT opaque.
+    const ctx = streamingMediaViewerFactory(
+      createViewer, env,
+      { mediaMode: 'reference', allowAssetOrigins: ['cdn.example.test'], playerFactory: pf.factory },
+      { html: '<video src="https://cdn.example.test/clip.mp4"></video>' }
+    );
+    ctx.transport.emit('ext:dom-media-hint', {
+      scope: 'page', manifestUrl: HLS_MANIFEST, kind: 'hls', ...HINT_IDENTITY,
+    });
+    stubMediaElement(env, ctx.video, { paused: false });
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 5, paused: false, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), ...HINT_IDENTITY,
+    });
+    assert.equal(pf.calls.attaches.length, 0, 'a sourced element does not consume the page hint');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('page hints are most-recent-wins per kind: the latest stored manifest is the one consumed', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const pf = recordingPlayerFactory();
+    const ctx = streamingMediaViewerFactory(createViewer, env, {
+      mediaMode: 'reference',
+      allowAssetOrigins: ['cdn.example.test'],
+      playerFactory: pf.factory,
+    });
+    const first = 'https://cdn.example.test/a/master.m3u8';
+    const second = 'https://cdn.example.test/b/master.m3u8';
+    ctx.transport.emit('ext:dom-media-hint', { scope: 'page', manifestUrl: first, kind: 'hls', ...HINT_IDENTITY });
+    ctx.transport.emit('ext:dom-media-hint', { scope: 'page', manifestUrl: second, kind: 'hls', ...HINT_IDENTITY });
+    stubMediaElement(env, ctx.video, { paused: false });
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 0, paused: false, playbackRate: 1, live: true,
+      sentAt: Date.now(), ...HINT_IDENTITY,
+    });
+    assert.equal(pf.calls.attaches.length, 1, 'exactly one attach from the consumed hint');
+    assert.equal(pf.calls.attaches[0].manifestUrl, second, 'the most-recent page hint per kind wins');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('STREAM.MEDIA_HINT is a no-op in poster mode (no player surface, no attach)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const pf = recordingPlayerFactory();
+    const ctx = streamingMediaViewerFactory(createViewer, env, {
+      mediaMode: 'poster',
+      allowAssetOrigins: ['cdn.example.test'],
+      playerFactory: pf.factory,
+    });
+    ctx.transport.emit('ext:dom-media-hint', {
+      scope: 'element', nid: '1', manifestUrl: HLS_MANIFEST, kind: 'hls', ...HINT_IDENTITY,
+    });
+    assert.equal(pf.calls.attaches.length, 0, 'poster mode binds no adaptive player from a hint');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('an old viewer ignores STREAM.MEDIA_HINT via the dispatch default (no throw, no error logged)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const rec = recordingLogger();
+    // No playerFactory configured -> simulates a viewer that does not act on the
+    // op; the op must not throw and must not log an error (backward-compat).
+    const ctx = streamingMediaViewerFactory(createViewer, env, { mediaMode: 'reference', logger: rec.logger });
+    assert.doesNotThrow(() => ctx.transport.emit('ext:dom-media-hint', {
+      scope: 'page', manifestUrl: HLS_MANIFEST, kind: 'hls', ...HINT_IDENTITY,
+    }));
+    assert.equal(rec.errors.length, 0, 'no error logged for STREAM.MEDIA_HINT (graceful)');
+  } finally {
+    env.teardown();
+  }
+});

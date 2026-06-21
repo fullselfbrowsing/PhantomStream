@@ -39,6 +39,7 @@ import { applyMutations } from './diff.js';
 import { sanitizeFragment, scrubCssText, parseSrcsetCandidates } from './sanitize.js';
 import { createOverlays, mapRectToHost, OVERLAY_CSS } from './overlays.js';
 import { classifyAssetOrigin } from './asset-policy.js';
+import { createMediaPlayer } from './media-player.js';
 import { STREAM, CONTROL, isCurrentStream } from '../protocol/messages.js';
 import { reconcileMediaDrift, DEFAULT_MEDIA_RECONCILE_CONFIG } from '../protocol/media-reconcile.js';
 
@@ -342,6 +343,15 @@ export function createViewer(options) {
   var mediaReconcileConfig = (cfg.mediaReconcileConfig && typeof cfg.mediaReconcileConfig === 'object')
     ? cfg.mediaReconcileConfig
     : DEFAULT_MEDIA_RECONCILE_CONFIG;
+  // Phase 14 (MADPT-01/03): the adaptive-player config-callback family (the
+  // onMediaBlocked/assetOriginPolicy family, NOT the throwing on() allowlist).
+  // playerFactory is the host-provided HLS/DASH/Shaka player seam; absent, the
+  // optional lazy hls.js path (or degrade-to-poster) handles HLS. onMediaUnavailable
+  // is the degrade-reason callback (no-manifest|no-player|mse-opaque|drm); a non-
+  // function is ignored (graceful absence). Both are contained -- a throwing host
+  // callback can never wedge the mirror.
+  var playerFactory = typeof cfg.playerFactory === 'function' ? cfg.playerFactory : null;
+  var onMediaUnavailable = typeof cfg.onMediaUnavailable === 'function' ? cfg.onMediaUnavailable : null;
   // Per-viewer gate closure: every write site (snapshot string layer, diff
   // ADD/ATTR, subtree) calls this so the posture is applied uniformly and
   // fail-closed. kind defaults to 'image' (P12 image scope).
@@ -600,6 +610,45 @@ export function createViewer(options) {
   // built-ins through the same registry custom kinds use. ---
   var overlays = createOverlays({ document: doc, logger: logger });
   root.appendChild(overlays.layer);
+
+  // --- Phase 14 (MADPT-01/03): the parent-realm adaptive media player. Runs
+  // ENTIRELY in this (host/parent) realm; the mirror iframe stays exactly
+  // sandbox="allow-same-origin" (no allow-scripts). attach() binds an HLS/DASH
+  // manifest to the inert in-iframe <video> (native-HLS-first -> playerFactory
+  // -> optional lazy hls.js -> degrade-to-poster); the single degrade(nid,reason)
+  // sink shows the media-unavailable overlay + invokes onMediaUnavailable. The
+  // onMediaUnavailable host callback is wrapped in the same containment as
+  // onMediaBlocked (safeInvokeMediaHook) so a throwing host hook can never wedge
+  // the mirror; a throwing playerFactory is contained by the player's degrade
+  // sink. Plan 03 routes STREAM.MEDIA_HINT to attach() and calls destroyAll() on
+  // a re-snapshot (Pattern 2 -- teardown on new identity). gateAsset reuses the
+  // Phase 12 fail-closed gate so a manifest/segment URL is re-gated at the viewer
+  // (defense in depth -- a hint is attacker-influenced). win is the PARENT realm
+  // (the MSE feature-detect surface), NOT iframe.contentWindow. ---
+  var mediaPlayer = createMediaPlayer({
+    doc: doc,
+    win: win,
+    gateAsset: gateAsset,
+    logger: logger,
+    playerFactory: playerFactory,
+    onMediaUnavailable: function (nid, reason) {
+      safeInvokeMediaHook(function (n) {
+        if (onMediaUnavailable) onMediaUnavailable(n, reason);
+      }, nid);
+    },
+    showOverlay: function (kind, payload, ctx) { return overlays.show(kind, payload, ctx); },
+    resolveNidRect: resolveNidRect,
+    ensurePlaying: ensurePlaying
+  });
+  // Page-scope adaptive hints awaiting an MSE-opaque element to play (most-
+  // recent-wins per kind). An element-scope hint binds immediately; a page-scope
+  // hint sits here until handleMedia sees a source-less element start, then is
+  // consumed (14-RESEARCH "manifest->element correlation": never block on perfect
+  // correlation). Cleared on every new stream identity in handleSnapshot.
+  var pendingHints = new Map();
+  // nids that have already consumed/bound an adaptive hint this generation, so a
+  // page hint is attached at most once per element (idempotent consumption).
+  var hintBoundNids = new Set();
 
   // Auto-attach (D-01): creation yields a live, ready-to-stream mirror.
   container.appendChild(root);
@@ -1454,6 +1503,11 @@ export function createViewer(options) {
     lastSnapshotPayload = p;
     clearIdentityIndex();
     mediaFirstBind.clear(); // new identity: re-bind media baseline on next load
+    // Phase 14: a new stream identity invalidates any stored page hint and the
+    // per-element bound set (a prior page's manifest must never bind a new page's
+    // element). Player teardown (mediaPlayer.destroyAll) is added in Task 2.
+    pendingHints.clear();
+    hintBoundNids.clear();
     // PRE-WRITE FETCH GATE (MSEC-01, THE timing rule -- 12-RESEARCH Pitfall 1):
     // rewrite blocked <img> assets to the dimensioned blocked-origin
     // placeholder and apply the ASST-03 currentSrc pin at the STRING layer,
@@ -1751,6 +1805,12 @@ export function createViewer(options) {
     var el = resolveIndexedNode(nid);
     if (!el || typeof el.play !== 'function') return;
 
+    // Phase 14 (MADPT-02 page correlation): an MSE-opaque element (no resolvable
+    // source) that starts is the consumer for the most-recent stored page hint.
+    // Consume at most once per element per generation, then let the player +
+    // reconciler own it (the source-less element otherwise plays nothing).
+    maybeConsumePageHint(el, nid);
+
     var localState = {
       currentTime: el.currentTime,
       paused: !!el.paused,
@@ -1761,6 +1821,138 @@ export function createViewer(options) {
     var action = reconcileMediaDrift(localState, payload, Date.now(), mediaReconcileConfig);
     applyMediaAction(el, action, nid);
     evaluateUnmuteTrigger(el, payload, nid);
+    markLive('media');
+  }
+
+  /**
+   * Is this media element MSE-opaque / source-less -- i.e. it resolves to no
+   * playable source the viewer can reference (no `src` attribute survived the
+   * gate, no current child <source src>, and an empty currentSrc)? Such an
+   * element is the candidate consumer for a page-scope adaptive hint (an
+   * adaptive manifest never appears as a plain element src). All reads are
+   * guarded so a hostile/odd element never wedges the media path.
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function mediaElementHasNoSource(el) {
+    try {
+      if (el.getAttribute && el.getAttribute('src')) return false;
+      if (el.currentSrc) return false;
+      if (typeof el.querySelector === 'function') {
+        var sourced = el.querySelector('source[src]');
+        if (sourced) return false;
+      }
+      return true;
+    } catch (e) {
+      return false; // unknowable -> do not consume (conservative)
+    }
+  }
+
+  /**
+   * Consume the most-recent stored page hint for an MSE-opaque element on play
+   * (14-RESEARCH page-level correlation). Idempotent per nid per generation: an
+   * element binds at most one page hint, and only when it is source-less. The
+   * stored hint is removed once bound so a single page hint maps to a single
+   * consumer. No-op when the element already has a source or no hint is pending.
+   * @param {Element} el
+   * @param {number|string} nid
+   */
+  function maybeConsumePageHint(el, nid) {
+    if (pendingHints.size === 0) return;
+    var key = String(nid);
+    if (hintBoundNids.has(key)) return;
+    if (!mediaElementHasNoSource(el)) return;
+    // Most-recent-wins per kind: prefer 'hls' (the optional lazy path needs no
+    // host player), else 'dash' (host playerFactory only). Either is correct;
+    // pick the most-recently stored across kinds.
+    var chosen = null;
+    pendingHints.forEach(function (hint) {
+      if (!chosen || hint.storedAt >= chosen.storedAt) chosen = hint;
+    });
+    if (!chosen) return;
+    pendingHints.delete(chosen.kind);
+    hintBoundNids.add(key);
+    bindAdaptiveHint(el, key, chosen.manifestUrl, chosen.kind, chosen.contentType);
+  }
+
+  /**
+   * Bind an adaptive manifest to an in-iframe element through the parent-realm
+   * player. The manifestUrl was already re-gated by handleMediaHint before it
+   * reached pendingHints (page scope) or before an element-scope bind; the
+   * player re-gates a third time internally (defense in depth). attach() is
+   * fire-and-forget (the native/factory/dash branches are synchronous; the lazy-
+   * hls branch returns a promise the player self-contains) and never throws.
+   * @param {Element} el
+   * @param {number|string} nid
+   * @param {string} manifestUrl
+   * @param {'hls'|'dash'} kind
+   * @param {?string} contentType
+   */
+  function bindAdaptiveHint(el, nid, manifestUrl, kind, contentType) {
+    try {
+      mediaPlayer.attach(el, manifestUrl, { nid: String(nid), kind: kind, contentType: contentType });
+    } catch (e) {
+      // attach() is contained internally, but guard the call site too so a
+      // correlation bug never wedges the media dispatch.
+      logger.warn('[Renderer] adaptive hint bind failed', { nid: String(nid) });
+    }
+  }
+
+  /**
+   * STREAM.MEDIA_HINT handler (MADPT-02 consumption): the adapter-originated
+   * adaptive-manifest discovery op (a structural twin of STREAM.MEDIA; old
+   * viewers ignore it via the dispatch default). Flow (14-RESEARCH hint-
+   * consumption spec):
+   *   1. streaming + identity gate (isCurrentStream) -- drop a stale/late hint
+   *      from a prior page so it can never bind the wrong media (T-14-11).
+   *   2. poster/off mode binds no adaptive player at all (no player surface).
+   *   3. RE-GATE manifestUrl through gateAsset(url,'media') BEFORE any use -- the
+   *      hint is attacker-influenced; a blocked origin degrades to poster and is
+   *      NEVER fetched (T-14-10 / V12 SSRF defense in depth).
+   *   4. element scope (payload.nid set, element resolves & is MSE-opaque) ->
+   *      bind immediately via the player; page scope -> store most-recent-wins
+   *      per kind for an opaque element to consume on play.
+   * @param {Object} payload MediaHintPayload
+   */
+  function handleMediaHint(payload) {
+    if (viewerState !== 'streaming') return;
+    if (!isCurrentStream(payload, active)) return;
+    // Poster/off mode: no adaptive player surface (the source is neutralized at
+    // the gate and poster is a still frame -- 13-UI-SPEC State C). Drop hints.
+    if (mediaMode !== 'reference') { markLive('media'); return; }
+    var p = payload || {};
+    var manifestUrl = p.manifestUrl;
+    if (!manifestUrl || typeof manifestUrl !== 'string') { markLive('media'); return; }
+    var nid = (p.nid != null) ? p.nid : null;
+    // RE-GATE at the viewer (defense in depth): a blocked manifest origin must
+    // never be fetched -> degrade to poster instead.
+    if (!gateAsset(manifestUrl, 'media').allow) {
+      mediaPlayer.degrade(nid != null ? String(nid) : null, 'no-manifest');
+      markLive('media');
+      return;
+    }
+    var kind = (p.kind === 'hls' || p.kind === 'dash') ? p.kind : null;
+    var scope = (p.scope === 'element') ? 'element' : (p.scope === 'page' ? 'page' : (nid != null ? 'element' : 'page'));
+    if (scope === 'element' && nid != null) {
+      var el = resolveIndexedNode(nid);
+      // Element-scope: bind immediately when the element resolves and is MSE-
+      // opaque (no resolvable source). A correlated element that already has a
+      // playable source is left to the Phase 13 progressive path.
+      if (el && typeof el.play === 'function' && mediaElementHasNoSource(el)) {
+        hintBoundNids.add(String(nid));
+        bindAdaptiveHint(el, nid, manifestUrl, kind, p.contentType);
+      }
+      markLive('media');
+      return;
+    }
+    // Page scope (nid omitted): store most-recent-wins per kind; consumed when an
+    // MSE-opaque element next plays (handleMedia -> maybeConsumePageHint).
+    pendingHints.set(kind || 'hls', {
+      manifestUrl: manifestUrl,
+      kind: kind || 'hls',
+      contentType: p.contentType,
+      storedAt: Date.now()
+    });
     markLive('media');
   }
 
@@ -1862,6 +2054,9 @@ export function createViewer(options) {
           break;
         case STREAM.MEDIA:
           handleMedia(payload);
+          break;
+        case STREAM.MEDIA_HINT:
+          handleMediaHint(payload);
           break;
         case STREAM.STATE:
           handleStreamState(payload);
