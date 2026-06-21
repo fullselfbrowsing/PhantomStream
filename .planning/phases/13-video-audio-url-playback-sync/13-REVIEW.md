@@ -30,6 +30,25 @@ findings:
   info: 3
   total: 8
 status: issues_found
+fix_status: in_scope_resolved
+fix_iteration: 1
+fixed_at: 2026-06-20T00:00:00Z
+resolved_findings:
+  - CR-01
+  - WR-01
+  - WR-02
+  - WR-03
+  - WR-04
+deferred_findings:
+  - IN-01
+  - IN-02
+  - IN-03
+fix_commits:
+  - { id: CR-01, hash: edd4945 }
+  - { id: WR-01, hash: 69d109f }
+  - { id: WR-02, hash: b8cfd15 }
+  - { id: WR-03, hash: fc7015d }
+  - { id: WR-04, hash: f91db12 }
 ---
 
 # Phase 13: Code Review Report
@@ -77,7 +96,7 @@ poster-mode test passes only because jsdom never prefetches.
 
 ## Critical Issues
 
-### CR-01: `mediaMode: 'poster'` leaks the media GET it is designed to prevent (string-layer gate is mode-blind)
+### CR-01: `mediaMode: 'poster'` leaks the media GET it is designed to prevent (string-layer gate is mode-blind) [RESOLVED iter 1, commit edd4945]
 
 **File:** `src/renderer/index.js:330-337` (gate closure), `src/renderer/index.js:1449-1452` (snapshot write), `src/renderer/snapshot.js:360-397` (`gateSnapshotAssets`)
 **Issue:**
@@ -144,7 +163,7 @@ gap cannot silently reopen.
 
 ## Warnings
 
-### WR-01: Skipped (host-UI) `<video>`/`<audio>` are still media-tracked and emit STREAM.MEDIA
+### WR-01: Skipped (host-UI) `<video>`/`<audio>` are still media-tracked and emit STREAM.MEDIA [RESOLVED iter 1, commit 69d109f]
 
 **File:** `src/capture/index.js:4599-4605` (`collectTrackedMediaElements`), `:4677-4714` (`attachMediaListeners`), `:4742-4749` (`attachMediaListenersUnder`)
 **Issue:**
@@ -168,7 +187,7 @@ if (skipElementWithAncestors(el) || blockedWithAncestors(el) || wireDroppedWithA
 ```
 and skip excluded nodes in `collectTrackedMediaElements`.
 
-### WR-02: Truncated snapshot can ship a `media[]` baseline whose nids are no longer in the payload
+### WR-02: Truncated snapshot can ship a `media[]` baseline whose nids are no longer in the payload [RESOLVED iter 1, commit b8cfd15]
 
 **File:** `src/capture/index.js:2753-2844` (`fitSnapshotPayloadForBudget`), `:3733-3736` (media append)
 **Issue:**
@@ -195,7 +214,7 @@ if (Array.isArray(next.media)) {
 }
 ```
 
-### WR-03: Blocked `<video>` placeholder orphans the `</video>` close tag and trailing children
+### WR-03: Blocked `<video>` placeholder orphans the `</video>` close tag and trailing children [RESOLVED iter 1, commit fc7015d]
 
 **File:** `src/renderer/snapshot.js:286-311` (`gateOneMediaTag`), `:360-397` (`gateSnapshotAssets`)
 **Issue:**
@@ -220,7 +239,7 @@ the placeholder intentionally leaves children to be independently gated and the
 orphaned `</video>` is parser-tolerated — but consuming to `</video>` is the
 clean fix.
 
-### WR-04: `semantic-addressing` wire-forwarding guard is a weak proximity heuristic
+### WR-04: `semantic-addressing` wire-forwarding guard is a weak proximity heuristic [RESOLVED iter 1, commit f91db12]
 
 **File:** `tests/semantic-addressing.test.js:264-268`
 **Issue:**
