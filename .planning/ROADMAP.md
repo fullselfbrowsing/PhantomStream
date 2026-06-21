@@ -559,4 +559,4 @@ Phases execute in numeric order. v1.0 (1–11) is complete. v2.0 active order: 1
 | 12. Static Assets by Reference | 3/3 | Complete   | 2026-06-20 |
 | 13. Video/Audio URL + Playback Sync | 4/4 | Complete    | 2026-06-21 |
 | 14. Adaptive Streaming + Adapter Discovery + Fallback | 5/5 | Complete    | 2026-06-21 |
-| 15. Media Security, Masking, Threat Model & Docs | 4/4 | Complete   | 2026-06-21 |
+| 15. Media Security, Masking, Threat Model & Docs | 4/4 | Complete    | 2026-06-21 |
