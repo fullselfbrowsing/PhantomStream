@@ -197,6 +197,10 @@ export function createExtensionAdapter(options) {
   async function writeSessionState(next) {
     sessionState = cloneSessionState(next);
     await chrome.storage.session.set({ [storageKey]: sessionState });
+    // Narrow the manifest observer to the streamed tab once its id is known (or
+    // re-scope if it changed). No-op when discovery is off or the scope already
+    // matches; the in-handler tabId check covers the window before this fires.
+    rearmManifestObserverForTab();
     return sessionState;
   }
 
@@ -335,6 +339,18 @@ export function createExtensionAdapter(options) {
     if (disposed || !discoverManifests) return;
     try {
       if (!details || typeof details.url !== 'string') return;
+      // Streamed-tab scope: drop a response from an UNRELATED tab so a manifest
+      // fetched elsewhere can never bind the streamed page's media element. The
+      // filter below also narrows at the API level once the tab id is known;
+      // this in-handler check is the robust guarantee (works even if the filter
+      // could not be scoped at arm time, or the browser ignored it). When the
+      // streamed tab id is unknown, or the details carry no tabId, accept
+      // (graceful: the prior <all_urls> behavior).
+      if (sessionState && sessionState.tabId != null
+          && typeof details.tabId === 'number'
+          && details.tabId !== sessionState.tabId) {
+        return;
+      }
       var contentType = contentTypeOf(details.responseHeaders);
       var kind = classifyManifest({ url: details.url, contentType: contentType });
       if (!kind) return;
@@ -375,6 +391,24 @@ export function createExtensionAdapter(options) {
     return handleManifestCompleted(details);
   };
 
+  // Whether the manifest listener is currently registered, and the tab id its
+  // filter was scoped to (null = the broad <all_urls> filter). Tracked so the
+  // observer can re-register a narrower per-tab filter once the streamed tab id
+  // becomes known (it is absent at install time -- armManifestObserver runs
+  // before readSessionState rehydrates sessionState).
+  var manifestObserverArmed = false;
+  var manifestObserverTabId = null;
+
+  function manifestFilter() {
+    var tabId = (sessionState && sessionState.tabId != null) ? sessionState.tabId : null;
+    // Restrict to the streamed tab at the API level when known; the in-handler
+    // check is the belt-and-suspenders guarantee regardless. Omit tabId (broad
+    // filter) until the streamed tab id is observed.
+    return tabId != null
+      ? { urls: ['<all_urls>'], tabId: tabId }
+      : { urls: ['<all_urls>'] };
+  }
+
   function armManifestObserver() {
     if (!discoverManifests) return;
     if (!manifestDiscoveryAvailable) {
@@ -383,15 +417,30 @@ export function createExtensionAdapter(options) {
       logWarn('manifest-discovery-unavailable');
       return;
     }
+    if (manifestObserverArmed) return;
     try {
       chrome.webRequest.onCompleted.addListener(
         manifestListener,
-        { urls: ['<all_urls>'] },
+        manifestFilter(),
         ['responseHeaders']
       );
+      manifestObserverArmed = true;
+      manifestObserverTabId = (sessionState && sessionState.tabId != null) ? sessionState.tabId : null;
     } catch (error) {
       logWarn('manifest-observer-arm-failed', error);
     }
+  }
+
+  // Re-register the observer with a tab-scoped filter when the streamed tab id
+  // first becomes known (or changes). A no-op when discovery is off/unavailable,
+  // when no listener is armed, or when the scope is already correct.
+  function rearmManifestObserverForTab() {
+    if (!discoverManifests || !manifestDiscoveryAvailable) return;
+    if (!manifestObserverArmed) return;
+    var tabId = (sessionState && sessionState.tabId != null) ? sessionState.tabId : null;
+    if (tabId === manifestObserverTabId) return;
+    disarmManifestObserver();
+    armManifestObserver();
   }
 
   function disarmManifestObserver() {
@@ -401,6 +450,8 @@ export function createExtensionAdapter(options) {
         chrome.webRequest.onCompleted.removeListener(manifestListener);
       }
     } catch (error) { /* best-effort cleanup */ }
+    manifestObserverArmed = false;
+    manifestObserverTabId = null;
   }
 
   var runtimeListener = function runtimeListener(message, sender) {
@@ -422,6 +473,9 @@ export function createExtensionAdapter(options) {
         unsubscribeTransport = transport.onMessage(handleTransportMessage);
       }
       var restored = await readSessionState();
+      // armManifestObserver ran before sessionState was rehydrated; if the
+      // restored session names the streamed tab, re-scope the filter to it now.
+      rearmManifestObserverForTab();
       if (restored && restored.streamingActive) armWatchdog();
       return handle;
     },

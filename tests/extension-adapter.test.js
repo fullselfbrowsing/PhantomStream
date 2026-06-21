@@ -119,12 +119,15 @@ function createFakeChrome(initialSession = {}, { webRequest = true } = {}) {
 
 // Build a synthetic webRequest.onCompleted details object. responseHeaders is
 // the Chromium array-of-{name,value} shape; header names may be any casing.
-function fakeDetails(url, contentType) {
+// `tabId` mirrors the Chromium details.tabId field (omitted when undefined).
+function fakeDetails(url, contentType, tabId) {
   const responseHeaders = [];
   if (typeof contentType === 'string') {
     responseHeaders.push({ name: 'Content-Type', value: contentType });
   }
-  return { url, responseHeaders, statusCode: 200, type: 'media' };
+  const details = { url, responseHeaders, statusCode: 200, type: 'media' };
+  if (typeof tabId === 'number') details.tabId = tabId;
+  return details;
 }
 
 function lastHint(transport) {
@@ -560,4 +563,38 @@ test('dispose removes the webRequest listener', async () => {
 
   adapter.dispose();
   assert.equal(chrome.completedEvent.listeners.length, 0, 'dispose unregisters the manifest listener');
+});
+
+test('opt-in drops a manifest from an UNRELATED tab and re-scopes the filter to the streamed tab', async () => {
+  const chrome = createFakeChrome();
+  const transport = createTransport();
+  const adapter = createExtensionAdapter({ chrome, transport, discoverManifests: true, now: () => 808 });
+  await adapter.install();
+
+  // Before the streamed tab id is known, the broad <all_urls> filter is used
+  // and a details object with no tabId is still observed (graceful prior path).
+  assert.equal(chrome.webRequestFilters.length, 1, 'one filter at install time');
+  assert.equal(chrome.webRequestFilters[0].filter.tabId, undefined, 'broad filter has no tabId yet');
+  await chrome.completedEvent.emit(fakeDetails('https://cdn.test/pre/master.m3u8'));
+  assert.ok(lastHint(transport), 'a no-tabId manifest is observed before the streamed tab is known');
+
+  // A CONTROL.START establishes the streamed tab id (= 7); the observer
+  // re-registers with a tab-scoped filter.
+  await chrome.runtime.onMessage.emit({
+    type: 'phantomstream:control',
+    message: { type: CONTROL.START, payload: { roomKey: 'r', wsUrl: 'ws://127.0.0.1:1/ws', tabId: 7 } }
+  }, { tab: { id: 7 } });
+  assert.equal(chrome.completedEvent.listeners.length, 1, 'exactly one listener after re-scope');
+  assert.equal(chrome.webRequestFilters.at(-1).filter.tabId, 7, 'filter re-scoped to the streamed tab id');
+
+  // A manifest fetched in an UNRELATED tab (tabId 99) is dropped.
+  const before = transport.sent.filter((e) => e.type === STREAM.MEDIA_HINT).length;
+  await chrome.completedEvent.emit(fakeDetails('https://cdn.test/other-tab/master.m3u8', undefined, 99));
+  const afterUnrelated = transport.sent.filter((e) => e.type === STREAM.MEDIA_HINT).length;
+  assert.equal(afterUnrelated, before, 'a manifest from an unrelated tab emits no hint');
+
+  // A manifest fetched in the STREAMED tab (tabId 7) is observed.
+  await chrome.completedEvent.emit(fakeDetails('https://cdn.test/streamed-tab/master.m3u8', undefined, 7));
+  const hint = lastHint(transport);
+  assert.equal(hint.manifestUrl, 'https://cdn.test/streamed-tab/master.m3u8', 'the streamed-tab manifest is observed');
 });
