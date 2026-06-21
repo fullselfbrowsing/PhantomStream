@@ -3354,7 +3354,10 @@ export function createCapture(config) {
         if (!root.contains(desc)) continue;
         if (liveDesc && wireDroppedWithAncestors(liveDesc.parentElement)) continue;
         if (liveDesc && blockedWithAncestors(liveDesc.parentElement)) continue;
-        if (liveDesc && blockMatches(liveDesc)) {
+        if (liveDesc && maskMediaWithAncestors(liveDesc.parentElement)) continue;
+        // blockSelector OR maskMediaSelector (MSEC-03): degrade the matched
+        // element to the same dimension-only block placeholder.
+        if (liveDesc && (blockMatches(liveDesc) || maskMediaMatches(liveDesc))) {
           replaceWithBlockPlaceholder(liveDesc, desc, readBlockRect(liveDesc), payload.cloneToNid);
           continue;
         }
@@ -3730,14 +3733,19 @@ export function createCapture(config) {
         continue;
       }
 
-      // blockSelector: descendants of a blocked root get no nid assignment
-      // (the root swap discards the whole cloned subtree). The blocked root
-      // itself is still tracked, then replaced after this walk by a
-      // dimension-preserving placeholder whose identity travels in nodeIds.
-      if (blockedWithAncestors(orig.parentElement)) {
+      // blockSelector / maskMediaSelector: descendants of a blocked OR masked
+      // root get no nid assignment (the root swap discards the whole cloned
+      // subtree). The root itself is still tracked, then replaced after this
+      // walk by a dimension-preserving placeholder whose identity travels in
+      // nodeIds. maskMediaSelector (MSEC-03) reuses the blockSelector placeholder
+      // path verbatim so a masked <video>/<audio> degrades to the same identity-
+      // only dimensioned <div> (A3: no distinct reason attr -- "masked" and
+      // "blocked" are visually identical and the masked element legitimately
+      // carries no identity-leaking attribute).
+      if (blockedWithAncestors(orig.parentElement) || maskMediaWithAncestors(orig.parentElement)) {
         continue;
       }
-      if (blockMatches(orig)) {
+      if (blockMatches(orig) || maskMediaMatches(orig)) {
         assignNodeId(orig, cl, cloneToNid);
         blockedPairs.push({ orig: orig, clone: cl });
         continue;
@@ -4928,7 +4936,8 @@ export function createCapture(config) {
       // matches so a deliberately-excluded element emits no media[] entry.
       if (skipElementWithAncestors(nodes[i])
         || blockedWithAncestors(nodes[i])
-        || wireDroppedWithAncestors(nodes[i])) {
+        || wireDroppedWithAncestors(nodes[i])
+        || maskMediaWithAncestors(nodes[i])) {
         continue;
       }
       out.push(nodes[i]);
@@ -5011,13 +5020,15 @@ export function createCapture(config) {
     if (typeof el.addEventListener !== 'function') return;
     var tag = el.tagName ? String(el.tagName).toLowerCase() : '';
     if (tag !== 'video' && tag !== 'audio') return;
-    // WR-01: never track a host-excluded media element. This is the chokepoint
-    // every attach path funnels through (startMediaTracker, the added-node path,
-    // attachMediaListenersUnder), so gating here guarantees a skipped/blocked/
-    // wire-dropped <video>/<audio> emits no STREAM.MEDIA frames -- matching the
-    // value tracker's exclusion (buildValueDiff) so the wire never leaks the
-    // play/pause/seek timeline of deliberately-excluded host-UI media.
-    if (skipElementWithAncestors(el) || blockedWithAncestors(el) || wireDroppedWithAncestors(el)) return;
+    // WR-01 / MSEC-03: never track a host-excluded OR masked media element. This
+    // is the chokepoint every attach path funnels through (startMediaTracker, the
+    // added-node path, attachMediaListenersUnder), so gating here guarantees a
+    // skipped/blocked/wire-dropped/masked <video>/<audio> emits no STREAM.MEDIA
+    // frames -- matching the value tracker's exclusion (buildValueDiff) so the
+    // wire never leaks the play/pause/seek timeline of deliberately-excluded
+    // host-UI media or maskMediaSelector-redacted private media.
+    if (skipElementWithAncestors(el) || blockedWithAncestors(el)
+      || wireDroppedWithAncestors(el) || maskMediaWithAncestors(el)) return;
     if (mediaTracked.has(el)) return;
 
     var record = { lastMediaSend: 0, handlers: {} };
