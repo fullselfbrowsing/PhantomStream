@@ -44,6 +44,7 @@ import {
   SNAPSHOT_BUDGET_BYTES,
   TRUNCATION_VIEWPORT_MULTIPLIER,
   SCROLL_THROTTLE_MS,
+  MEDIA_SYNC_THROTTLE_MS,
   OVERLAY_THROTTLE_MS,
   MUTATION_STALE_THRESHOLD_MS,
   WATCHDOG_TICK_MS,
@@ -3710,6 +3711,21 @@ export function createCapture(config) {
       snapshotPayload.styleSources = documentCssom.sources;
       snapshotPayload.styleStrategy = documentCssom.strategy;
     }
+    // MEDIA-02 / MEDIA-04: append a media[] playback-state baseline keyed by
+    // nid -- one entry per tracked <video>/<audio> in document order, read from
+    // the LIVE DOM. This mirrors the DIFF_OP.VALUE side-channel precedent
+    // (live property state travels keyed by nid, never baked into the clone),
+    // so payload.html stays byte-identical (differential-oracle invariant) and
+    // the live page is never mutated (Phase 7 capture-no-mutation invariant).
+    // The media[] key is added ONLY when at least one <video>/<audio> exists.
+    // A media-free page emits NO media key at all, so existing fixtures stay
+    // byte-identical to the FSB reference and the differential oracle needs no
+    // new ledger entry yet (RESEARCH A4 / Pitfall 7 -- the ledger entry + media
+    // fixture land with Plan 13-04, once a fixture instantiates media).
+    var trackedMedia = collectTrackedMediaElements();
+    if (trackedMedia.length > 0) {
+      snapshotPayload.media = trackedMedia.map(buildMediaBaselineEntry);
+    }
     return fitSnapshotPayloadForBudget(snapshotPayload, clone, cloneToNid, truncatedNodeIds);
   }
 
@@ -4552,6 +4568,53 @@ export function createCapture(config) {
       scrollHandler = null;
     }
     logger.info('[DOM Stream] Scroll tracker stopped');
+  }
+
+  // =========================================================================
+  // 3.5 Media Tracker (STREAM.MEDIA -- scroll-twin side channel)
+  // =========================================================================
+
+  /**
+   * Every <video>/<audio> currently in the live document, in document order.
+   * Read from the LIVE DOM only (never the clone) so the media[] baseline and
+   * tracker walk the same real elements capture sees.
+   * @returns {HTMLMediaElement[]}
+   */
+  function collectTrackedMediaElements() {
+    var out = [];
+    if (!document || typeof document.querySelectorAll !== 'function') return out;
+    var nodes = document.querySelectorAll('video, audio');
+    for (var i = 0; i < nodes.length; i++) out.push(nodes[i]);
+    return out;
+  }
+
+  /**
+   * Build one MediaBaselineEntry (MEDIA-02/MEDIA-04) from a LIVE media element.
+   * Reads playback-state properties only; assigns/reuses the element nid via
+   * ensureNodeId so the renderer can address it. NEVER writes an attribute on
+   * the element (Phase 7 no-mutation invariant) and NEVER touches the clone.
+   *
+   * duration|live are mutually exclusive: a finite duration is sent as-is; a
+   * non-finite duration (live stream / unloaded element) sets live:true and
+   * omits duration, closing the JSON Infinity->null trap (13-RESEARCH Pitfall
+   * 2) so the reconciler branches on live before any duration arithmetic.
+   * @param {HTMLMediaElement} el
+   * @returns {import('../protocol/messages.js').MediaBaselineEntry}
+   */
+  function buildMediaBaselineEntry(el) {
+    var entry = {
+      nid: ensureNodeId(el),
+      currentTime: el.currentTime,
+      paused: !!el.paused,
+      muted: !!el.muted,
+      volume: el.volume,
+      playbackRate: el.playbackRate,
+      loop: !!el.loop,
+      ended: !!el.ended
+    };
+    if (isFinite(el.duration)) entry.duration = el.duration;
+    else entry.live = true;
+    return entry;
   }
 
   // =========================================================================
