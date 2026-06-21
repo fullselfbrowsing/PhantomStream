@@ -206,3 +206,388 @@ test('media affordances interpolate NO payload-derived string into markup (only 
     env.teardown();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Task 3: handleMedia dispatch + parent-realm driver + autoplay/affordance +
+// onMediaBlocked + unmute trigger + mediaMode poster gate + backward-compat
+// ---------------------------------------------------------------------------
+
+const IDENTITY = { streamSessionId: 's1', snapshotId: 1 };
+
+/** Glue the srcdoc into jsdom's contentDocument and fire the load event. */
+function glue(env, iframe) {
+  const cd = iframe.contentDocument;
+  cd.open();
+  cd.write(iframe.getAttribute('srcdoc'));
+  cd.close();
+  iframe.dispatchEvent(new env.window.Event('load'));
+  return cd;
+}
+
+/** A snapshot payload carrying a single <video> at nid '1'. */
+function videoSnapshot(extra) {
+  return Object.assign({
+    html: '<video></video>',
+    nodeIds: ['1'],
+    stylesheets: [],
+    inlineStyles: [],
+    htmlAttrs: {},
+    bodyAttrs: {},
+    htmlStyle: '',
+    bodyStyle: '',
+    scrollX: 0,
+    scrollY: 0,
+    viewportWidth: 800,
+    viewportHeight: 600,
+    streamSessionId: 's1',
+    snapshotId: 1,
+  }, extra || {});
+}
+
+/**
+ * Build a recording stub over a jsdom media element: records play/pause calls,
+ * currentTime / playbackRate / muted / volume assignments, and lets each test
+ * control play()'s return (undefined for the jsdom guard, a rejected promise
+ * for the NotAllowedError path). Property reads (paused/readyState/seeking/
+ * seekable/duration/currentTime) are defined via Object.defineProperty.
+ */
+function stubMediaElement(env, el, opts) {
+  const o = opts || {};
+  const rec = {
+    plays: 0,
+    pauses: 0,
+    currentTimeSets: [],
+    playbackRateSets: [],
+    mutedSets: [],
+    volumeSets: [],
+    el,
+  };
+  let _currentTime = (o.currentTime != null) ? o.currentTime : 0;
+  let _playbackRate = (o.playbackRate != null) ? o.playbackRate : 1;
+  let _muted = (o.muted != null) ? o.muted : false;
+  let _volume = (o.volume != null) ? o.volume : 1;
+  const _paused = (o.paused != null) ? o.paused : true;
+  const _seeking = (o.seeking != null) ? o.seeking : false;
+  const _readyState = (o.readyState != null) ? o.readyState : 4;
+  const _seekable = (o.seekable != null) ? o.seekable : { length: 1, end() { return 100; } };
+  const _duration = (o.duration != null) ? o.duration : 120;
+
+  Object.defineProperty(el, 'paused', { configurable: true, get() { return _paused; } });
+  Object.defineProperty(el, 'seeking', { configurable: true, get() { return _seeking; } });
+  Object.defineProperty(el, 'readyState', { configurable: true, get() { return _readyState; } });
+  Object.defineProperty(el, 'seekable', { configurable: true, get() { return _seekable; } });
+  Object.defineProperty(el, 'duration', { configurable: true, get() { return _duration; } });
+  Object.defineProperty(el, 'currentTime', {
+    configurable: true,
+    get() { return _currentTime; },
+    set(v) { _currentTime = v; rec.currentTimeSets.push(v); },
+  });
+  Object.defineProperty(el, 'playbackRate', {
+    configurable: true,
+    get() { return _playbackRate; },
+    set(v) { _playbackRate = v; rec.playbackRateSets.push(v); },
+  });
+  Object.defineProperty(el, 'muted', {
+    configurable: true,
+    get() { return _muted; },
+    set(v) { _muted = v; rec.mutedSets.push(v); },
+  });
+  Object.defineProperty(el, 'volume', {
+    configurable: true,
+    get() { return _volume; },
+    set(v) { _volume = v; rec.volumeSets.push(v); },
+  });
+  el.play = function () {
+    rec.plays++;
+    if (o.playReturns === 'undefined') return undefined;
+    if (o.playReturns === 'reject-notallowed') {
+      return Promise.reject(new env.window.DOMException('blocked', 'NotAllowedError'));
+    }
+    return Promise.resolve();
+  };
+  el.pause = function () { rec.pauses++; };
+  return rec;
+}
+
+test('an unknown wire type hits default and is silently ignored (backward-compat)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const rec = recordingLogger();
+    const ctx = streamingMediaViewerFactory(createViewer, env, { logger: rec.logger });
+    // A viewer/dispatch WITHOUT a STREAM.MEDIA case is simulated by an unknown
+    // type: it must not throw and must not change state.
+    assert.doesNotThrow(() => ctx.transport.emit('ext:totally-unknown-type', { foo: 1, ...IDENTITY }));
+    assert.equal(rec.errors.length, 0, 'no error logged for an unknown type (silent ignore)');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('handleMedia rejects a payload with mismatched stream identity (no driver call)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(createViewer, env, { mediaMode: 'reference' });
+    const rec = stubMediaElement(env, ctx.video, { paused: false });
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 5, paused: false, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), streamSessionId: 'STALE', snapshotId: 999,
+    });
+    assert.equal(rec.plays, 0, 'a stale-identity media payload never drives the element');
+    assert.equal(rec.currentTimeSets.length, 0, 'no seek applied for a stale payload');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('handleMedia drives the element: a paused source pauses the playing element', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(createViewer, env, { mediaMode: 'reference' });
+    const rec = stubMediaElement(env, ctx.video, { paused: false }); // element is playing
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 5, paused: true, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), ...IDENTITY,
+    });
+    assert.equal(rec.pauses, 1, 'a paused source pauses the element (reconciler -> pause)');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('handleMedia hard-seeks on an explicit seeked event via the reconciler', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(createViewer, env, { mediaMode: 'reference' });
+    const rec = stubMediaElement(env, ctx.video, { paused: false, currentTime: 5, readyState: 4 });
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', event: 'seeked', currentTime: 42, paused: false, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), ...IDENTITY,
+    });
+    assert.ok(rec.currentTimeSets.indexOf(42) !== -1, 'an explicit seeked event hard-seeks to the target');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('driver defaults muted=true before the first programmatic play; play() returning undefined does NOT throw', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(createViewer, env, { mediaMode: 'reference' });
+    // paused element + playing source -> ensurePlaying; play() returns undefined (jsdom).
+    const rec = stubMediaElement(env, ctx.video, { paused: true, playReturns: 'undefined' });
+    assert.doesNotThrow(() => ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 0, paused: false, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), ...IDENTITY,
+    }));
+    assert.equal(rec.plays, 1, 'play() was called');
+    assert.ok(rec.mutedSets.indexOf(true) !== -1, 'muted=true set before the first programmatic play');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('play() rejecting NotAllowedError shows media-blocked + invokes onMediaBlocked(nid) without wedging', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const blockedNids = [];
+    const ctx = streamingMediaViewerFactory(createViewer, env, {
+      mediaMode: 'reference',
+      onMediaBlocked(nid) { blockedNids.push(nid); },
+    });
+    const rec = stubMediaElement(env, ctx.video, { paused: true, playReturns: 'reject-notallowed' });
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 0, paused: false, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), ...IDENTITY,
+    });
+    // The rejection settles on a microtask.
+    await Promise.resolve(); await Promise.resolve();
+    const scrim = env.document.querySelector('.ps-overlay-media-blocked');
+    assert.ok(scrim && scrim.style.display !== 'none', 'the blocked-play affordance is shown on NotAllowedError');
+    assert.deepEqual(blockedNids, ['1'], 'onMediaBlocked(nid) invoked with the element nid');
+
+    // The mirror is not wedged: a subsequent pause still drives the element.
+    const rec2 = stubMediaElement(env, ctx.video, { paused: false });
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 5, paused: true, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), ...IDENTITY,
+    });
+    assert.equal(rec2.pauses, 1, 'the mirror keeps updating after a blocked play (never wedges)');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('a throwing onMediaBlocked is caught and logged, never rethrown', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const rec = recordingLogger();
+    const ctx = streamingMediaViewerFactory(createViewer, env, {
+      mediaMode: 'reference',
+      logger: rec.logger,
+      onMediaBlocked() { throw new Error('host boom'); },
+    });
+    stubMediaElement(env, ctx.video, { paused: true, playReturns: 'reject-notallowed' });
+    assert.doesNotThrow(() => ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 0, paused: false, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), ...IDENTITY,
+    }));
+    await Promise.resolve(); await Promise.resolve();
+    assert.ok(rec.errors.length >= 1, 'a throwing onMediaBlocked is routed to the logger');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('unmute trigger: muted element + unmuted source in reference shows media-unmute; onActivate unmutes + restores volume', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(createViewer, env, { mediaMode: 'reference' });
+    // Element is playing AND muted (the muted-autoplay default already applied);
+    // the source reports unmuted via payload.muted === false.
+    const rec = stubMediaElement(env, ctx.video, { paused: false, muted: true, currentTime: 5 });
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 5, paused: false, muted: false, volume: 0.8, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), ...IDENTITY,
+    });
+    const pill = env.document.querySelector('.ps-overlay-media-unmute');
+    assert.ok(pill && pill.style.display !== 'none', 'media-unmute shown when element muted but source unmuted (reference)');
+
+    // Activate the affordance -> muted=false, volume restored, pill hidden.
+    pill.dispatchEvent(new env.window.Event('click'));
+    assert.ok(rec.mutedSets.indexOf(false) !== -1, 'onActivate sets muted=false');
+    assert.ok(rec.volumeSets.indexOf(0.8) !== -1, 'onActivate restores the source volume');
+    assert.equal(pill.style.display, 'none', 'the media-unmute affordance hides after activation');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('unmute trigger does NOT show when the source is still muted (or no muted field)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(createViewer, env, { mediaMode: 'reference' });
+    stubMediaElement(env, ctx.video, { paused: false, muted: true, currentTime: 5 });
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 5, paused: false, muted: true, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), ...IDENTITY,
+    });
+    const pill = env.document.querySelector('.ps-overlay-media-unmute');
+    assert.ok(!pill || pill.style.display === 'none', 'media-unmute not shown when source is muted');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('mediaMode poster: handleMedia binds no source, calls no play(), shows no affordance', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(createViewer, env, { mediaMode: 'poster' });
+    const rec = stubMediaElement(env, ctx.video, { paused: true, muted: true });
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 5, paused: false, muted: false, volume: 0.9, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), ...IDENTITY,
+    });
+    assert.equal(rec.plays, 0, 'poster mode never calls play()');
+    assert.equal(rec.pauses, 0, 'poster mode never drives the element');
+    const blocked = env.document.querySelector('.ps-overlay-media-blocked');
+    const pill = env.document.querySelector('.ps-overlay-media-unmute');
+    assert.ok(!blocked || blocked.style.display === 'none', 'no blocked-play affordance in poster mode');
+    assert.ok(!pill || pill.style.display === 'none', 'no unmute affordance in poster mode');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('driver holds while element.seeking is true (skips a new seek -- Pitfall 6)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(createViewer, env, { mediaMode: 'reference' });
+    const rec = stubMediaElement(env, ctx.video, { paused: false, seeking: true, currentTime: 5, readyState: 4 });
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', event: 'seeked', currentTime: 90, paused: false, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), ...IDENTITY,
+    });
+    assert.equal(rec.currentTimeSets.length, 0, 'no new seek is applied while the element is seeking');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('seek with readyState < HAVE_METADATA is not applied (readyState gate)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(createViewer, env, { mediaMode: 'reference' });
+    const rec = stubMediaElement(env, ctx.video, { paused: false, currentTime: 5, readyState: 0 });
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', event: 'seeked', currentTime: 88, paused: false, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), ...IDENTITY,
+    });
+    assert.equal(rec.currentTimeSets.length, 0, 'a seek is withheld until readyState >= HAVE_METADATA');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('rejoin-edge with seekable.length === 0 holds instead of throwing (Pitfall 4 guard)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(createViewer, env, { mediaMode: 'reference' });
+    // Live source (no duration), big drift -> reconciler returns rejoin-edge;
+    // element seekable is empty so the driver must hold (no throw, no seek).
+    const rec = stubMediaElement(env, ctx.video, {
+      paused: false, currentTime: 0, readyState: 4,
+      seekable: { length: 0, end() { throw new Error('IndexSizeError'); } },
+    });
+    assert.doesNotThrow(() => ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 1000, paused: false, playbackRate: 1, live: true,
+      sentAt: Date.now() - 5000, ...IDENTITY,
+    }));
+    assert.equal(rec.currentTimeSets.length, 0, 'no seek applied when seekable is empty (guarded hold)');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('the sandbox token stays exactly allow-same-origin (no allow-scripts/autoplay added)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(createViewer, env, { mediaMode: 'reference' });
+    assert.equal(ctx.iframe.getAttribute('sandbox'), 'allow-same-origin', 'sandbox is exactly allow-same-origin');
+  } finally {
+    env.teardown();
+  }
+});
+
+/** Wrap streamingMediaViewer with the already-imported createViewer. */
+function streamingMediaViewerFactory(createViewer, env, cfg, snapshotExtra) {
+  const transport = {
+    handler: null,
+    send() {},
+    onMessage(h) { transport.handler = h; return function () { transport.handler = null; }; },
+    emit(type, payload) { if (transport.handler) transport.handler(type, payload); },
+  };
+  const viewer = createViewer(Object.assign({
+    container: env.document.body,
+    transport,
+    logger: (cfg && cfg.logger) || recordingLogger().logger,
+  }, cfg || {}));
+  transport.emit('ext:dom-snapshot', videoSnapshot(snapshotExtra));
+  const iframe = env.document.querySelector('iframe');
+  const cd = glue(env, iframe);
+  const video = cd.querySelector('video');
+  return { transport, viewer, iframe, cd, video };
+}

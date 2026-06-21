@@ -40,6 +40,7 @@ import { sanitizeFragment, scrubCssText, parseSrcsetCandidates } from './sanitiz
 import { createOverlays, mapRectToHost, OVERLAY_CSS } from './overlays.js';
 import { classifyAssetOrigin } from './asset-policy.js';
 import { STREAM, CONTROL, isCurrentStream } from '../protocol/messages.js';
+import { reconcileMediaDrift, DEFAULT_MEDIA_RECONCILE_CONFIG } from '../protocol/media-reconcile.js';
 
 // ---- Phase 12 (MSEC-01/MSEC-02): the renderer pre-write fetch gate ----
 //
@@ -313,6 +314,16 @@ export function createViewer(options) {
   var allowAssetOrigins = Array.isArray(cfg.allowAssetOrigins)
     ? cfg.allowAssetOrigins.slice()
     : null;
+  // Phase 13 (MEDIA-05): onMediaBlocked is a CONFIG callback (the
+  // assetOriginPolicy-hook family), NOT an on('state'|'health') subscription
+  // (which throws on other names). Invoked with the element nid when a
+  // programmatic play() rejects with NotAllowedError; its errors are contained
+  // to the logger (never rethrown). mediaReconcileConfig overrides merge over
+  // DEFAULT_MEDIA_RECONCILE_CONFIG (the reconciler tolerances stay tunable).
+  var onMediaBlocked = typeof cfg.onMediaBlocked === 'function' ? cfg.onMediaBlocked : null;
+  var mediaReconcileConfig = (cfg.mediaReconcileConfig && typeof cfg.mediaReconcileConfig === 'object')
+    ? cfg.mediaReconcileConfig
+    : DEFAULT_MEDIA_RECONCILE_CONFIG;
   // Per-viewer gate closure: every write site (snapshot string layer, diff
   // ADD/ATTR, subtree) calls this so the posture is applied uniformly and
   // fail-closed. kind defaults to 'image' (P12 image scope).
@@ -1565,6 +1576,195 @@ export function createViewer(options) {
     markLive('dialog');
   }
 
+  // --- Phase 13 media driver (MEDIA-01/05): the in-iframe <video>/<audio> is
+  // inert (no allow-scripts); the PARENT realm is the only tier that can drive
+  // it cross-realm. handleMedia resolves the nid, runs the pure reconciler, and
+  // applies the action by calling methods on the in-iframe element. The element
+  // is NEVER scripted; affordances live in the parent-realm overlay layer. ---
+
+  /** Invoke a host hook in containment -> logger, never rethrow (T-13-12). */
+  function safeInvokeMediaHook(fn, nid) {
+    if (typeof fn !== 'function') return;
+    try {
+      fn(nid);
+    } catch (err) {
+      logger.error('[Renderer] onMediaBlocked hook failed', err);
+    }
+  }
+
+  /**
+   * Show the blocked-play affordance over the element rect and arm its onActivate
+   * to re-issue play() (user-gesture-backed, so autoplay policy permits it). On
+   * a successful re-play the affordance hides. Never wedges the mirror.
+   * @param {Element} el
+   * @param {number|string} nid
+   */
+  function showBlockedPlayAffordance(el, nid) {
+    overlays.show('media-blocked', {
+      nid: nid,
+      onActivate: function () {
+        try {
+          var p = el.play();
+          if (p !== undefined && typeof p.then === 'function') {
+            p.then(function () { overlays.show('media-blocked', null); })
+             .catch(function () { /* still blocked: keep the affordance up */ });
+          } else {
+            overlays.show('media-blocked', null);
+          }
+        } catch (e) { /* contained: a re-play failure keeps the affordance */ }
+      }
+    }, { anchorRect: resolveNidRect(nid) });
+  }
+
+  /**
+   * Ensure the element is playing under autoplay policy. Sets muted=true before
+   * the first programmatic play (muted autoplay is always allowed), then guards
+   * play()'s return: jsdom (and very old browsers) return undefined, so the
+   * `if (p !== undefined && typeof p.catch === 'function')` guard avoids a
+   * TypeError; a NotAllowedError rejection shows the blocked-play affordance and
+   * invokes onMediaBlocked(nid). Any other rejection falls through to the
+   * Phase 12 load-error path (no affordance). (13-RESEARCH Example 4.)
+   * @param {Element} el
+   * @param {number|string} nid
+   */
+  function ensurePlaying(el, nid) {
+    if (!el.paused) return;
+    try { el.muted = true; } catch (e) { /* muted-autoplay default best-effort */ }
+    var p;
+    try {
+      p = el.play();
+    } catch (e) {
+      return; // a synchronous play() throw is contained (never wedges)
+    }
+    if (p !== undefined && typeof p.catch === 'function') {
+      p.catch(function (err) {
+        if (err && err.name === 'NotAllowedError') {
+          showBlockedPlayAffordance(el, nid);
+          safeInvokeMediaHook(onMediaBlocked, nid);
+        }
+        // Any other rejection: defer to the Phase 12 load-error placeholder.
+      });
+    }
+  }
+
+  /**
+   * Apply one reconciler action to the in-iframe element from the parent realm.
+   * Driver guards (13-RESEARCH Example 4 + Pitfalls 4/6): hold while
+   * element.seeking; only seek when readyState >= HAVE_METADATA (1); rejoin-edge
+   * reads seekable.end only when seekable.length > 0 (else holds). All element
+   * mutations are try/caught so one failure never wedges the mirror.
+   * @param {Element} el
+   * @param {{action: string, toTime?: number, rate?: number, revertRate?: number}} action
+   * @param {number|string} nid
+   */
+  function applyMediaAction(el, action, nid) {
+    if (!action || typeof action.action !== 'string') return;
+    // Pitfall 6 driver guard: never apply a new seek while a seek is in flight.
+    if (el.seeking) {
+      // Still allow pause to flow even mid-seek; a new seek is the only thing held.
+      if (action.action === 'pause') { try { el.pause(); } catch (e) {} }
+      return;
+    }
+    switch (action.action) {
+      case 'pause':
+        try { el.pause(); } catch (e) { /* contained */ }
+        break;
+      case 'seek':
+      case 'rejoin-edge': {
+        var target;
+        if (action.action === 'rejoin-edge') {
+          // Live rejoin: seekable.end only when the range is non-empty (Pitfall 4).
+          target = (el.seekable && el.seekable.length > 0)
+            ? el.seekable.end(el.seekable.length - 1)
+            : null;
+        } else {
+          target = action.toTime;
+        }
+        if (target != null && el.readyState >= 1 /* HAVE_METADATA */) {
+          try { el.currentTime = target; } catch (e) { /* contained */ }
+        }
+        ensurePlaying(el, nid);
+        break;
+      }
+      case 'nudge':
+        try { el.playbackRate = action.rate; } catch (e) { /* contained */ }
+        ensurePlaying(el, nid);
+        break;
+      case 'hold':
+        // Restore the true rate if a nudge was active and drifted the rate.
+        if (action.revertRate != null && el.playbackRate !== action.revertRate) {
+          try { el.playbackRate = action.revertRate; } catch (e) { /* contained */ }
+        }
+        ensurePlaying(el, nid);
+        break;
+      default:
+        break;
+    }
+  }
+
+  /**
+   * STREAM.MEDIA handler (MEDIA-01/05, MWIRE-01): the side-channel twin of
+   * handleScroll/handleOverlay. Streaming + identity gate, then resolve the nid,
+   * run the pure reconciler over the element's observed state, and drive the
+   * in-iframe element cross-realm. After ensurePlaying, evaluate the unmute
+   * trigger. In mediaMode 'poster'/'off' no source is bound and no driver runs
+   * (the Task 1 string/fragment gate already neutralized the source) and no
+   * affordance is surfaced. A viewer without this case (the dispatch default)
+   * silently ignores the message (backward-compat).
+   * @param {Object} payload
+   */
+  function handleMedia(payload) {
+    if (viewerState !== 'streaming') return;
+    if (!isCurrentStream(payload, active)) return;
+    // poster/off: the source is neutralized at the gate; never drive or surface
+    // an affordance (13-UI-SPEC State C: poster is a still frame).
+    if (mediaMode !== 'reference') { markLive('media'); return; }
+    var nid = payload && payload.nid;
+    var el = resolveIndexedNode(nid);
+    if (!el || typeof el.play !== 'function') return;
+
+    var localState = {
+      currentTime: el.currentTime,
+      paused: !!el.paused,
+      playbackRate: el.playbackRate,
+      seeking: !!el.seeking,
+      readyState: el.readyState
+    };
+    var action = reconcileMediaDrift(localState, payload, Date.now(), mediaReconcileConfig);
+    applyMediaAction(el, action, nid);
+    evaluateUnmuteTrigger(el, payload, nid);
+    markLive('media');
+  }
+
+  /**
+   * Unmute trigger (MEDIA-05, 13-UI-SPEC State B): after the muted-default play,
+   * when the in-iframe element is muted but the source reports unmuted
+   * (payload.muted === false) in mediaMode 'reference', SHOW the media-unmute
+   * affordance; activating it sets muted=false + restores volume and hides the
+   * affordance. When the source is still muted (or no muted field), hide/skip
+   * the affordance (the null-payload contract).
+   * @param {Element} el
+   * @param {Object} payload
+   * @param {number|string} nid
+   */
+  function evaluateUnmuteTrigger(el, payload, nid) {
+    var sourceUnmuted = payload && payload.muted === false;
+    if (el.muted === true && sourceUnmuted) {
+      var vol = (payload && typeof payload.volume === 'number') ? payload.volume : null;
+      overlays.show('media-unmute', {
+        nid: nid,
+        onActivate: function () {
+          try { el.muted = false; } catch (e) { /* contained */ }
+          if (vol != null) { try { el.volume = vol; } catch (e2) { /* contained */ } }
+          overlays.show('media-unmute', null); // hide after activation
+        }
+      }, { anchorRect: resolveNidRect(nid) });
+    } else {
+      // Source muted / field absent / element already unmuted -> hide.
+      overlays.show('media-unmute', null);
+    }
+  }
+
   /**
    * Transport message dispatch. The whole handler is containment-wrapped:
    * one malformed message routes to the logger and never kills the
@@ -1596,6 +1796,9 @@ export function createViewer(options) {
           break;
         case STREAM.DIALOG:
           handleDialog(payload);
+          break;
+        case STREAM.MEDIA:
+          handleMedia(payload);
           break;
         case STREAM.STATE:
           handleStreamState(payload);
