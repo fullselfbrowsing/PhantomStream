@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Asset & Media Streaming
 status: executing
-stopped_at: Completed 13-01-PLAN.md
-last_updated: "2026-06-21T03:27:02.404Z"
-last_activity: 2026-06-21 -- Phase 13 Plan 01 complete (STREAM.MEDIA wire + pure drift reconciler)
+stopped_at: Completed 13-02-PLAN.md
+last_updated: "2026-06-21T03:44:23.357Z"
+last_activity: 2026-06-21 -- Phase 13 Plan 02 complete (capture media[] baseline + STREAM.MEDIA tracker)
 progress:
   total_phases: 15
   completed_phases: 11
   total_plans: 64
-  completed_plans: 61
+  completed_plans: 62
   percent: 73
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-06-19)
 ## Current Position
 
 Phase: 13 (Video/Audio URL + Playback Sync) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
-Last activity: 2026-06-21 -- Phase 13 Plan 01 complete (STREAM.MEDIA wire + pure drift reconciler)
+Last activity: 2026-06-21
 
 **v2.0 phase order:** 12 → 13 → 14 → 15
 
@@ -97,6 +97,7 @@ Last activity: 2026-06-21 -- Phase 13 Plan 01 complete (STREAM.MEDIA wire + pure
 | Phase 12 P12-02 | 38min | 2 tasks tasks | 5 files files |
 | Phase 12 P12-03 | 42min | 3 tasks | 8 files |
 | Phase 13 P01 | 9min | 2 tasks | 6 files |
+| Phase 13 P02 | 11min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -126,6 +127,8 @@ Earlier v1.0 decisions are retained in PROJECT.md Key Decisions and the prior ph
 - [Phase 12-03]: VERIFIED jsdom/URL realities baked into the implementation: Node's WHATWG URL does NOT strip IPv6 brackets (new URL('https://[::1]/').hostname === '[::1]') -- isPrivateOrLocalHost strips them before its IPv6 checks; .local routes to 'unqualified-host' not 'private-host'. createViewer gained a host-driven API (mount alias + optional no-op transport + handleSnapshot on the handle, envelope-or-bare-payload tolerant) while the wire-driven cfg.container path keeps transport REQUIRED. Placeholders carry NO live identity attr (positional nid pairing preserved -- Phase 7). Playwright asset UAT DEFERRED (jsdom never parses srcdoc/enforces CSP/fetches) per the project UAT-deferral precedent.
 - [Phase ?]: [Phase 13-01]: STREAM.MEDIA='ext:dom-media' (scroll-twin op) + MEDIA_SYNC_THROTTLE_MS=250 + MediaBaselineEntry/MediaSyncPayload typedefs (duration|live mutually exclusive, Infinity->null fix); envelope+relay byte-unchanged, STREAM.MEDIA round-trips raw under the 1 MiB cap.
 - [Phase ?]: [Phase 13-01]: reconcileMediaDrift is a pure zero-import fn in src/protocol/media-reconcile.js (hold|pause|nudge|seek|rejoin-edge); 0.25s hold band, +/-5%-capped sign-correct nudge, hard-seek clamps to [0,duration], explicit-seeked short-circuit, live branch before duration math; no field ever NaN (6561-case hostile sweep). No D27 ledger entry yet (lands with 13-02 capture fixture).
+- [Phase ?]: [Phase 13-02]: serializeDOM appends a nid-keyed media[] playback baseline ONLY when >=1 <video>/<audio> exists (media-free fixtures stay byte-identical to the FSB reference; differential-ledger entry deferred to 13-04); duration sent only when finite, live:true otherwise (Infinity->null trap).
+- [Phase ?]: [Phase 13-02]: startMediaTracker is a scroll-twin armed/torn at the startScrollTracker sites; media events do not bubble so listeners are PER-ELEMENT (Map+records), with added-node attach + removed-node detach; STREAM.MEDIA discrete events emit immediately, timeupdate throttled at MEDIA_SYNC_THROTTLE_MS and playing-only; every payload nid-addressed + identity-stamped + sentAt-stamped; no media bytes on the wire.
 
 ### Pending Todos
 
@@ -153,6 +156,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-06-21T03:27:02.373Z
-Stopped at: Completed 13-01-PLAN.md
+Last session: 2026-06-21T03:41:03.713Z
+Stopped at: Completed 13-02-PLAN.md
 Resume file: None
