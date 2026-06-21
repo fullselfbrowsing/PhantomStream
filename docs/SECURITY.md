@@ -131,9 +131,19 @@ carry credential/PII query params, and a media element's URL plus playback timel
 private. Three host masking options, all validated at factory time alongside the existing
 selector family, redact or block those URLs **capture-side, before transport** -- the wire is
 already clean and the renderer never un-masks. URL masking lives in one place: a dedicated
-`'asset-url'` / `'media-url'` dispatch in `sanitizeForWire`, so every URL-bearing attribute
-(`src`, `poster`, `data`, `srcset` candidates) across the snapshot, iframe, and added-node
+`'asset-url'` / `'media-url'` dispatch in `sanitizeForWire`, so every **single-URL** attribute
+(the `src`, `href`, `action`, `poster`, `data` set) across the snapshot, iframe, and added-node
 serialization paths plus the mutation attr path routes through the same testable helper.
+
+The built-in `maskAssetUrls` token-param strip applies to those single-URL attributes only.
+**`srcset` candidate lists are NOT token-masked by the boolean.** A `srcset` value is
+scheme-scrubbed per candidate (`scrubSrcset` neutralizes a hostile `javascript:` / `data:text/html`
+candidate) and absolutified, but its candidate URLs do not flow through the token-param strip, so a
+token in a responsive candidate (`srcset="https://cdn/x.jpg?X-Amz-Signature=... 2x"`) would survive
+`maskAssetUrls: true`. To redact srcset tokens, either match the element with `maskMediaSelector`
+(which omits the whole element's URLs and degrades it to the dimensioned placeholder) or use
+`maskAssetUrlFn` per element; the boolean's name-keyed query strip is single-URL-attribute scoped
+by design.
 
 - `maskMediaSelector` -- a CSS selector. A matched media/asset element **omits its URL from the
   wire and degrades to the dimensioned placeholder** (the `blockSelector` path: a dimension-only
