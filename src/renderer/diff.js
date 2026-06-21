@@ -367,7 +367,24 @@ export function applyMutations(doc, mutations, counters, hooks) {
             // immediately). Blocked -> drop the attribute (no fetchable src);
             // the dimensioned placeholder is the snapshot/ADD path's job.
             if (gateAssetUrl && (attrName === 'src' || attrName === 'poster')) {
-              var assetVerdict = gateAssetUrl(scrubbed.value, attrName === 'poster' ? 'poster' : 'image');
+              // Kind must match the live element so the gate applies mode-aware
+              // policy (poster mode withholds playable media but keeps images):
+              // <video>/<audio> src -> 'media', <source> src -> 'source', any
+              // other src -> 'image'; a poster attr stays 'poster'. Mirrors
+              // gateOneMediaTag / gateFragmentMedia so a poster-mode <video src>
+              // (or <source src>) mutation is denied 'poster-mode-media' instead
+              // of slipping through gated as an image and fetching media bytes.
+              var assetKind;
+              if (attrName === 'poster') {
+                assetKind = 'poster';
+              } else if (targetTag === 'video' || targetTag === 'audio') {
+                assetKind = 'media';
+              } else if (targetTag === 'source') {
+                assetKind = 'source';
+              } else {
+                assetKind = 'image';
+              }
+              var assetVerdict = gateAssetUrl(scrubbed.value, assetKind);
               if (!assetVerdict || !assetVerdict.allow) {
                 sanitizeCounters.blockedUrls += 1;
                 logger.warn('[Renderer] attr op asset blocked by origin gate', {
