@@ -542,6 +542,10 @@ export function createViewer(options) {
           installStyleSources(scrubDoc, lastSnapshotPayload.styleSources || [], { kind: 'document' });
           installShadowRoots(scrubDoc, lastSnapshotPayload.shadowRoots || []);
           installFrames(scrubDoc, lastSnapshotPayload.frames || []);
+          // Phase 13 (MEDIA-02, Pitfall 7): apply the snapshot media[] baseline
+          // once now that nids are paired -- the INITIAL desired state -- then
+          // defer to the reconciler. No-op in poster/off mode (no playback).
+          applyMediaBaseline(lastSnapshotPayload.media);
         }
       }
     } catch (e) {
@@ -619,6 +623,11 @@ export function createViewer(options) {
   var destroyed = false;
   var nidToNode = new Map();
   var nodeToNid = new WeakMap();
+  // Phase 13 (Pitfall 7): nids whose snapshot media[] baseline has been applied
+  // once. The baseline is the INITIAL desired state; after first bind control
+  // passes to the reconciler (subsequent STREAM.MEDIA), so the baseline never
+  // re-fights live drift on a re-snapshot. Reset per snapshot identity.
+  var mediaFirstBind = new Set();
   var frameLoadHandlers = new WeakMap();
   var nodeHighlightEl = null;
   var pendingSubtreeRequests = new Map();
@@ -1426,6 +1435,7 @@ export function createViewer(options) {
     lastScroll.y = p.scrollY || 0;
     lastSnapshotPayload = p;
     clearIdentityIndex();
+    mediaFirstBind.clear(); // new identity: re-bind media baseline on next load
     // PRE-WRITE FETCH GATE (MSEC-01, THE timing rule -- 12-RESEARCH Pitfall 1):
     // rewrite blocked <img> assets to the dimensioned blocked-origin
     // placeholder and apply the ASST-03 currentSrc pin at the STRING layer,
@@ -1762,6 +1772,41 @@ export function createViewer(options) {
     } else {
       // Source muted / field absent / element already unmuted -> hide.
       overlays.show('media-unmute', null);
+    }
+  }
+
+  /**
+   * Apply the snapshot media[] baseline (Plan 02) once per element, on first
+   * bind only (Pitfall 7: the baseline is the INITIAL desired state; after this,
+   * live STREAM.MEDIA hands control to the reconciler so a re-snapshot never
+   * jumps playback back). Each entry is nid-addressed; the seek is readyState-
+   * gated (>= HAVE_METADATA) and contained. No-op in poster/off mode (the source
+   * is neutralized; nothing plays). All element mutations are best-effort.
+   * @param {Array<Object>} baseline payload.media (absent on media-free pages)
+   */
+  function applyMediaBaseline(baseline) {
+    if (mediaMode !== 'reference') return;
+    if (!Array.isArray(baseline) || baseline.length === 0) return;
+    for (var i = 0; i < baseline.length; i++) {
+      var entry = baseline[i];
+      if (!entry || entry.nid == null) continue;
+      var key = String(entry.nid);
+      if (mediaFirstBind.has(key)) continue; // already bound -> reconciler owns it
+      var el = resolveIndexedNode(key);
+      if (!el || typeof el.play !== 'function') continue;
+      mediaFirstBind.add(key);
+      try {
+        // Initial currentTime only when ready (live entries carry no duration).
+        if (typeof entry.currentTime === 'number' && el.readyState >= 1) {
+          el.currentTime = entry.currentTime;
+        }
+        if (typeof entry.playbackRate === 'number') el.playbackRate = entry.playbackRate;
+        if (entry.paused === false) {
+          ensurePlaying(el, key);
+        }
+      } catch (e) {
+        logger.warn('[Renderer] media baseline apply failed', { nid: key });
+      }
     }
   }
 

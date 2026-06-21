@@ -561,6 +561,45 @@ test('rejoin-edge with seekable.length === 0 holds instead of throwing (Pitfall 
   }
 });
 
+test('snapshot media[] baseline applies on first bind (readyState-gated), then reconciler owns it', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const transport = {
+      handler: null,
+      send() {},
+      onMessage(h) { transport.handler = h; return function () { transport.handler = null; }; },
+      emit(type, payload) { if (transport.handler) transport.handler(type, payload); },
+    };
+    createViewer({
+      container: env.document.body,
+      transport,
+      logger: recordingLogger().logger,
+      mediaMode: 'reference',
+    });
+    // Snapshot carrying a media[] baseline: playing source at t=30.
+    transport.emit('ext:dom-snapshot', videoSnapshot({
+      media: [{ nid: '1', currentTime: 30, paused: false, playbackRate: 1, duration: 120 }],
+    }));
+    const iframe = env.document.querySelector('iframe');
+    // Glue: write the srcdoc, stub the freshly-parsed <video>, THEN fire load so
+    // the baseline applies against the stub.
+    const cd = iframe.contentDocument;
+    cd.open();
+    cd.write(iframe.getAttribute('srcdoc'));
+    cd.close();
+    const video = cd.querySelector('video');
+    const rec = stubMediaElement(env, video, { paused: true, readyState: 4, playReturns: 'undefined' });
+    iframe.dispatchEvent(new env.window.Event('load'));
+
+    assert.ok(rec.currentTimeSets.indexOf(30) !== -1, 'baseline currentTime applied on first bind (readyState-gated)');
+    assert.equal(rec.plays, 1, 'a playing baseline starts the element (muted-default ensurePlaying)');
+    assert.ok(rec.mutedSets.indexOf(true) !== -1, 'baseline play is muted-default');
+  } finally {
+    env.teardown();
+  }
+});
+
 test('the sandbox token stays exactly allow-same-origin (no allow-scripts/autoplay added)', async () => {
   const { createViewer } = await import(RENDERER_MODULE);
   const env = setupEnv();
