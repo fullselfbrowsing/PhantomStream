@@ -535,22 +535,22 @@ function ensurePlaying(el) {
 
 **These four assumptions need confirmation before they become locked decisions.** A1 is the only one with real correctness weight and is UAT-gated.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Does the `allow-same-origin`-only sandbox block muted programmatic autoplay?**
    - What we know: Muted autoplay is "always allowed" in the top frame and same-origin iframes; `allow="autoplay"` governs *unmuted* cross-origin delegation [CITED: developer.chrome.com/blog/autoplay]. The srcdoc iframe is same-origin (about:srcdoc inherits the embedder origin) but sandboxed.
    - What's unclear: Whether the *sandbox* attribute (without an autoplay token) independently suppresses even muted programmatic autoplay. Chrome/MDN docs do not address the sandbox×autoplay interaction.
-   - Recommendation: **Playwright UAT** — load a muted `<video>` in an `allow-same-origin` srcdoc iframe, call `.play()` from the parent, assert it plays (or rejects). The muted-default + affordance design is correct regardless; this only determines whether the affordance is needed on the happy path. Plan a UAT task; do not block the phase on it.
+   - Recommendation: **Playwright UAT** — load a muted `<video>` in an `allow-same-origin` srcdoc iframe, call `.play()` from the parent, assert it plays (or rejects). The muted-default + affordance design is correct regardless; this only determines whether the affordance is needed on the happy path. Plan a UAT task; do not block the phase on it. **RESOLVED:** muted-default + click-to-play affordance ship unconditionally (correct whether or not the sandbox suppresses muted autoplay); the real-Chrome muted-autoplay assertion is a DEFERRED Playwright UAT (Plan does not block on it, matching the Phase 12-03 UAT-deferral precedent).
 
 2. **Cross-browser `play()` rejection name consistency.**
    - What we know: Chrome and Firefox reject with `NotAllowedError`; the recommended check is `err.name === 'NotAllowedError'` [CITED: MDN]. Firefox has a historical bug where `play()` can stay pending forever when a tab is backgrounded [CITED: bugzilla.mozilla.org/show_bug.cgi?id=1442186].
    - What's unclear: Safari's exact rejection name/timing (project targets Chromium-first per REQUIREMENTS Out-of-Scope, so this is low priority).
-   - Recommendation: Branch on `err.name === 'NotAllowedError'` and treat any other rejection as a load error (fall through to the Phase 12 placeholder path). Add a timeout fallback so a never-resolving `play()` promise still surfaces the affordance. Chromium-first scope makes Safari deferrable.
+   - Recommendation: Branch on `err.name === 'NotAllowedError'` and treat any other rejection as a load error (fall through to the Phase 12 placeholder path). Add a timeout fallback so a never-resolving `play()` promise still surfaces the affordance. Chromium-first scope makes Safari deferrable. **RESOLVED:** branch on `err.name === 'NotAllowedError'` (Plan 03 Task 3 `ensurePlaying`); any other rejection falls through to the Phase 12 load-error placeholder. Chromium-first scope makes Safari deferrable.
 
 3. **Should `mediaMode: 'poster'` bind `<source>`/`src` at all?**
    - What we know: UI-SPEC State C says poster mode shows the poster only, "source not bound, autoplay disabled."
    - What's unclear: Whether the renderer should strip `src`/`<source>` from the in-iframe element (to guarantee no media GET) or merely not call `.play()`. Stripping is safer (no media byte fetch at all) and aligns with `mediaMode` as a *fetch posture*, not just a playback toggle.
-   - Recommendation: In `poster` mode, the string-layer gate should neutralize `<video src>`/`<source src>` (keep `poster`), guaranteeing zero media-byte fetch — consistent with `gateAssetUrl`'s `'poster'` posture (`src/renderer/index.js:148-150`). The planner should make this explicit.
+   - Recommendation: In `poster` mode, the string-layer gate should neutralize `<video src>`/`<source src>` (keep `poster`), guaranteeing zero media-byte fetch — consistent with `gateAssetUrl`'s `'poster'` posture (`src/renderer/index.js:148-150`). The planner should make this explicit. **RESOLVED:** in `poster` mode the string-layer gate neutralizes `<video src>`/`<source src>` while keeping `poster` (zero media-byte fetch), wired in Plan 03 Tasks 1 + 3 (Task 1 gateSnapshotAssets/gateFragmentAssets neutralization; Task 3 binds no source and runs no driver in poster posture).
 
 ## Environment Availability
 
