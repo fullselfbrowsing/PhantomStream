@@ -101,6 +101,14 @@
     "publint": "^0.3.21",
     "typescript": "^6.0.3"
   },
+  "peerDependencies": {
+    "hls.js": ">=1.5.0"
+  },
+  "peerDependenciesMeta": {
+    "hls.js": {
+      "optional": true
+    }
+  },
   "dependencies": {
     "ws": "8.21.0"
   }
