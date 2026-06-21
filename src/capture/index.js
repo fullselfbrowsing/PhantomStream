@@ -2768,6 +2768,13 @@ export function createCapture(config) {
       next.styleSources = next.styleSources.slice();
     }
 
+    // media[] (MEDIA-02) addresses nodes by nid; truncation can drop those nodes
+    // from the clone. Copy the array so the prune below never mutates the
+    // caller's baseline. Only present when the page had <video>/<audio>.
+    if (Array.isArray(next.media)) {
+      next.media = next.media.slice();
+    }
+
     while (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.inlineStyles.length) {
       next.inlineStyles.pop();
       markSnapshotPayloadTruncated(next);
@@ -2817,6 +2824,12 @@ export function createCapture(config) {
           next.nodeIds = buildNodeIdSidecar(clone, cloneToNid, false);
           next.shadowRoots = collectShadowRootPayloads(document.body, next.nodeIds, truncatedNodeIds);
           next.frames = collectFramePayloads(document.body, cloneToNid, truncatedNodeIds);
+          // WR-02: a dropped <video>/<audio> subtree leaves a media[] baseline
+          // entry that addresses a nid no longer in nodeIds. Re-derive media[]
+          // against the freshly rebuilt sidecar so the baseline can never
+          // reference a truncated node (and dead entries stop counting toward
+          // the cap).
+          pruneMediaToNodeIds(next);
           next.missingDescendants = (next.missingDescendants || 0) + 1;
           markSnapshotPayloadTruncated(next);
         }
@@ -2837,11 +2850,38 @@ export function createCapture(config) {
       next.bodyStyle = '';
       next.title = '';
       next.url = '';
+      // WR-02: the hard reset empties every nid-addressed field; media[] must go
+      // with them or an emptied snapshot would still ship a baseline that
+      // addresses nodes nodeIds (now []) no longer contains. pruneMediaToNodeIds
+      // filters against the now-empty sidecar, so media[] becomes [] (or stays
+      // absent when the page had no media).
+      pruneMediaToNodeIds(next);
       next.missingDescendants = (next.missingDescendants || 0) + 1;
       markSnapshotPayloadTruncated(next);
     }
 
     return next;
+  }
+
+  /**
+   * Prune a budget-fitted snapshot payload's media[] baseline to entries whose
+   * nid is still present in the payload's nodeIds sidecar (WR-02). Truncation
+   * (clone-subtree drop or the over-cap hard reset) re-derives nodeIds but the
+   * media[] array is independent, so without this an entry can address a node
+   * the snapshot no longer carries. No-op when media[] is absent (the common
+   * media-free page -- the field stays unset, preserving wire byte-identity).
+   * Compares String(nid) because ensureNodeId stamps string nids and nodeIds
+   * holds those same strings (renderer applyMediaBaseline also keys on String).
+   * @param {Object} payload The mutable budget-fitted payload (next).
+   */
+  function pruneMediaToNodeIds(payload) {
+    if (!payload || !Array.isArray(payload.media)) return;
+    var ids = Array.isArray(payload.nodeIds) ? payload.nodeIds : [];
+    var live = new Set();
+    for (var i = 0; i < ids.length; i++) live.add(String(ids[i]));
+    payload.media = payload.media.filter(function (m) {
+      return m && live.has(String(m.nid));
+    });
   }
 
   // =========================================================================
@@ -3734,7 +3774,16 @@ export function createCapture(config) {
     if (trackedMedia.length > 0) {
       snapshotPayload.media = trackedMedia.map(buildMediaBaselineEntry);
     }
-    return fitSnapshotPayloadForBudget(snapshotPayload, clone, cloneToNid, truncatedNodeIds);
+    var fitted = fitSnapshotPayloadForBudget(snapshotPayload, clone, cloneToNid, truncatedNodeIds);
+    // WR-02: media[] is read from the LIVE DOM, so it carries an entry for a
+    // <video>/<audio> even when its clone subtree was dropped by ANY truncation
+    // pass -- the serializeDOM below-fold/over-cap pre-pass (above), the sidecar
+    // prune, the budget loop, or the over-cap hard reset. Reconcile media[]
+    // against the FINAL nodeIds here (the single point every pass funnels
+    // through) so the emitted baseline can never address a node nodeIds no
+    // longer contains. No-op for a media-free page (media stays absent).
+    pruneMediaToNodeIds(fitted);
+    return fitted;
   }
 
   // =========================================================================

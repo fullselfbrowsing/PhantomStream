@@ -248,3 +248,75 @@ test('oversized pages truncate whole subtrees within budget using one layout rea
     env.teardown();
   }
 });
+
+/** Define the playback-state props capture reads (jsdom leaves them undefined). */
+function stubMedia(el, state) {
+  for (const p of Object.keys(state)) {
+    let v = state[p];
+    Object.defineProperty(el, p, { configurable: true, get() { return v; }, set(n) { v = n; } });
+  }
+}
+
+/**
+ * Oversized fixture whose below-fold sections each wrap a <video>, so a dropped
+ * subtree removes a media-baselined nid from nodeIds. The above-fold content
+ * stays tiny so the truncation lands on the below-fold sections.
+ */
+function buildOversizedBodyHtmlWithMedia() {
+  const phrase = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod ';
+  const perSectionChars = Math.ceil(SNAPSHOT_BUDGET_BYTES * 0.5);
+  const paragraphText = phrase.repeat(Math.ceil(perSectionChars / phrase.length));
+  const belowFoldTops = [3000, 6000, 9000];
+  const sections = belowFoldTops.map((top, i) =>
+    '<section data-test-top="' + top + '">'
+      + '<video id="v' + i + '"></video>'
+      + '<p>' + paragraphText + '</p>'
+      + '</section>'
+  ).join('');
+  return '<div id="above-fold">visible content</div>' + sections;
+}
+
+test('WR-02: a truncated snapshot never ships a media[] entry whose nid left nodeIds', async () => {
+  const env = setupEnv(buildOversizedBodyHtmlWithMedia());
+  try {
+    env.window.Element.prototype.getBoundingClientRect = function () {
+      const top = Number(this.getAttribute && this.getAttribute('data-test-top')) || 0;
+      return { top, left: 0, width: 100, height: 50, right: 100, bottom: top + 50, x: 0, y: top };
+    };
+    const cutoff = env.window.innerHeight * TRUNCATION_VIEWPORT_MULTIPLIER;
+    assert.ok(cutoff < 3000, 'every below-fold <video> section sits past the viewport cutoff');
+
+    // Each below-fold <video> reports a finite duration so it builds a clean
+    // baseline entry (the LIVE element is read regardless of clone truncation).
+    for (const v of env.document.querySelectorAll('video')) {
+      stubMedia(v, { currentTime: 1, paused: true, muted: false, volume: 1, playbackRate: 1, loop: false, ended: false, duration: 60 });
+    }
+
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+
+    const snap = transport.sent.filter((m) => m.type === STREAM.SNAPSHOT)[0].payload;
+
+    // The page came in over budget: below-fold subtrees (which carry the
+    // <video> elements) were dropped.
+    assert.equal(snap.truncated, true, 'oversized page truncated');
+    assert.ok(snap.missingDescendants > 0, 'at least one below-fold subtree was dropped');
+
+    // THE invariant (WR-02): every media[] baseline nid must still be addressable
+    // in the emitted nodeIds sidecar -- a dropped <video> nid must not survive
+    // in media[]. Without the prune, the dropped sections' video nids would
+    // remain here while absent from nodeIds.
+    if (Array.isArray(snap.media)) {
+      const live = new Set(snap.nodeIds.map(String));
+      for (const m of snap.media) {
+        assert.ok(live.has(String(m.nid)), 'media baseline nid ' + m.nid + ' must be present in nodeIds');
+      }
+      // The fixture is engineered so at least one <video> subtree is dropped,
+      // so media[] must be strictly smaller than the three live elements.
+      assert.ok(snap.media.length < 3, 'at least one truncated <video> was pruned from media[]');
+    }
+  } finally {
+    env.teardown();
+  }
+});
