@@ -402,6 +402,64 @@ export function createViewer(options) {
         });
       }
     }
+    gateFragmentMedia(rootNode, ownerDoc);
+  }
+
+  /**
+   * Post-parse media-asset gate (Phase 13 defense-in-depth + poster-mode
+   * source neutralization). The STRING-layer gateSnapshotAssets is the
+   * authoritative pre-parse control (the parser fetches during parse); this
+   * pass covers the diff ADD/subtree inert-fragment path and re-asserts the
+   * posture on the parsed body. For each <video>/<audio>:
+   *   - gate src + poster; a blocked URL is removed (no fetchable attribute).
+   *   - mediaMode 'poster': strip src and every child <source src> so NO media
+   *     GET issues while the gated poster is kept (13-RESEARCH Open Q3).
+   * For each standalone <source>: gate src; blocked or poster-mode -> removed.
+   * @param {Node} rootNode
+   * @param {Document} ownerDoc
+   */
+  function gateFragmentMedia(rootNode, ownerDoc) {
+    var posterOnly = (mediaMode === 'poster');
+    var media = rootNode.querySelectorAll('video, audio');
+    for (var i = 0; i < media.length; i++) {
+      var el = media[i];
+      try {
+        var src = el.getAttribute('src');
+        if (src && (posterOnly || !gateAsset(src, 'media').allow)) {
+          el.removeAttribute('src');
+        }
+        var poster = el.getAttribute('poster');
+        if (poster && !gateAsset(poster, 'poster').allow) {
+          el.removeAttribute('poster');
+        }
+        // Child <source> elements bind the playable source; in poster mode or
+        // when blocked, neutralize their src so the element selects nothing.
+        var childSources = el.querySelectorAll('source');
+        for (var j = 0; j < childSources.length; j++) {
+          var cs = childSources[j];
+          var csSrc = cs.getAttribute('src');
+          if (csSrc && (posterOnly || !gateAsset(csSrc, 'media').allow)) {
+            cs.removeAttribute('src');
+          }
+        }
+      } catch (e) {
+        logger.warn('[Renderer] media gate pass failed for an element', {
+          error: e && e.message ? e.message : String(e)
+        });
+      }
+    }
+    // Standalone <source> (not under a video/audio we already walked, e.g. a
+    // detached fragment) -- gate defensively.
+    var looseSources = rootNode.querySelectorAll('source');
+    for (var k = 0; k < looseSources.length; k++) {
+      var ls = looseSources[k];
+      try {
+        var lsSrc = ls.getAttribute('src');
+        if (lsSrc && (posterOnly || !gateAsset(lsSrc, 'media').allow)) {
+          ls.removeAttribute('src');
+        }
+      } catch (e2) { /* contained: one bad node never aborts the pass */ }
+    }
   }
 
   // All DOM construction happens in the container's own document so the

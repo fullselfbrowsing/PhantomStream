@@ -51,7 +51,11 @@ test('output starts with the doctype+html shell and contains the charset meta', 
 // rationale clause: style-src gains http: https: so the external stylesheet
 // links the capture deliberately emits keep loading; script-blocking is
 // untouched -- default-src 'none' still governs scripts).
+// Phase 13 (MEDIA-01): media-src http: https: data: added (twin of img-src,
+// no blob: -- Phase 14). default-src 'none' and the absence of script-src are
+// untouched.
 const CSP_CONTENT = "default-src 'none'; img-src http: https: data:; "
+  + "media-src http: https: data:; "
   + "style-src http: https: 'unsafe-inline'; font-src http: https: data:";
 
 test('the exact adopted CSP meta is the FIRST element after <head>, before the charset meta', () => {
@@ -65,15 +69,13 @@ test('the exact adopted CSP meta is the FIRST element after <head>, before the c
   );
 });
 
-// Phase 12 (plan 12-01, ASST-05): CSP is CONFIRM-ONLY for static assets. The
-// existing img-src already covers every static image surface (<img>, srcset,
-// <picture>/<source>, SVG <image>, background-image, <video> poster), so this
-// phase adds NO directive -- it pins the shape so an accidental future widening
-// fails loudly. In particular: media-src is deferred to Phase 13 (when the real
-// <video>/<audio> element ships and actually needs it) and script-src must never
-// appear (default-src 'none' governs scripts; a script-src would be a sandbox
-// regression). CSP_META in src/renderer/snapshot.js stays byte-unchanged here.
-test('the srcdoc CSP allows images but blocks scripts and defers media-src (12-01, ASST-05)', () => {
+// Phase 13 (plan 13-03, MEDIA-01 / V14): media-src is now PRESENT (the real
+// <video>/<audio> element ships this phase and the viewer's browser must fetch
+// media bytes by reference). img-src is retained; default-src 'none' and the
+// absence of script-src are untouched; NO blob: is added (that is Phase 14's
+// MSE concern). This pins the Phase-13 shape so an accidental future widening
+// (blob:, script-src) fails loudly.
+test('the srcdoc CSP allows images + media by reference but blocks scripts (13-03, MEDIA-01)', () => {
   const html = buildSnapshotHtml(minimalPayload());
   // (i) images fetch by reference: img-src is present and scoped to http(s)+data:
   assert.ok(
@@ -90,11 +92,16 @@ test('the srcdoc CSP allows images but blocks scripts and defers media-src (12-0
     !html.includes('script-src'),
     'CSP has NO script-src (default-src none governs scripts; a script-src would regress the sandbox)'
   );
-  // (iv) media-src is intentionally absent -- proving the Phase-13 deferral is
-  // deliberate, not forgotten. Adding it here is forbidden (Phase 12 confirm-only).
+  // (iv) media-src is now present and scoped to http(s)+data: (Phase 13) so the
+  // viewer fetches <video>/<audio>/<source> bytes from the source origin.
   assert.ok(
-    !html.includes('media-src'),
-    'CSP has NO media-src yet -- the media-src directive is Phase 13, not Phase 12'
+    html.includes('media-src http: https: data:'),
+    'CSP adds media-src http: https: data: (Phase 13 by-reference media)'
+  );
+  // (v) media-src must NOT carry blob: this phase -- that is Phase 14's MSE add.
+  assert.ok(
+    !html.includes('blob:'),
+    'CSP has NO blob: yet -- blob: in media-src is Phase 14 (MSE), not Phase 13'
   );
 });
 

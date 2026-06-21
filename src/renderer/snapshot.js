@@ -77,9 +77,12 @@ import { scrubCssText, parseSrcsetCandidates } from './sanitize.js';
 // (review WR-01), so no `<img>` shape re-emits unmodified.
 
 /**
- * Find the index of the `>` that closes an `<img` start tag, honoring quoted
- * attribute values (a `>` inside `"..."`, `'...'`, or a backtick span does not
- * end the tag).
+ * Find the index of the `>` that closes a start tag, honoring quoted attribute
+ * values (a `>` inside `"..."`, `'...'`, or a backtick span does not end the
+ * tag). The scanner is tag-name agnostic -- it consumes from the index just
+ * past the matched opener token, so it serves `<img`, `<video`, and `<source`
+ * identically (Phase 13 generalized findImgTagEnd -> findTagEnd; no behavior
+ * change for the <img> path).
  *
  * Backtick handling (review WR-01): the backtick is NOT an HTML quote char, so
  * a real parser ends the tag at the FIRST `>` even when it sits inside a
@@ -91,10 +94,10 @@ import { scrubCssText, parseSrcsetCandidates } from './sanitize.js';
  * A genuine `>`-terminated tag a real browser would fetch from is found by the
  * `"`/`'` rules unchanged.
  * @param {string} html  The full markup.
- * @param {number} from  Index just past the `<img` token (the matched opener).
+ * @param {number} from  Index just past the opener token (the matched opener).
  * @returns {number} Index of the closing `>`, or -1 if none (unbalanced quote).
  */
-function findImgTagEnd(html, from) {
+function findTagEnd(html, from) {
   var quote = null; // null = outside a quoted value; else the open-quote char
   for (var i = from; i < html.length; i++) {
     var ch = html.charAt(i);
@@ -142,6 +145,10 @@ function attrsBlobIsUnreliable(attrs) {
 
 /** Match the START of an <img start tag only (`<img` + a name boundary). */
 var IMG_OPEN_RE = /<img\b/gi;
+/** Match the START of a <video start tag (`<video` + a name boundary). */
+var VIDEO_OPEN_RE = /<video\b/gi;
+/** Match the START of a <source start tag (`<source` + a name boundary). */
+var SOURCE_OPEN_RE = /<source\b/gi;
 /** Pull a double/single/unquoted attribute value out of an attrs blob. */
 function readTagAttr(attrs, name) {
   var re = new RegExp(name + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s"\'>]+))', 'i');
@@ -260,6 +267,62 @@ function gateOneImgTag(attrs, gate) {
 }
 
 /**
+ * Gate the bounded attribute blob of a single <video> or <source> start tag and
+ * return the replacement markup. Phase 13 (MEDIA-01 / V12 SSRF): a real
+ * browser's parser prefetches <video src>, <video poster>, and <source src>
+ * DURING srcdoc parse -- exactly like <img src> -- so any blocked fetchable URL
+ * here must be neutralized at the string layer before the parser sees it. If
+ * EITHER the `src` OR (for <video>) the `poster` is blocked, the whole tag is
+ * replaced by the dimensioned blocked-origin placeholder (no fetchable
+ * attribute emitted) -- the same fail-closed posture as the <img> path. The
+ * void <source> has no closing tag and no meaningful dimensions, but the
+ * placeholder <div> is inert and harmless inside a <video> (it is a non-source
+ * child, so the element simply has no selectable source -- zero media GET).
+ * @param {string} tagName  'video' or 'source' (re-emit token when allowed).
+ * @param {string} attrs    The attribute blob (already correctly bounded).
+ * @param {(url: string, kind: string) => { allow: boolean }} gate
+ * @returns {string}
+ */
+function gateOneMediaTag(tagName, attrs, gate) {
+  // Fail closed when the bounded blob is unreliable (review WR-01 parity): a
+  // backtick-unquoted value carrying `>` truncates the scanner boundary so a
+  // later src/poster is excluded from the gate. Neutralize the whole tag.
+  if (attrsBlobIsUnreliable(attrs)) {
+    return assetUnavailablePlaceholderTag(attrs);
+  }
+  var src = readTagAttr(attrs, 'src');
+  if (src) {
+    var srcVerdict = gate(src, tagName === 'source' ? 'media' : 'media');
+    if (!srcVerdict || !srcVerdict.allow) {
+      return assetUnavailablePlaceholderTag(attrs);
+    }
+  }
+  // <video poster> is a fetchable image; <source> has no poster.
+  if (tagName === 'video') {
+    var poster = readTagAttr(attrs, 'poster');
+    if (poster) {
+      var posterVerdict = gate(poster, 'poster');
+      if (!posterVerdict || !posterVerdict.allow) {
+        return assetUnavailablePlaceholderTag(attrs);
+      }
+    }
+  }
+  return '<' + tagName + nextSelfClose(attrs);
+}
+
+/**
+ * Re-emit the bounded attribute blob and closing `>` for an allowed media tag.
+ * The blob is re-emitted verbatim (a trailing self-closing `/` is preserved by
+ * appending it before `>`), so an allowed <video>/<source> is byte-identical to
+ * its input. Kept tiny and separate so the gate's re-emit path is explicit.
+ * @param {string} attrs
+ * @returns {string}
+ */
+function nextSelfClose(attrs) {
+  return attrs + '>';
+}
+
+/**
  * Rewrite fetchable <img> assets in a raw snapshot HTML string against an
  * injected pre-write fetch gate (MSEC-01) and apply the ASST-03 currentSrc
  * pin. For each <img>:
@@ -272,16 +335,24 @@ function gateOneImgTag(attrs, gate) {
  *      remains) so the parser never sees a fetchable blocked URL.
  * An <img> with no src/currentsrc/srcset is left untouched.
  *
- * QUOTE-AWARE TAG SCAN (review CR-02): the start tag is located with a
- * quote-aware scanner (findImgTagEnd), NOT a `[^>]*` regex -- a `>` inside a
+ * QUOTE-AWARE TAG SCAN (review CR-02): every start tag is located with a
+ * quote-aware scanner (findTagEnd), NOT a `[^>]*` regex -- a `>` inside a
  * quoted attribute value (`alt="a>b"`) does not terminate the tag, so a
  * blocked `src` after such a `>` can no longer slip through unmodified. An
- * `<img` opener whose tag end cannot be located (an unbalanced quote running
- * to EOF) is FAILED CLOSED: it is replaced by the dimensioned placeholder
- * rather than passed through, so a malformed shape can never emit a fetchable
- * blocked URL. The gate is fail-closed by construction (createViewer's
- * gateAssetUrl); a missing gate leaves the markup unchanged (no-op) so this
- * stays a pure string transform.
+ * opener whose tag end cannot be located (an unbalanced quote running to EOF)
+ * is FAILED CLOSED: it is replaced by the dimensioned placeholder rather than
+ * passed through, so a malformed shape can never emit a fetchable blocked URL.
+ * The gate is fail-closed by construction (createViewer's gateAssetUrl); a
+ * missing gate leaves the markup unchanged (no-op) so this stays a pure string
+ * transform.
+ *
+ * PHASE 13 MEDIA GENERALIZATION (MEDIA-01 / V12): the scan now covers <img>
+ * (src/srcset + currentSrc pin), <video> (src + poster), and <source> (src) in
+ * ONE left-to-right pass -- at each cursor it advances to the nearest of the
+ * three openers and gates that tag, so a blocked media URL is neutralized at
+ * the string layer BEFORE the srcdoc parser can prefetch it (13-RESEARCH
+ * Pitfall 5). Nesting (<source> inside <video>) is handled naturally: the
+ * openers are independent matches, so each is gated on its own.
  * @param {string} html  Raw payload.html (string layer, pre-srcdoc).
  * @param {(url: string, kind: string) => { allow: boolean }} gate
  * @returns {string}
@@ -291,14 +362,17 @@ export function gateSnapshotAssets(html, gate) {
   if (typeof gate !== 'function') return html;
   var out = '';
   var cursor = 0; // index of the next un-copied char in html
-  IMG_OPEN_RE.lastIndex = 0;
-  var open;
-  while ((open = IMG_OPEN_RE.exec(html)) !== null) {
-    var tagStart = open.index;          // index of '<' in '<img'
-    var attrsStart = IMG_OPEN_RE.lastIndex; // index just past '<img'
+  while (cursor < html.length) {
+    // Find the nearest of the three openers at or after the cursor.
+    var next = nextAssetOpener(html, cursor);
+    if (!next) {
+      break; // no more asset openers
+    }
+    var tagStart = next.index;          // index of '<' in the opener
+    var attrsStart = next.attrsStart;   // index just past the opener token
     // Copy everything before this opener verbatim.
     out += html.slice(cursor, tagStart);
-    var tagEnd = findImgTagEnd(html, attrsStart); // quote-aware
+    var tagEnd = findTagEnd(html, attrsStart); // quote-aware
     if (tagEnd === -1) {
       // Unbalanced quote: the tag never closes. Fail closed -- emit a
       // placeholder for the remainder so no fetchable blocked URL survives,
@@ -310,13 +384,44 @@ export function gateSnapshotAssets(html, gate) {
     var attrs = html.slice(attrsStart, tagEnd); // bounded attribute blob
     // A self-closing '/' just before '>' is part of the blob; the helpers
     // tolerate a trailing '/' (it is not a quote/value char), and re-emitting
-    // '<img' + attrs + '>' preserves it.
-    out += gateOneImgTag(attrs, gate);
+    // the opener token + attrs + '>' preserves it.
+    if (next.tag === 'img') {
+      out += gateOneImgTag(attrs, gate);
+    } else {
+      out += gateOneMediaTag(next.tag, attrs, gate);
+    }
     cursor = tagEnd + 1; // resume just past this tag's '>'
-    IMG_OPEN_RE.lastIndex = cursor;     // continue scanning after the real end
   }
   out += html.slice(cursor);
   return out;
+}
+
+/**
+ * Find the nearest <img>/<video>/<source> start-tag opener at or after `from`.
+ * Returns { index, attrsStart, tag } for the earliest match, or null when none
+ * remains. Each regex is reset and seeked from `from` so the scan is
+ * cursor-driven (the unified gateSnapshotAssets loop owns the cursor; we do not
+ * rely on a single regex's stateful lastIndex across heterogeneous tags).
+ * @param {string} html
+ * @param {number} from
+ * @returns {?{index: number, attrsStart: number, tag: string}}
+ */
+function nextAssetOpener(html, from) {
+  var best = null;
+  var specs = [
+    { re: IMG_OPEN_RE, tag: 'img' },
+    { re: VIDEO_OPEN_RE, tag: 'video' },
+    { re: SOURCE_OPEN_RE, tag: 'source' }
+  ];
+  for (var i = 0; i < specs.length; i++) {
+    var re = specs[i].re;
+    re.lastIndex = from;
+    var m = re.exec(html);
+    if (m && (best === null || m.index < best.index)) {
+      best = { index: m.index, attrsStart: re.lastIndex, tag: specs[i].tag };
+    }
+  }
+  return best;
 }
 
 // The ADOPTED srcdoc CSP (backstop behind both sanitization chokepoints,
@@ -333,9 +438,17 @@ export function gateSnapshotAssets(html, gate) {
 // (03-RESEARCH Pitfall 8); the iframe-level sandbox attribute asserted in
 // createViewer is the analogous control. Documented in docs/SECURITY.md
 // (plan 03-05).
+// Phase 13 (MEDIA-01/V14): media-src is the twin of img-src, added so the
+// viewer's browser may fetch <video>/<audio>/<source> bytes from the source
+// origin (the by-reference media model). NO `blob:` this phase -- that is
+// Phase 14's MSE concern; `data:` is for small poster data URIs only (media
+// bytes are never inlined). default-src 'none' and the absence of script-src
+// are untouched (the string-layer gateSnapshotAssets is the primary control;
+// CSP is the backstop -- 13-RESEARCH V14).
 var CSP_META = '<meta http-equiv="Content-Security-Policy" content="'
   + "default-src 'none'; "
   + 'img-src http: https: data:; '
+  + 'media-src http: https: data:; '
   + "style-src http: https: 'unsafe-inline'; "
   + 'font-src http: https: data:'
   + '">';
