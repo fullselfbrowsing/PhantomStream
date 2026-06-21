@@ -661,6 +661,68 @@ export const DIVERGENCES = [
     },
   },
   {
+    id: 'D27-media-playback-sync',
+    kind: 'mismatch',
+    description:
+      'Phase 13 media-by-reference playback sync: the extracted core enriches the '
+      + 'SNAPSHOT with a media[] baseline array (one entry per live <video>/<audio>, '
+      + 'each carrying currentTime/paused/muted/volume/playbackRate/loop/'
+      + 'duration|live/ended keyed by nid) and emits STREAM.MEDIA side-channel '
+      + 'messages for play/pause/seeked/ratechange/ended/volumechange/loadedmetadata '
+      + 'plus a throttled playing-only timeupdate heartbeat. The FSB reference '
+      + '(reference/extension/dom-stream.js) tracks no media at all -- it has neither '
+      + 'a media[] snapshot field nor a STREAM.MEDIA op -- so the media-playback-sync '
+      + 'fixture diverges as a media[]-only SNAPSHOT plus extracted-only trailing '
+      + 'STREAM.MEDIA messages.',
+    rationale:
+      'MEDIA-02/MWIRE-01 (13-CONTEXT locked): media playback state travels as '
+      + 'side-channel data keyed by nid (the DIFF_OP.VALUE precedent), never baked '
+      + 'into the serialized HTML clone -- preserving the differential-oracle HTML '
+      + 'byte-identity and the Phase 7 capture-no-mutation invariant. The reference '
+      + 'emits no media surface, so both the media[] baseline (MEDIA-02) and the '
+      + 'STREAM.MEDIA channel (MWIRE-01) are intentional extracted-only divergences. '
+      + '(MEDIA-03, the pure drift reconciler, is exercised by Plan 01\'s reconciler '
+      + 'unit tests, NOT this oracle divergence -- the reconciler runs renderer-side '
+      + 'and produces no wire message.) Both shapes ride the one media-playback-sync '
+      + 'fixture, so this single scenario-pinned predicate covers the combined '
+      + 'divergence (D26 single-predicate discipline: compareStreams returns the '
+      + 'first ledger match, so a second same-index entry could never fire and would '
+      + 'fail stale-entry detection). jsdom has no media timeline, so the scenario '
+      + 'injects deterministic paused=false/currentTime/finite-duration; the entry '
+      + 'only fires when the extracted stream carries the media surface the '
+      + 'reference does not.',
+    affectedMessages: [STREAM.SNAPSHOT, STREAM.MEDIA],
+    affectedScenarios: ['media-playback-sync'],
+    appliesTo(refMsg, extMsg, scenarioName) {
+      // The scenario guard is load-bearing (same discipline as D1/D6/D7/D26): a
+      // media-shaped divergence surfacing in any OTHER scenario must still
+      // hard-fail as UNDECLARED DIVERGENCE.
+      if (scenarioName !== 'media-playback-sync') return false;
+
+      // Shape A: extracted-only trailing STREAM.MEDIA message. The reference
+      // emits none, so the extracted stream is longer and these align against
+      // no reference counterpart (refMsg === undefined).
+      if (refMsg === undefined && extMsg !== undefined && extMsg.type === STREAM.MEDIA) {
+        return true;
+      }
+
+      // Shape B: same-index SNAPSHOT where only the extracted payload carries a
+      // non-empty media[] baseline. Both sides emit a snapshot; the extracted
+      // one is enriched with the media[] field the reference lacks. A trailing/
+      // missing message or a non-snapshot type is not this divergence.
+      if (refMsg !== undefined && extMsg !== undefined
+        && refMsg.type === STREAM.SNAPSHOT && extMsg.type === STREAM.SNAPSHOT) {
+        const extHasMedia = Array.isArray(extMsg.payload && extMsg.payload.media)
+          && extMsg.payload.media.length > 0;
+        const refHasMedia = Array.isArray(refMsg.payload && refMsg.payload.media)
+          && refMsg.payload.media.length > 0;
+        return extHasMedia && !refHasMedia;
+      }
+
+      return false;
+    },
+  },
+  {
     id: 'D2-envelope-shape',
     kind: 'documented-mapping',
     description:

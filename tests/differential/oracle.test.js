@@ -502,6 +502,65 @@ for (const entry of MATRIX) {
         /src="data:image\/png;base64,iVBORw0KGgo/,
         'extracted snapshot keeps the small inline data: image byte-identical'
       );
+    } else if (entry.scenario.name === 'media-playback-sync') {
+      // D27 territory (Phase 13): the extracted core enriches the SNAPSHOT with
+      // a nid-keyed media[] baseline (MEDIA-02) and emits STREAM.MEDIA side-
+      // channel messages on play/timeupdate (MWIRE-01). The reference tracks no
+      // media, so the SNAPSHOT diverges on media[] and the extracted stream
+      // carries extra trailing STREAM.MEDIA messages -- one scenario-pinned
+      // entry covers both shapes.
+      assert.ok(
+        matched.has('D27-media-playback-sync'),
+        'media-playback-sync exercises ledger entry D27'
+      );
+      assert.equal(
+        matched.size,
+        1,
+        `only D27 consulted in media-playback-sync (matched: ${[...matched].join(', ')})`
+      );
+
+      // Belt-and-braces, Shape B (media[]-only SNAPSHOT): the extracted snapshot
+      // carries a non-empty media[] baseline; the reference carries none -- the
+      // divergence direction is an extracted-only enrichment, not a reference
+      // behavior change the predicate happens to excuse.
+      const refSnap = refStream.find((msg) => msg.type === STREAM.SNAPSHOT);
+      const extSnap = extStream.find((msg) => msg.type === STREAM.SNAPSHOT);
+      assert.ok(refSnap && extSnap, 'both sides emit a snapshot');
+      assert.ok(
+        Array.isArray(extSnap.payload.media) && extSnap.payload.media.length >= 2,
+        'extracted snapshot carries a media[] baseline for the <video> and <audio>'
+      );
+      assert.ok(
+        !Array.isArray(refSnap.payload.media),
+        'reference snapshot carries no media[] field'
+      );
+      // The injected finite duration drives the VOD baseline shape (not live:true).
+      assert.ok(
+        extSnap.payload.media.every((m) => m.duration === 30 && m.paused === false && m.currentTime === 5),
+        'media[] entries carry the injected deterministic VOD playback state'
+      );
+
+      // Belt-and-braces, Shape A (extracted-only trailing STREAM.MEDIA): the
+      // reference emits zero media messages; the extracted side emits at least
+      // the discrete play plus the throttled timeupdate heartbeat.
+      assert.equal(
+        refStream.filter((msg) => msg.type === STREAM.MEDIA).length,
+        0,
+        'reference emits no STREAM.MEDIA messages'
+      );
+      const extMedia = extStream.filter((msg) => msg.type === STREAM.MEDIA);
+      assert.ok(
+        extMedia.length >= 2,
+        `extracted stream carries STREAM.MEDIA messages (got ${extMedia.length})`
+      );
+      assert.ok(
+        extMedia.some((msg) => msg.payload.event === 'play'),
+        'extracted stream carries the discrete play event'
+      );
+      assert.ok(
+        extMedia.some((msg) => msg.payload.event === 'timeupdate'),
+        'extracted stream carries the throttled timeupdate heartbeat'
+      );
     } else {
       // D1/D6/D7/D24 (and any future mismatch entry) must stay scoped:
       // every scenario other than the named divergence scenarios compares
@@ -636,6 +695,20 @@ test('static-assets with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D26 cur
   // above must fail loudly -- proving the clone-only data-ps-currentsrc pin and
   // the blob:/oversized-data: placeholder degrade are the thing permitting it,
   // not a comparison blind spot.
+  assert.throws(
+    () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
+    /UNDECLARED DIVERGENCE/
+  );
+});
+
+test('media-playback-sync with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D27 media[]/STREAM.MEDIA is load-bearing', async () => {
+  const entry = MATRIX.find((p) => p.scenario === mediaPlaybackSync);
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
+  // The divergence is REAL: without D27, the same stream pair that passes above
+  // must fail loudly -- proving the extracted-only media[] baseline and the
+  // STREAM.MEDIA side channel are the thing permitting it, not a comparison
+  // blind spot.
   assert.throws(
     () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
     /UNDECLARED DIVERGENCE/
