@@ -318,6 +318,50 @@ test('off-by-default: with NO masking config a token-bearing URL is emitted byte
 });
 
 // ===========================================================================
+// Task 3: off-by-default byte-identity gate -- the whole snapshot wire is
+// byte-identical with NO masking config, proving the masking spine adds ZERO
+// divergence off-by-default (the differential oracle stays 48/48, no new ledger
+// entry). A fixture carrying token-bearing asset AND media URLs is the worst
+// case; if any masking code path leaked into the default path it would surface
+// here as an html-string divergence (most likely a URL.toString() normalization
+// per Pitfall 1).
+// ===========================================================================
+
+const MULTI_URL_FIXTURE = '<div id="root">'
+  + `<img id="img" src="${AWS_SIGV4}" srcset="${GCP_SIGNED} 2x">`
+  + `<video id="vid" src="${AZURE_SAS}" poster="${GENERIC}"></video>`
+  + '<a id="lnk" href="https://cdn.example.com/page?token=secrettoken&id=9">link</a>'
+  + '</div>';
+
+test('Task 3: off-by-default -- the entire snapshot html is byte-identical with no masking config (oracle-safe; token URLs survive intact)', async () => {
+  // Capture the SAME fixture twice with no masking config; the html must be
+  // byte-identical run-to-run AND must still carry the token params verbatim
+  // (proving the default path neither strips nor normalizes any URL).
+  const envA = setupEnv(MULTI_URL_FIXTURE);
+  let htmlA;
+  try {
+    const { payload } = await captureSnapshot(envA, {});
+    htmlA = payload.html;
+  } finally {
+    envA.teardown();
+  }
+
+  const envB = setupEnv(MULTI_URL_FIXTURE);
+  try {
+    const { payload } = await captureSnapshot(envB, {});
+    const htmlB = payload.html;
+    assert.equal(htmlB, htmlA, 'the off-by-default snapshot html is deterministic and byte-identical');
+    // The token-bearing params survive verbatim off-by-default (no strip).
+    assert.ok(htmlB.indexOf('X-Amz-Signature=deadbeef') !== -1, 'AWS SigV4 token survives off-by-default');
+    assert.ok(htmlB.indexOf('X-Goog-Signature=cafe') !== -1, 'GCP signed-URL token (in srcset) survives off-by-default');
+    assert.ok(htmlB.indexOf('sig=Zm9v') !== -1, 'Azure SAS token survives off-by-default');
+    assert.ok(htmlB.indexOf('token=secrettoken') !== -1, 'generic token survives off-by-default');
+  } finally {
+    envB.teardown();
+  }
+});
+
+// ===========================================================================
 // maskAssetUrlFn: string replaces / null blocks / throw -> fail-closed block
 // ===========================================================================
 
