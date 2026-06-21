@@ -236,6 +236,26 @@ export function createPlaywrightAdapter(options) {
     }
   }
 
+  // Resolve the initiating frame of a Playwright Response, tolerant of API
+  // shape. Modern Playwright exposes response.frame() directly; older builds
+  // and the minimal test mock expose it via response.request().frame(). Returns
+  // null when no frame info is available so the caller degrades to "accept"
+  // (parity with isMainFrame(null) === true).
+  function responseFrame(response) {
+    try {
+      if (response && typeof response.frame === 'function') {
+        return response.frame() || null;
+      }
+    } catch (e) { /* fall through to the request() path */ }
+    try {
+      if (response && typeof response.request === 'function') {
+        var req = response.request();
+        if (req && typeof req.frame === 'function') return req.frame() || null;
+      }
+    } catch (e) { /* frame info unavailable */ }
+    return null;
+  }
+
   // Best-effort manifest observation. Reads the response url + content-type,
   // classifies via the pure classifyManifest filter, and on a non-null kind
   // emits STREAM.MEDIA_HINT through the same transport.send path the bridge
@@ -244,6 +264,11 @@ export function createPlaywrightAdapter(options) {
     if (disposed || !discoverManifests) return;
     try {
       if (!response || typeof response.url !== 'function') return;
+      // Main-frame-only, parity with bindingCallback's isMainFrame check: a
+      // cross-origin sub-frame must not steer the top page's player. When frame
+      // info is unavailable, isMainFrame(null) === true (degrade to accept).
+      var frame = responseFrame(response);
+      if (frame && !isMainFrame(frame)) return;
       var url = response.url();
       var contentType = '';
       if (typeof response.headers === 'function') {
@@ -259,13 +284,38 @@ export function createPlaywrightAdapter(options) {
     }
   }
 
-  // CDP Network.responseReceived secondary path: { response: { url, headers,
-  // mimeType } }. Same opt-in, same classifier, same emission as the page hook.
+  // The main frame's CDP frameId, learned opportunistically from
+  // Page.frameNavigated (the top-level frame has no parentId). Until known, the
+  // CDP manifest path degrades to "accept" (parity with the Playwright path when
+  // frame info is unavailable). Once known, a responseReceived carrying a
+  // different frameId is a sub-frame fetch and is ignored.
+  var mainCdpFrameId = null;
+
+  function observeCDPFrameNavigated(event) {
+    try {
+      var frame = event && event.frame;
+      if (!frame || typeof frame.id !== 'string') return;
+      // The top-level frame is the one without a parentId.
+      if (!frame.parentId) mainCdpFrameId = frame.id;
+    } catch (e) { /* contained -- frame tracking is best-effort */ }
+  }
+
+  // CDP Network.responseReceived secondary path: { frameId, response: { url,
+  // headers, mimeType, frameId? } }. Same opt-in, same classifier, same
+  // emission as the page hook, with the analogous main-frame scope: drop a
+  // response whose CDP frameId is a known non-main frame.
   function handleCDPResponseReceived(event) {
     if (disposed || !discoverManifests) return;
     try {
       var resp = event && event.response;
       if (!resp || typeof resp.url !== 'string') return;
+      // Main-frame-only when both ids are known. The frameId rides the event
+      // (and sometimes the response); accept when either is unknown.
+      if (mainCdpFrameId) {
+        var frameId = (event && typeof event.frameId === 'string') ? event.frameId
+          : (typeof resp.frameId === 'string' ? resp.frameId : null);
+        if (frameId && frameId !== mainCdpFrameId) return;
+      }
       var headers = resp.headers || {};
       var contentType = headers['content-type'] || headers['Content-Type']
         || (typeof resp.mimeType === 'string' ? resp.mimeType : '');
@@ -407,7 +457,9 @@ export function createPlaywrightAdapter(options) {
       if (discoverManifests) {
         addPageListener('response', handleManifestResponse);
         if (session && typeof session.on === 'function') {
-          // CDP secondary path (same opt-in, same filter + emission).
+          // CDP secondary path (same opt-in, same filter + emission). Track the
+          // main frame's CDP id so the response path can scope to it.
+          session.on('Page.frameNavigated', observeCDPFrameNavigated);
           session.on('Network.responseReceived', handleCDPResponseReceived);
         }
       }

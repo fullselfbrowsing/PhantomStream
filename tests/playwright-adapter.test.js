@@ -632,6 +632,34 @@ test('opt-in hint carries the most recently forwarded stream identity', async ()
   assert.equal(hint.snapshotId, 909);
 });
 
+test('opt-in ignores a manifest response from a cross-origin sub-frame (main-frame scope, parity with bindingCallback)', async () => {
+  const page = createFakePage();
+  const transport = createRecordingTransport();
+  const adapter = createPlaywrightAdapter({ page, transport, discoverManifests: true });
+  await adapter.install();
+
+  // A response initiated by a child frame must NOT produce a hint -- a sub-frame
+  // (e.g. an ad iframe) cannot steer the top page's player.
+  page.emit('response', fakeResponse('https://evil.test/sub/master.m3u8', undefined, page.childFrameValue));
+  await tick();
+  assert.equal(transport.sent.some((entry) => entry.type === STREAM.MEDIA_HINT), false,
+    'a sub-frame manifest response is dropped');
+
+  // The same manifest from the main frame IS observed (scope is main-frame, not
+  // origin -- the viewer re-gate remains the origin defense).
+  page.emit('response', fakeResponse('https://cdn.test/main/master.m3u8', undefined, page.mainFrameValue));
+  await tick();
+  const hint = lastHint(transport);
+  assert.ok(hint, 'a main-frame manifest response is observed');
+  assert.equal(hint.manifestUrl, 'https://cdn.test/main/master.m3u8');
+
+  // Frame info absent -> degrade to accept (a minimal mock / older Playwright).
+  page.emit('response', fakeResponse('https://cdn.test/nf/master.m3u8'));
+  await tick();
+  assert.equal(lastHint(transport).manifestUrl, 'https://cdn.test/nf/master.m3u8',
+    'no frame info -> accept (degrade to the prior behavior)');
+});
+
 test('opt-in is graceful when the page cannot register listeners', async () => {
   const page = createFakePage();
   page.on = undefined; // addPageListener returns early when page.on is absent
