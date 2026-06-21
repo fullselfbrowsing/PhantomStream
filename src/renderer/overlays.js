@@ -195,6 +195,21 @@ export var OVERLAY_CSS = [
   '  padding: 4px 12px;',
   '  border-radius: 6px;',
   '  pointer-events: none;',
+  '}',
+  // Phase 14 (MADPT-03): the degrade-reason caption -- a passive clone of the
+  // poster caption (same parity values), NO accent. Reason rides a data-
+  // attribute (set via setAttribute), never the visible caption.
+  '.ps-overlay-media-unavailable {',
+  '  position: absolute;',
+  '  display: inline-flex; align-items: center;',
+  '  background: rgba(0, 0, 0, 0.75);',
+  '  backdrop-filter: blur(4px);',
+  '  -webkit-backdrop-filter: blur(4px);',
+  '  color: #e0e0e0;',
+  '  font: 600 13px/1.2 system-ui, sans-serif;',
+  '  padding: 4px 12px;',
+  '  border-radius: 6px;',
+  '  pointer-events: none;',
   '}'
 ].join('\n');
 
@@ -540,6 +555,7 @@ export function createOverlays(opts) {
   var mediaUnmuteEl = null;
   var mediaUnmuteActivate = null;
   var mediaPosterEl = null;
+  var mediaUnavailableEl = null; // Phase 14: the degrade-reason caption
 
   /**
    * Invoke a stored onActivate callback in containment -- a throwing host
@@ -682,9 +698,49 @@ export function createOverlays(opts) {
     mediaPosterEl.style.display = 'inline-flex';
   }
 
+  /**
+   * Phase 14 (MADPT-03) -- the degrade-reason caption. A passive near-clone of
+   * renderMediaPoster: a centered caption "Media unavailable" via textContent,
+   * pointer-events none, no accent, no activation. The four reason codes
+   * (no-manifest/no-player/mse-opaque/drm) ride a data- attribute set via
+   * setAttribute (diagnostic only -- NEVER interpolated into markup, so the
+   * innerHTML sink allowlist is unchanged; T-14-09). Null hides (universal
+   * reset). Shown by media-player.js's degrade(nid, reason) sink.
+   * @param {?Object} value  { nid?, reason? } or null
+   * @param {?Object} anchorRect
+   */
+  function renderMediaUnavailable(value, anchorRect) {
+    if (!value) {
+      if (mediaUnavailableEl) mediaUnavailableEl.style.display = 'none';
+      return;
+    }
+    if (!mediaUnavailableEl) {
+      mediaUnavailableEl = doc.createElement('div');
+      mediaUnavailableEl.className = 'ps-overlay-media-unavailable';
+      mediaUnavailableEl.style.zIndex = '24';
+      mediaUnavailableEl.style.pointerEvents = 'none';
+      mediaUnavailableEl.textContent = 'Media unavailable'; // textContent only
+      layer.appendChild(mediaUnavailableEl);
+    }
+    // The reason is a diagnostic attribute value, never user-facing markup.
+    if (value.reason !== undefined && value.reason !== null) {
+      mediaUnavailableEl.setAttribute('data-ps-reason', String(value.reason));
+    } else {
+      mediaUnavailableEl.removeAttribute('data-ps-reason');
+    }
+    // Centered in the rect (same math as the poster caption).
+    if (anchorRect) {
+      mediaUnavailableEl.style.left = (anchorRect.left + anchorRect.width / 2) + 'px';
+      mediaUnavailableEl.style.top = (anchorRect.top + anchorRect.height / 2) + 'px';
+      mediaUnavailableEl.style.transform = 'translate(-50%, -50%)';
+    }
+    mediaUnavailableEl.style.display = 'inline-flex';
+  }
+
   register('media-blocked', renderMediaBlocked);
   register('media-unmute', renderMediaUnmute);
   register('media-poster', renderMediaPoster);
+  register('media-unavailable', renderMediaUnavailable);
 
   /**
    * Drive a registered overlay kind directly from renderer state (NOT a wire

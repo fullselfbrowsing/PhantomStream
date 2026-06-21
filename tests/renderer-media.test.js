@@ -187,6 +187,90 @@ test('OVERLAY_CSS carries the ps-overlay-media-* parity values', async () => {
   assert.ok(OVERLAY_CSS.indexOf('rgba(245, 158, 11, 0.6)') !== -1, 'glow parity shadow');
 });
 
+// ---------------------------------------------------------------------------
+// Phase 14 Plan 02 Task 2: the media-unavailable overlay (a passive clone of
+// renderMediaPoster -- the fourth media affordance, the degrade-reason caption).
+// ---------------------------------------------------------------------------
+
+test('media-unavailable renders a passive textContent caption (pointer-events none, not a button)', async () => {
+  const { createOverlays } = await import(OVERLAYS_MODULE);
+  const env = setupEnv();
+  try {
+    const o = createOverlays({ document: env.document, logger: recordingLogger().logger });
+    o.show('media-unavailable', { nid: '1', reason: 'no-player' }, { anchorRect: ANCHOR });
+    const cap = o.layer.querySelector('.ps-overlay-media-unavailable');
+    assert.ok(cap, 'a media-unavailable caption is rendered');
+    assert.equal(cap.style.pointerEvents, 'none', 'caption is passive (no pointer events)');
+    assert.equal(cap.getAttribute('role'), null, 'caption is not a button (no activation)');
+    assert.equal(cap.textContent, 'Media unavailable', 'the locked caption copy via textContent');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('media-unavailable exposes the reason via a data- attribute (setAttribute, NOT markup)', async () => {
+  const { createOverlays } = await import(OVERLAYS_MODULE);
+  const env = setupEnv();
+  try {
+    const o = createOverlays({ document: env.document, logger: recordingLogger().logger });
+    o.show('media-unavailable', { nid: '1', reason: 'drm' }, { anchorRect: ANCHOR });
+    const cap = o.layer.querySelector('.ps-overlay-media-unavailable');
+    assert.equal(cap.getAttribute('data-ps-reason'), 'drm', 'reason rides a data- attribute');
+    // textContent stays the static label -- the reason is diagnostic only, never user-facing markup.
+    assert.equal(cap.textContent, 'Media unavailable', 'reason is NOT interpolated into the visible caption');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('media-unavailable hides on a null payload (the universal reset contract)', async () => {
+  const { createOverlays } = await import(OVERLAYS_MODULE);
+  const env = setupEnv();
+  try {
+    const o = createOverlays({ document: env.document, logger: recordingLogger().logger });
+    o.show('media-unavailable', { nid: '1', reason: 'mse-opaque' }, { anchorRect: ANCHOR });
+    const cap = o.layer.querySelector('.ps-overlay-media-unavailable');
+    assert.notEqual(cap.style.display, 'none', 'caption is visible while shown');
+    o.show('media-unavailable', null);
+    assert.equal(cap.style.display, 'none', 'null payload hides the caption');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('media-unavailable: a hostile reason/nid sets only a data- attribute, writes NO payload-derived innerHTML', async () => {
+  const { createOverlays } = await import(OVERLAYS_MODULE);
+  const env = setupEnv();
+  try {
+    const o = createOverlays({ document: env.document, logger: recordingLogger().logger });
+    const hostile = '"><img src=x onerror=alert(1)><script>bad()</script>';
+    o.show('media-unavailable', { nid: hostile, reason: hostile }, { anchorRect: ANCHOR });
+    // No payload-derived markup is injected anywhere in the layer.
+    assert.equal(o.layer.querySelector('img'), null, 'no payload-derived <img> injected');
+    assert.equal(o.layer.querySelector('script'), null, 'no payload-derived <script> injected');
+    const cap = o.layer.querySelector('.ps-overlay-media-unavailable');
+    // The hostile string survives ONLY as the (inert) data- attribute value, set
+    // via setAttribute -- it is never parsed as markup.
+    assert.equal(cap.getAttribute('data-ps-reason'), hostile, 'hostile reason is an inert attribute value');
+    assert.equal(cap.innerHTML.indexOf('onerror'), -1, 'no hostile string reaches the caption innerHTML');
+    assert.equal(cap.innerHTML.indexOf('<img'), -1, 'no <img> marker in the caption innerHTML');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('OVERLAY_CSS carries the ps-overlay-media-unavailable parity rule (no accent)', async () => {
+  const { OVERLAY_CSS } = await import(OVERLAYS_MODULE);
+  assert.ok(OVERLAY_CSS.indexOf('ps-overlay-media-unavailable') !== -1, 'media-unavailable caption CSS present');
+  // It reuses the poster caption parity values: scrim pill rgba(0,0,0,0.75),
+  // #e0e0e0 text, system-ui 600 13/1.2 -- and carries NO amber accent of its own.
+  const block = OVERLAY_CSS.slice(OVERLAY_CSS.indexOf('.ps-overlay-media-unavailable'));
+  const rule = block.slice(0, block.indexOf('}') + 1);
+  assert.ok(rule.indexOf('rgba(0, 0, 0, 0.75)') !== -1, 'reuses the poster-caption scrim color');
+  assert.ok(rule.indexOf('#e0e0e0') !== -1, 'reuses the #e0e0e0 caption text color');
+  assert.ok(rule.indexOf('#f59e0b') === -1, 'no amber accent in the passive media-unavailable rule');
+});
+
 test('media affordances interpolate NO payload-derived string into markup (only static SVG innerHTML)', async () => {
   const { createOverlays } = await import(OVERLAYS_MODULE);
   const env = setupEnv();
