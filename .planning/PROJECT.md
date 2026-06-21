@@ -67,16 +67,13 @@ The evaluation harness and research paper are deferred to milestone v2.1.
 - ✓ Stylesheet-centric capture mode (CSSOM) — opt-in `styleMode: 'cssom'`, scoped `styleSources[]` / `styleStrategy`, live `DIFF_OP.STYLE_SOURCE` ops, fallback diagnostics, Playwright inject support, and D25 oracle coverage — Validated in Phase 9 (CAPT-10)
 - ✓ npm package published — `@full-self-browsing/phantom-stream@0.1.0` live on the public registry with ESM-only subpath exports, JSDoc-generated `.d.ts`, `publint`/`attw` clean, tarball-install smoke as CI gates, trusted-publishing workflow, and < 5-minute quickstarts — Validated in Phase 10 (PKG-03, PKG-04)
 - ✓ FSB swap-in → 1.0 — FSB runs on the published package as its streaming layer, verified end-to-end (live preview, remote control, watchdog/eviction recovery) with wire backward compatibility preserved; verification lives in the FSB repo — Validated in Phase 11 (FSB-01)
+- ✓ Static assets by reference — `<img>`/`srcset`/`<picture>`/`<source>`/SVG `<image>`/`background-image`/`<video>` poster resolve to absolute source URLs and render in the viewer by fetching from origin (no image bytes on the relay), `currentSrc`-pinned, with a fail-closed viewer-fetch origin policy, `mediaMode` switch, precise CSP, and placeholder degradation for non-shareable (`blob:`/oversized-`data:`) refs — Validated in Phase 12 (ASST-01..05, MSEC-01, MSEC-02)
+- ✓ Progressive `<video>`/`<audio>` playback + sync — media plays in the viewer from the source URL (no media bytes on the relay), driven cross-realm from the parent over a new throttled `STREAM.MEDIA` side channel with a pure drift reconciler (hold / ±5% rate-nudge / hard-seek / live rejoin-edge), muted-autoplay default + blocked-play & unmute affordances, `media-src` CSP + poster-mode string-layer SSRF gating, envelope/relay untouched and old viewers safely ignoring the new type — Validated in Phase 13 (MEDIA-01..05, MWIRE-01, MWIRE-02); real-browser playback UAT tracked in `13-HUMAN-UAT.md`
 
 ### Active
 
 <!-- Current scope (milestone v2.0 — Asset & Media Streaming). Building toward these. -->
-
-**Static assets by reference:**
-- [ ] Images/`srcset`/`<picture>`/`background-image`/poster mirror by absolute URL and render in the viewer from source; `currentSrc`-pinned; non-shareable refs (`blob:`/oversized `data:`) degrade to placeholder; viewer CSP opened precisely
-
-**Time-based media + sync:**
-- [ ] Progressive `<video>`/`<audio>` play in the viewer from the source URL with drift-corrected playback sync (play/pause/seek/rate) over a throttled `STREAM.MEDIA` side channel; autoplay-policy-correct
+<!-- Phases 12 (static assets) and 13 (progressive media + sync) complete → moved to Validated. -->
 
 **Adaptive + fallback:**
 - [ ] Best-effort HLS/DASH manifest mirroring via an optional, lazy, parent-realm player; adapter network-discovery of manifest URLs; MSE-without-manifest / DRM degrade to poster
@@ -173,4 +170,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-19 — milestone v1.0 closed (Phases 1–11: framework + npm publish + FSB swap-in); milestone v2.0 Asset & Media Streaming started; eval harness + paper deferred to v2.1*
+*Last updated: 2026-06-21 — milestone v2.0 in progress: Phase 12 (static assets by reference) and Phase 13 (progressive `<video>`/`<audio>` playback + `STREAM.MEDIA` sync) complete; Phases 14 (adaptive HLS/DASH) and 15 (media security/masking/threat-model/docs) remain. Real-browser media UAT for Phase 13 tracked in 13-HUMAN-UAT.md. Eval harness + paper deferred to v2.1.*
