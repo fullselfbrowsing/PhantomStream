@@ -388,7 +388,13 @@ Plans:
   2. The Playwright/CDP and extension adapters can surface manifest URLs not present as a plain element `src` (network observation), fed to the viewer as opt-in hints; absence of an adapter degrades gracefully to native-progressive-only with no errors
   3. Media that cannot be referenced (MSE/`blob:` without a discoverable manifest, DRM/EME) degrades to poster/placeholder with an observable, documented reason — the mirror never breaks
   4. Live streams (infinite/NaN duration) are handled — live-edge sync, no absolute seek
-**Plans**: TBD
+**Plans**: 5 plans (4 waves)
+Plans:
+- [ ] 14-01-PLAN.md — Protocol + filter spine: STREAM.MEDIA_HINT op + MediaHintPayload + pure classifyManifest + Wave 0 test scaffolds
+- [ ] 14-02-PLAN.md — Parent-realm media-player.js (native-HLS/playerFactory/lazy-hls/degrade) + media-unavailable overlay + media-src blob: CSP
+- [ ] 14-03-PLAN.md — Renderer wiring: STREAM.MEDIA_HINT dispatch + hint consumption + player teardown + live reuse + State-C media-poster wire
+- [ ] 14-04-PLAN.md — Adapter manifest discovery: opt-in Playwright page.on('response')/CDP + extension webRequest/debugger emitting hints
+- [ ] 14-05-PLAN.md — Packaging: optional hls.js peerDependency (never a hard dep) + zero-hard-dep package:smoke proof
 **UI hint**: yes
 **Research**: Likely needs `--research-phase 14` during planning — the only genuinely uncertain area. Cross-realm MSE binding (creating `MediaSource` in the parent and assigning its object URL to the in-iframe `<video>`), hls.js cross-realm `attachMedia(iframeEl)`, whether the child needs `connect-src`, and manifest→element correlation from CDP/`webRequest` initiator chains all warrant empirical Playwright validation.
 
@@ -443,5 +449,5 @@ Phases execute in numeric order. v1.0 (1–11) is complete. v2.0 active order: 1
 | 11. FSB Swap-In → 1.0 | — | Complete (verified in FSB repo) | 2026-06-16 |
 | 12. Static Assets by Reference | 3/3 | Complete   | 2026-06-20 |
 | 13. Video/Audio URL + Playback Sync | 4/4 | Complete    | 2026-06-21 |
-| 14. Adaptive Streaming + Adapter Discovery + Fallback | 0/TBD | Not started | - |
+| 14. Adaptive Streaming + Adapter Discovery + Fallback | 0/5 | Planned | - |
 | 15. Media Security, Masking, Threat Model & Docs | 0/TBD | Not started | - |
