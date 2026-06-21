@@ -889,6 +889,49 @@ test('STREAM.MEDIA_HINT with mismatched stream identity is dropped (no attach, s
   }
 });
 
+test('STREAM.MEDIA_HINT with empty identity is dropped before the first identity-bearing snapshot (WR-03 pre-snapshot window)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const pf = recordingPlayerFactory();
+    // The viewer streams off an EMPTY-identity snapshot: it is in the
+    // 'streaming' state but no generation is established yet (active
+    // streamSessionId === ''). An empty-identity hint must NOT be accepted here.
+    const ctx = streamingMediaViewerFactory(
+      createViewer, env,
+      { mediaMode: 'reference', allowAssetOrigins: ['cdn.example.test'], playerFactory: pf.factory },
+      { streamSessionId: '', snapshotId: 0 }
+    );
+    // An empty-identity PAGE hint arrives before any generation exists -> dropped
+    // (not stored), so it can never out-race the snapshot that defines its gen.
+    ctx.transport.emit('ext:dom-media-hint', {
+      scope: 'page', manifestUrl: HLS_MANIFEST, kind: 'hls',
+      // no streamSessionId / snapshotId
+    });
+    // An MSE-opaque element then plays: nothing is consumed (the hint was dropped).
+    stubMediaElement(env, ctx.video, { paused: false });
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 0, paused: false, playbackRate: 1, live: true, sentAt: Date.now(),
+      // empty identity matches the empty-identity snapshot
+    });
+    assert.equal(pf.calls.attaches.length, 0, 'an empty-identity hint in the pre-snapshot window is dropped, not consumed');
+
+    // Once an identity-bearing snapshot establishes a generation, an
+    // identity-stamped hint binds normally (the guard only governs the empty
+    // pre-snapshot window).
+    ctx.transport.emit('ext:dom-snapshot', videoSnapshot({ streamSessionId: 's1', snapshotId: 1 }));
+    const cd2 = glue(env, ctx.iframe);
+    const video2 = cd2.querySelector('video');
+    ctx.transport.emit('ext:dom-media-hint', {
+      scope: 'element', nid: '1', manifestUrl: HLS_MANIFEST, kind: 'hls', ...HINT_IDENTITY,
+    });
+    assert.equal(pf.calls.attaches.length, 1, 'an identity-stamped hint binds after a generation exists');
+    assert.equal(pf.calls.attaches[0].videoEl, video2, 'the post-snapshot hint binds the new generation element');
+  } finally {
+    env.teardown();
+  }
+});
+
 test('STREAM.MEDIA_HINT with a blocked-origin manifestUrl does NOT attach and degrades to no-manifest (re-gated at the viewer)', async () => {
   const { createViewer } = await import(RENDERER_MODULE);
   const env = setupEnv();

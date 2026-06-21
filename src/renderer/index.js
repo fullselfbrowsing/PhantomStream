@@ -1940,6 +1940,14 @@ export function createViewer(options) {
   function handleMediaHint(payload) {
     if (viewerState !== 'streaming') return;
     if (!isCurrentStream(payload, active)) return;
+    // WR-03: an empty-identity hint bypasses isCurrentStream (the backward-compat
+    // clause accepts any message with no identity). Before the first identity-
+    // bearing snapshot establishes a generation (active.streamSessionId === ''),
+    // such a hint could out-race the snapshot that defines its generation and be
+    // consumed by an element it was never meant for. Do NOT accept a hint until a
+    // current stream identity exists: drop an empty-identity hint that arrives in
+    // the pre-snapshot window. Once a generation exists, isCurrentStream governs.
+    if ((!payload || !payload.streamSessionId) && !active.streamSessionId) return;
     // Poster/off mode: no adaptive player surface (the source is neutralized at
     // the gate and poster is a still frame -- 13-UI-SPEC State C). Drop hints.
     if (mediaMode !== 'reference') { markLive('media'); return; }
