@@ -508,6 +508,31 @@ function defaultMaskText(text) {
  * @property {(text: string, element: Element) => string} [maskInputFn]
  *   Optional (SEC-03). Custom input-value mask (rrweb signature). Same
  *   fail-closed containment as maskTextFn.
+ * @property {string} [maskMediaSelector]
+ *   Optional (MSEC-03). CSS selector: matching <video>/<audio>/asset elements
+ *   omit their URL from the wire and degrade to the dimension-only block
+ *   placeholder (the blockSelector placeholder path), AND emit NO STREAM.MEDIA
+ *   state (the media-tracker skip predicates also gate on this selector). The
+ *   privacy control for "mirror nothing about this media -- not its URL, not
+ *   its playback timeline." Invalid selectors THROW Error('invalid-mask-
+ *   selector') at factory time, exactly like blockSelector/maskTextSelector.
+ * @property {boolean} [maskAssetUrls]
+ *   Optional (MSEC-03), default false. When true, strip a documented token/PII
+ *   query-param denylist (AWS SigV4/SigV2, GCP signed-URL, Azure SAS, and a
+ *   generic token/secret/auth set -- case-insensitive, exact-name OR denied
+ *   prefix) from asset/media URLs before the wire. Functional params (w, h, q,
+ *   format, v, id, t, ...) survive. A URL with no denylisted param is emitted
+ *   BYTE-IDENTICAL (the original string, never URL.toString() normalization),
+ *   so off-by-default keeps the wire byte-identical (the differential oracle is
+ *   unaffected). See TOKEN_PARAM_DENYLIST + docs/SECURITY.md for the exact list.
+ * @property {(url: string, ctx: {attr: string, tag: string, nid: string, kind: ('image'|'media')}) => (string|null)} [maskAssetUrlFn]
+ *   Optional (MSEC-03). Custom asset/media URL redactor; takes precedence over
+ *   maskAssetUrls. A returned string replaces the URL on the wire; null BLOCKS
+ *   the URL (the attribute is removed -> the viewer never fetches it); a THROW
+ *   FAILS CLOSED -> block (logged, treated as null -- never raised, never the
+ *   raw URL). Stricter than maskTextFn: a thrown text mask falls back to the
+ *   asterisk default, but a thrown URL redactor blocks (a half-redacted URL
+ *   that the viewer then fetches is worse than no URL).
  */
 
 /**
@@ -572,6 +597,16 @@ export function createCapture(config) {
   var maskInputFn = (typeof cfg.maskInputFn === 'function') ? cfg.maskInputFn : null;
   var blockSelector = compileMaskSelector(cfg.blockSelector);
   var maskTextSelector = compileMaskSelector(cfg.maskTextSelector);
+  // MSEC-03 asset/media URL masking (plan 15-01). Same off-by-default + one-
+  // allowed-throw-site discipline as the SEC-03 family above: maskMediaSelector
+  // is compiled (validated) here so an invalid selector fails closed and LOUD;
+  // maskAssetUrls/maskAssetUrlFn default OFF so the wire stays byte-identical
+  // (the differential oracle is unaffected). maskAssetUrlFn fails closed at
+  // RUNTIME to BLOCK (see maskAssetUrlForWire), the safeMaskText precedent
+  // adapted for URLs (a half-redacted URL the viewer fetches is worse than none).
+  var maskMediaSelector = compileMaskSelector(cfg.maskMediaSelector);
+  var maskAssetUrls = cfg.maskAssetUrls === true;
+  var maskAssetUrlFn = (typeof cfg.maskAssetUrlFn === 'function') ? cfg.maskAssetUrlFn : null;
 
   /**
    * Ancestor-inclusive form of the skipElement seam (reference parity:
@@ -718,7 +753,8 @@ export function createCapture(config) {
     blockedSubtrees: 0,   // object/embed subtrees dropped + srcdoc attrs dropped
     cssScrubs: 0,         // CSS values rewritten by scrubCssText
     maskedTextNodes: 0,   // (plan 03-03) maskTextSelector-matched text masked
-    maskedInputs: 0       // (plan 03-03) masked input values
+    maskedInputs: 0,      // (plan 03-03) masked input values
+    maskedAssetUrls: 0    // (plan 15-01) asset/media URLs stripped/redacted/blocked
   };
 
   function beginStreamSession() {
@@ -737,6 +773,7 @@ export function createCapture(config) {
     sanitizeCounters.cssScrubs = 0;
     sanitizeCounters.maskedTextNodes = 0;
     sanitizeCounters.maskedInputs = 0;
+    sanitizeCounters.maskedAssetUrls = 0;
     pendingStyleSourceChanges.clear();
     styleSourceRegistry.clear();
     styleScopeRoots.clear();
@@ -2247,6 +2284,49 @@ export function createCapture(config) {
   }
 
   /**
+   * True when the element itself matches maskMediaSelector (MSEC-03). The
+   * blockMatches twin keyed off maskMediaSelector: used by the snapshot/subtree
+   * placeholder path so a masked media/asset element degrades to the
+   * dimension-only block placeholder. Runtime selector errors are contained
+   * (logged, treated as not-matched) so capture never wedges after factory-time
+   * validation. Returns false immediately when maskMediaSelector is null, so the
+   * no-config path is wire-identical (no closest() walk).
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function maskMediaMatches(el) {
+    if (!maskMediaSelector) return false;
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    try {
+      return !!(el.matches && el.matches(maskMediaSelector));
+    } catch (err) {
+      logger.error('[DOM Stream] maskMediaSelector match failed', err);
+      return false;
+    }
+  }
+
+  /**
+   * Ancestor-inclusive maskMediaSelector predicate (MSEC-03), the
+   * blockedWithAncestors twin. ORed into the media-tracker skip guards
+   * (collectTrackedMediaElements + attachMediaListeners) so a masked
+   * <video>/<audio> -- or media inside a masked subtree -- emits NO STREAM.MEDIA
+   * baseline entry and NO STREAM.MEDIA events. Returns false immediately when
+   * maskMediaSelector is null (no-config path wire-identical, no walk).
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function maskMediaWithAncestors(el) {
+    if (!maskMediaSelector) return false;
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    try {
+      return !!(el.closest && el.closest(maskMediaSelector));
+    } catch (err) {
+      logger.error('[DOM Stream] maskMediaSelector match failed', err);
+      return false;
+    }
+  }
+
+  /**
    * Elements intentionally absent from the wire must also be absent from the
    * live tracking graph. Otherwise descendants can receive nids before the
    * clone subtree is removed, then later leak mutations for content the
@@ -2885,6 +2965,120 @@ export function createCapture(config) {
   }
 
   // =========================================================================
+  // 0.45 MSEC-03 asset/media URL masking (plan 15-01)
+  // =========================================================================
+
+  // Token/PII query-param denylist (documented in docs/SECURITY.md §4). When
+  // maskAssetUrls is on, these param NAMES are stripped from asset/media URLs
+  // before the wire -- credential/signature/expiry params only; functional
+  // params (w, h, q, format, v, id, t, ...) survive. Matching is CASE-
+  // INSENSITIVE and exact-name OR denied-prefix (TOKEN_PARAM_PREFIXES). The set
+  // is lowercased so isTokenParamName can do a single lowercased membership
+  // test. Provider param names are CITED from each signing scheme (AWS SigV4/
+  // SigV2, GCP signed-URL V4, Azure SAS); the generic set is a reasoned default.
+  var TOKEN_PARAM_DENYLIST = {
+    // AWS S3 / CloudFront presigned (SigV4) -- the x-amz- prefix subsumes these
+    // but they are kept explicit for documentation/audit clarity.
+    'x-amz-signature': 1, 'x-amz-credential': 1, 'x-amz-security-token': 1,
+    'x-amz-algorithm': 1, 'x-amz-date': 1, 'x-amz-expires': 1, 'x-amz-signedheaders': 1,
+    // AWS S3 / CloudFront presigned (SigV2 / canned policy)
+    'awsaccesskeyid': 1, 'key-pair-id': 1, 'policy': 1,
+    // Google Cloud Storage signed URL (V4) -- x-goog- prefix subsumes these.
+    'x-goog-signature': 1, 'x-goog-credential': 1, 'x-goog-algorithm': 1,
+    'x-goog-date': 1, 'x-goog-expires': 1, 'x-goog-signedheaders': 1, 'googleaccessid': 1,
+    // Azure Blob SAS
+    'sig': 1, 'se': 1, 'sp': 1, 'sv': 1, 'sr': 1, 'st': 1, 'skoid': 1, 'sktid': 1,
+    'skt': 1, 'ske': 1, 'sks': 1, 'skv': 1, 'spr': 1, 'sip': 1, 'ss': 1, 'srt': 1,
+    // Generic token/secret/auth/expiry
+    'token': 1, 'access_token': 1, 'auth': 1, 'authorization': 1, 'apikey': 1,
+    'api_key': 1, 'key': 1, 'signature': 1, 'sign': 1, 'hash': 1, 'hmac': 1,
+    'jwt': 1, 'password': 1, 'passwd': 1, 'pwd': 1, 'secret': 1, 'session': 1,
+    'sessionid': 1, 'sid': 1, 'expires': 1, 'expiry': 1
+  };
+  // Denied-name prefixes: any param whose lowercased name starts with one of
+  // these is a token param (the AWS/GCP signed-URL families add provider-
+  // specific x-amz-*/x-goog-* params beyond the explicit names above).
+  var TOKEN_PARAM_PREFIXES = ['x-amz-', 'x-goog-'];
+
+  /**
+   * True when a query-param name is a token/PII param to strip: lowercased
+   * exact-set membership OR starts-with a denied prefix. Case-insensitive.
+   * @param {string} name
+   * @returns {boolean}
+   */
+  function isTokenParamName(name) {
+    if (!name || typeof name !== 'string') return false;
+    var lower = name.toLowerCase();
+    if (TOKEN_PARAM_DENYLIST[lower] === 1) return true;
+    for (var i = 0; i < TOKEN_PARAM_PREFIXES.length; i++) {
+      if (lower.indexOf(TOKEN_PARAM_PREFIXES[i]) === 0) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Strip the TOKEN_PARAM_DENYLIST params from a URL (the maskAssetUrls path).
+   * PURE: parses with new URL() in try/catch (a non-absolute/opaque URL --
+   * data:/blob:/relative -- throws and is returned UNCHANGED). Returns the
+   * original `url` string when nothing was stripped (Pitfall 1: new URL()
+   * .toString() normalizes host case / default port / trailing slash / percent-
+   * encoding, which would diverge the wire even with masking effectively off for
+   * this URL). Only emits u.toString() when a param was actually deleted.
+   * @param {string} url
+   * @returns {string}
+   */
+  function stripTokenParams(url) {
+    var u;
+    try { u = new URL(url); }
+    catch (e) { return url; }            // non-absolute / opaque -> leave as-is
+    if (!u.search) return url;            // no query -> unchanged (byte-identity)
+    var changed = false;
+    // Snapshot the keys first: URLSearchParams is live, deleting while iterating
+    // skips entries. URLSearchParams preserves order and repeated keys.
+    var keys = [];
+    u.searchParams.forEach(function (_v, k) { keys.push(k); });
+    for (var i = 0; i < keys.length; i++) {
+      if (isTokenParamName(keys[i])) { u.searchParams.delete(keys[i]); changed = true; }
+    }
+    return changed ? u.toString() : url;  // original string identity when untouched
+  }
+
+  /**
+   * PURE asset/media URL masking helper (MSEC-03). Decides the wire value for a
+   * single URL attribute value: a custom redactor (maskAssetUrlFn) first, then
+   * the boolean token-param strip (maskAssetUrls), else the URL UNCHANGED
+   * (off-by-default -> byte-identical wire). NEVER reads the DOM or mutates a
+   * clone -- the caller owns the clone mutation / placeholder swap.
+   *
+   * Fail-closed direction (Pitfall 3): maskAssetUrlFn mirrors safeMaskText's
+   * try/catch but the catch returns null (BLOCK), not the asterisk default --
+   * a thrown URL redactor is an undecided-unsafe URL, which must NOT be fetched.
+   * @param {string} url
+   * @param {{attr: string, tag: string, nid: string, kind: ('image'|'media')}} [ctx]
+   * @returns {string|null} replacement URL, the unchanged URL, or null (block)
+   */
+  function maskAssetUrlForWire(url, ctx) {
+    if (!url || typeof url !== 'string') return url;
+    // 1. Custom redactor first -- full host control, FAIL CLOSED on throw.
+    if (maskAssetUrlFn) {
+      try {
+        var out = maskAssetUrlFn(url, ctx || {});
+        if (out === null) return null;     // explicit block -> placeholder/remove
+        return String(out);                // redacted replacement
+      } catch (err) {
+        logger.error('[DOM Stream] maskAssetUrlFn failed; URL blocked (fail-closed)', err);
+        return null;                       // THROW -> block (never raise, never pass raw)
+      }
+    }
+    // 2. Boolean token/PII strip.
+    if (maskAssetUrls) {
+      return stripTokenParams(url);
+    }
+    // 3. Default OFF -> unchanged (byte-identical wire).
+    return url;
+  }
+
+  // =========================================================================
   // 0.5 SEC-01 Sanitization chokepoint
   // =========================================================================
 
@@ -2900,7 +3094,8 @@ export function createCapture(config) {
       blockedSubtrees: sanitizeCounters.blockedSubtrees,
       cssScrubs: sanitizeCounters.cssScrubs,
       maskedTextNodes: sanitizeCounters.maskedTextNodes,
-      maskedInputs: sanitizeCounters.maskedInputs
+      maskedInputs: sanitizeCounters.maskedInputs,
+      maskedAssetUrls: sanitizeCounters.maskedAssetUrls
     };
   }
 
@@ -3040,6 +3235,32 @@ export function createCapture(config) {
         if (urlVal && hasDangerousScheme(urlVal)) {
           clone.removeAttribute(URL_ATTRS[u]);
           sanitizeCounters.blockedUrlSchemes++;
+        }
+      }
+      // MSEC-03 asset/media URL masking (plan 15-01): route each SURVIVING
+      // URL-attr value through the dedicated 'asset-url'/'media-url' dispatch
+      // AFTER the scheme scrub (a hostile scheme is already gone, so it never
+      // reaches maskAssetUrlForWire). Gated on the masking config so the
+      // off-by-default path is wire-identical (no per-attr work, no string
+      // churn). A null result BLOCKS -> remove the attribute (the viewer never
+      // fetches it); a changed value replaces it. The live element is never
+      // touched (clone-only, Phase 7 invariant).
+      if (maskAssetUrls || maskAssetUrlFn) {
+        var elNid = getTrackedNodeId(payload.orig) || '';
+        for (var um = 0; um < URL_ATTRS.length; um++) {
+          var maskAttr = URL_ATTRS[um];
+          var maskVal = clone.getAttribute(maskAttr);
+          if (!maskVal) continue;
+          var maskKind = assetUrlKindForTag(tag);
+          var maskRes = sanitizeForWire(maskKind === 'media' ? 'media-url' : 'asset-url', {
+            value: maskVal,
+            ctx: { attr: maskAttr, tag: tag, nid: elNid, kind: maskKind }
+          });
+          if (maskRes.value === null) {
+            clone.removeAttribute(maskAttr);
+          } else if (maskRes.value !== maskVal) {
+            clone.setAttribute(maskAttr, maskRes.value);
+          }
         }
       }
       var formactionVal = clone.getAttribute('formaction');
@@ -3184,6 +3405,25 @@ export function createCapture(config) {
         sanitizeCounters.blockedUrlSchemes++;
         return { value: null };
       }
+      // MSEC-03 asset/media URL masking (plan 15-01): the mutation 'attr' path's
+      // URL values flow through the SAME dedicated dispatch after the scheme
+      // scrub above. A null result becomes the inert ATTR-op shape ({ value:
+      // null } -> diff.js removeAttribute), matching the dangerous-scheme branch.
+      // Gated on config so off-by-default attr ops are byte-identical.
+      if ((maskAssetUrls || maskAssetUrlFn)
+          && URL_ATTRS.indexOf(attrName) !== -1 && payload.value) {
+        var attrTag = (payload.target && payload.target.tagName)
+          ? String(payload.target.tagName).toLowerCase() : '';
+        var attrMaskKind = assetUrlKindForTag(attrTag);
+        var attrMaskRes = sanitizeForWire(attrMaskKind === 'media' ? 'media-url' : 'asset-url', {
+          value: payload.value,
+          ctx: {
+            attr: attrName, tag: attrTag,
+            nid: getTrackedNodeId(payload.target) || '', kind: attrMaskKind
+          }
+        });
+        return { value: attrMaskRes.value };
+      }
       if (attrName === 'value' && (shouldMaskInput(payload.target) || isOptionUnderMaskedSelect(payload.target))) {
         var maskedAttrValue = safeMaskInput(payload.value == null ? '' : payload.value, payload.target);
         if (maskedAttrValue !== payload.value) {
@@ -3238,7 +3478,38 @@ export function createCapture(config) {
       return { css: scrubbedCss };
     }
 
+    // MSEC-03 asset/media URL masking (plan 15-01). The single dedicated seam
+    // for redacting/stripping/blocking a URL attribute value -- a thin wrapper
+    // around the PURE maskAssetUrlForWire helper so URL masking lives in ONE
+    // testable place rather than overloading the 'attr' path. 'asset-url' and
+    // 'media-url' share one branch (the behavior is identical); the asset-vs-
+    // media distinction travels in payload.ctx.kind ('image'|'media'). The
+    // 'element' and 'attr' paths route their surviving URL-attr values through
+    // this branch AFTER the hasDangerousScheme scrub (a hostile scheme is gone
+    // before masking runs). Returns the same { value } discriminated shape as
+    // 'attr'; value === null signals block -> the caller removes the attribute /
+    // emits a placeholder.
+    if (kind === 'asset-url' || kind === 'media-url') {
+      var maskedUrl = maskAssetUrlForWire(payload.value, payload.ctx);
+      if (maskedUrl !== payload.value) {
+        sanitizeCounters.maskedAssetUrls++;
+      }
+      return { value: maskedUrl };
+    }
+
     return {};
+  }
+
+  /**
+   * Map a tag name to the maskAssetUrlFn ctx.kind ('media' for the media
+   * elements that carry a fetchable URL, 'image' for everything else -- <img>,
+   * SVG <image>, <link>, <a>, ...). Used to build the ctx for the 'asset-url'/
+   * 'media-url' dispatch so a host redactor can branch on asset-vs-media.
+   * @param {string} tag lowercased tag name
+   * @returns {('image'|'media')}
+   */
+  function assetUrlKindForTag(tag) {
+    return (tag === 'video' || tag === 'audio' || tag === 'source') ? 'media' : 'image';
   }
 
   // =========================================================================

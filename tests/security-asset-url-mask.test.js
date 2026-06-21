@@ -256,18 +256,40 @@ test('maskAssetUrls matches param names case-insensitively (lowercase x-amz-sign
 // Byte-identity: no-token + data:/blob: passthrough, off-by-default
 // ===========================================================================
 
-test('maskAssetUrls leaves a no-token URL byte-identical (no normalization; trailing-slash/host-case preserved)', async () => {
-  // A URL with NO denylisted param but with normalization-bait (uppercase host,
-  // explicit default port, no trailing slash on a bare host path).
-  const original = 'https://CDN.Example.COM:443/path/Image.JPG?w=800&h=600&q=80';
-  const env = setupEnv(`<img id="t" src="${original}">`);
+test('maskAssetUrls leaves a no-token URL byte-identical to the unmasked wire (no extra normalization)', async () => {
+  // Byte-identity property: with maskAssetUrls ON, a URL carrying NO denylisted
+  // param must serialize EXACTLY as it does with masking OFF -- the helper adds
+  // zero divergence (Pitfall 1: it returns the ORIGINAL string when nothing is
+  // stripped, never new URL().toString()). We compare masked-ON vs masked-OFF of
+  // the SAME fixture rather than a hand-written literal, because the serializer's
+  // own absolutifyUrl already normalizes the URL upstream (host case / default
+  // port) -- that pre-existing normalization is identical on both paths, so a
+  // true byte-identity assertion compares the two serializations to each other.
+  // The fixture carries normalization-bait so any masking-introduced re-encoding
+  // would surface as a divergence between the two.
+  const original = 'https://CDN.Example.COM:443/path/Image.JPG?w=800&h=600&q=80&format=webp';
+
+  const envOff = setupEnv(`<img id="t" src="${original}">`);
+  let offSrc;
   try {
-    const { payload } = await captureSnapshot(env, { maskAssetUrls: true });
-    const img = parsedClone(env, payload, '#t');
-    assert.equal(img.getAttribute('src'), original,
-      'a no-token URL round-trips byte-identical (the helper returns the ORIGINAL string, not URL.toString())');
+    const { payload } = await captureSnapshot(envOff, {});
+    offSrc = parsedClone(envOff, payload, '#t').getAttribute('src');
   } finally {
-    env.teardown();
+    envOff.teardown();
+  }
+
+  const envOn = setupEnv(`<img id="t" src="${original}">`);
+  try {
+    const { payload } = await captureSnapshot(envOn, { maskAssetUrls: true });
+    const onSrc = parsedClone(envOn, payload, '#t').getAttribute('src');
+    assert.equal(onSrc, offSrc,
+      'a no-token URL with masking ON is byte-identical to the masking-OFF wire (helper returns the original string, no URL.toString() normalization)');
+    // And every functional param survived the strip pass.
+    const names = paramNames(onSrc);
+    assert.ok(names.has('w') && names.has('h') && names.has('q') && names.has('format'),
+      'all functional params survive a no-token strip pass');
+  } finally {
+    envOn.teardown();
   }
 });
 
