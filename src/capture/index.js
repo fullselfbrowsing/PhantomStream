@@ -3017,13 +3017,46 @@ export function createCapture(config) {
   }
 
   /**
+   * True when a URL fragment (the part after '#') carries a denied token param
+   * (review WR-04). OAuth implicit flow returns tokens in the fragment
+   * (#access_token=...); the fragment is never sent in the asset GET, but the
+   * URL STRING crosses the relay to a possibly-cross-origin viewer, so a token
+   * there is still a disclosure. We parse the fragment as a URLSearchParams and
+   * report whether any name is denylisted. Empty / token-free fragments report
+   * false so the no-strip byte-identity path is preserved (a plain `#section-2`
+   * anchor never triggers a rewrite).
+   * @param {string} hash - u.hash, including the leading '#' (or '')
+   * @returns {boolean}
+   */
+  function fragmentHasTokenParam(hash) {
+    if (!hash || hash.length < 2) return false;   // '' or bare '#' -> no token
+    var body = hash.charAt(0) === '#' ? hash.slice(1) : hash;
+    if (body.indexOf('=') === -1) return false;   // plain anchor, not key=value
+    var fragParams;
+    try { fragParams = new URLSearchParams(body); }
+    catch (e) { return false; }                   // unparseable -> not a token map
+    var found = false;
+    fragParams.forEach(function (_v, k) { if (isTokenParamName(k)) found = true; });
+    return found;
+  }
+
+  /**
    * Strip the TOKEN_PARAM_DENYLIST params from a URL (the maskAssetUrls path).
    * PURE: parses with new URL() in try/catch (a non-absolute/opaque URL --
    * data:/blob:/relative -- throws and is returned UNCHANGED). Returns the
    * original `url` string when nothing was stripped (Pitfall 1: new URL()
    * .toString() normalizes host case / default port / trailing slash / percent-
    * encoding, which would diverge the wire even with masking effectively off for
-   * this URL). Only emits u.toString() when a param was actually deleted.
+   * this URL). Only emits u.toString() when a query param was deleted OR a
+   * token-bearing fragment was dropped.
+   *
+   * Fragment handling (review WR-04): a token in the fragment
+   * (#access_token=...) is not part of u.search, so the query strip never sees
+   * it, yet the full URL string -- fragment included -- crosses the relay to a
+   * possibly-cross-origin viewer. When the fragment carries a denylisted param
+   * name we drop the WHOLE fragment (it is never needed for an asset/media
+   * fetch); a benign anchor fragment (no '=', or no denied name) is left intact
+   * so byte-identity holds on the no-strip path.
    * @param {string} url
    * @returns {string}
    */
@@ -3031,8 +3064,12 @@ export function createCapture(config) {
     var u;
     try { u = new URL(url); }
     catch (e) { return url; }            // non-absolute / opaque -> leave as-is
-    if (!u.search) return url;            // no query -> unchanged (byte-identity)
-    var changed = false;
+    var dropFragment = fragmentHasTokenParam(u.hash);
+    // No query AND no token fragment -> unchanged (byte-identity). A token-only
+    // fragment URL has no u.search, so the old `if (!u.search) return url` fast
+    // path would have leaked it; gate the early return on the fragment too.
+    if (!u.search && !dropFragment) return url;
+    var changed = dropFragment;
     // Snapshot the keys first: URLSearchParams is live, deleting while iterating
     // skips entries. URLSearchParams preserves order and repeated keys.
     var keys = [];
@@ -3040,6 +3077,7 @@ export function createCapture(config) {
     for (var i = 0; i < keys.length; i++) {
       if (isTokenParamName(keys[i])) { u.searchParams.delete(keys[i]); changed = true; }
     }
+    if (dropFragment) u.hash = '';        // redact the token-bearing fragment
     return changed ? u.toString() : url;  // original string identity when untouched
   }
 

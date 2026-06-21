@@ -305,6 +305,81 @@ test('maskAssetUrls passes data: and blob: URLs through unchanged (short-circuit
   }
 });
 
+// ===========================================================================
+// WR-04: token in the URL FRAGMENT must not reach the cross-origin viewer.
+// The fragment is never sent in the asset GET, but the URL STRING (fragment
+// included) crosses the relay, so an OAuth-implicit-flow #access_token=... is a
+// disclosure. When maskAssetUrls is on AND the fragment carries a denied param
+// name, the whole fragment is dropped; benign anchors and the off-by-default
+// path stay byte-identical (no URL.toString() normalization).
+// ===========================================================================
+
+test('maskAssetUrls drops a token-bearing URL fragment (#access_token=...) the query strip never sees (WR-04)', async () => {
+  const env = setupEnv('<img id="t" src="https://cdn.example.com/a.jpg?w=10#access_token=LEAK">');
+  try {
+    const { payload } = await captureSnapshot(env, { maskAssetUrls: true });
+    const out = parsedClone(env, payload, '#t').getAttribute('src');
+    assert.ok(out.indexOf('access_token') === -1 && out.indexOf('LEAK') === -1,
+      'the token fragment must not survive on the wire');
+    assert.ok(out.indexOf('#') === -1, 'the whole token-bearing fragment is dropped');
+    assert.ok(paramNames(out).has('w'), 'functional query param w survives the fragment redaction');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('maskAssetUrls drops a fragment-ONLY token even when the URL has no query (WR-04)', async () => {
+  // No u.search at all: the old `if (!u.search) return url` fast path would have
+  // leaked this; the fragment gate must run before the early return.
+  const env = setupEnv('<img id="t" src="https://cdn.example.com/a.jpg#token=LEAKED_SECRET">');
+  try {
+    const { payload } = await captureSnapshot(env, { maskAssetUrls: true });
+    const out = parsedClone(env, payload, '#t').getAttribute('src');
+    assert.ok(out.indexOf('token') === -1 && out.indexOf('LEAKED_SECRET') === -1,
+      'a query-less token fragment must still be redacted');
+    assert.equal(out, 'https://cdn.example.com/a.jpg', 'only the fragment is removed; the path is intact');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('maskAssetUrls leaves a benign anchor fragment byte-identical (no token name -> no rewrite, WR-04)', async () => {
+  // A plain section anchor has no denied param name; byte-identity must hold so
+  // the no-strip path adds zero divergence (no URL.toString() normalization).
+  const benign = 'https://cdn.example.com/a.jpg?w=10#section-2';
+  const envOff = setupEnv(`<img id="t" src="${benign}">`);
+  let offSrc;
+  try {
+    const { payload } = await captureSnapshot(envOff, {});
+    offSrc = parsedClone(envOff, payload, '#t').getAttribute('src');
+  } finally {
+    envOff.teardown();
+  }
+  const envOn = setupEnv(`<img id="t" src="${benign}">`);
+  try {
+    const { payload } = await captureSnapshot(envOn, { maskAssetUrls: true });
+    const onSrc = parsedClone(envOn, payload, '#t').getAttribute('src');
+    assert.equal(onSrc, offSrc,
+      'a benign #anchor fragment with masking ON is byte-identical to masking OFF (fragment kept, no rewrite)');
+    assert.ok(onSrc.indexOf('#section-2') !== -1, 'the benign anchor fragment is preserved');
+  } finally {
+    envOn.teardown();
+  }
+});
+
+test('off-by-default: a fragment-token URL is emitted byte-identical with NO masking config (oracle-safe, WR-04)', async () => {
+  const fragTokenUrl = 'https://cdn.example.com/a.jpg?w=10#access_token=LEAK';
+  const env = setupEnv(`<img id="t" src="${fragTokenUrl}">`);
+  try {
+    const { payload } = await captureSnapshot(env, {});
+    const img = parsedClone(env, payload, '#t');
+    assert.equal(img.getAttribute('src'), fragTokenUrl,
+      'no masking config -> the fragment-token URL is byte-identical on the wire (the fragment gate is gated behind maskAssetUrls)');
+  } finally {
+    env.teardown();
+  }
+});
+
 test('off-by-default: with NO masking config a token-bearing URL is emitted byte-identical (oracle-safe)', async () => {
   const env = setupEnv(`<img id="t" src="${AWS_SIGV4}">`);
   try {
