@@ -363,9 +363,20 @@ Plans:
   3. A `STREAM.MEDIA` throttled side-channel op (a structural twin of the scroll channel) carries nid-addressed, identity-stamped playback state within the raw-relay + 1 MiB-cap contract; it is envelope-backward-compatible (old FSB viewers ignore the unknown type) and the relay and envelope are unchanged
   4. The drift reconciler is a pure, configurable function unit-tested in jsdom (in-tolerance → hold; small persistent → rate-nudge; large/loop → seek; live → rejoin-edge; `Infinity` duration → no `NaN`) with no real media timeline
   5. The viewer honors autoplay policy — muted-autoplay default, an observable host-overlay affordance when `play()` is rejected — so the mirror never wedges on a blocked play
-**Plans**: TBD
+**Plans**: 4 plans (3 waves)
 **UI hint**: yes
 **Research**: Standard patterns — the media-sync channel is a documented twin of the existing scroll/overlay side channels; rrweb provides the proven reconciler model; the reconciler is a pure function unit-testable in jsdom. Skip `--research-phase`.
+
+Plans:
+**Wave 1**
+- [ ] 13-01-PLAN.md — Protocol spine: STREAM.MEDIA op + MEDIA_SYNC_THROTTLE_MS + media typedefs + the PURE reconcileMediaDrift function and its table tests (envelope/relay untouched) (MWIRE-01, MWIRE-02, MEDIA-03)
+
+**Wave 2** *(blocked on 13-01)*
+- [ ] 13-02-PLAN.md — Capture slice: media[] snapshot baseline (Infinity->null-safe) + startMediaTracker per-element listeners (immediate events + throttled heartbeat, added-node + teardown) (MEDIA-02, MEDIA-04, MWIRE-01)
+- [ ] 13-03-PLAN.md — Renderer slice: media-src CSP + string-layer media URL gate (pre-parse SSRF fix) + affordance overlays + handleMedia parent-realm driver (muted-autoplay, onMediaBlocked, mediaMode poster) (MEDIA-01, MEDIA-05, MWIRE-01)
+
+**Wave 3** *(blocked on 13-01, 13-02)*
+- [ ] 13-04-PLAN.md — Oracle slice: media-playback-sync fixture + scenario + single D27 ledger entry keeping the differential oracle green (MEDIA-02, MWIRE-01)
 
 ### Phase 14: Adaptive Streaming + Adapter Discovery + Fallback
 **Goal**: Best-effort adaptive playback — when an HLS (`.m3u8`) or DASH (`.mpd`) manifest is available, the viewer plays it via an optional, lazy player running in a renderer-owned **parent realm** (never inside the mirror sandbox); Playwright/CDP and extension adapters surface manifest URLs by network observation as opt-in hints with graceful absence; MSE-without-manifest/DRM degrade to poster with a documented reason; live streams are handled — the mirror never breaks
@@ -431,6 +442,6 @@ Phases execute in numeric order. v1.0 (1–11) is complete. v2.0 active order: 1
 | 10. npm Packaging & 0.x Publish | 5/5 | Complete | 2026-06-16 |
 | 11. FSB Swap-In → 1.0 | — | Complete (verified in FSB repo) | 2026-06-16 |
 | 12. Static Assets by Reference | 3/3 | Complete   | 2026-06-20 |
-| 13. Video/Audio URL + Playback Sync | 0/TBD | Not started | - |
+| 13. Video/Audio URL + Playback Sync | 0/4 | Not started | - |
 | 14. Adaptive Streaming + Adapter Discovery + Fallback | 0/TBD | Not started | - |
 | 15. Media Security, Masking, Threat Model & Docs | 0/TBD | Not started | - |
