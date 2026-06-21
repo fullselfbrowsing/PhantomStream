@@ -515,7 +515,7 @@ Plans:
 
 **Plans**: 4 plans (2 waves)
 - [x] 15-01-PLAN.md — Capture masking spine: maskMediaSelector/maskAssetUrls/maskAssetUrlFn via a new 'asset-url'/'media-url' sanitizeForWire dispatch + pure maskAssetUrlForWire helper + TOKEN_PARAM_DENYLIST; maskMediaSelector wired into the media-tracker skip predicates (no STREAM.MEDIA); off-by-default byte-identity (oracle 48/48) [MSEC-03]
-- [ ] 15-02-PLAN.md — Renderer referrerpolicy: document-level `<meta name="referrer" content="no-referrer">` after CSP_META + the no-credentials (no crossorigin) string contract [MSEC-04]
+- [x] 15-02-PLAN.md — Renderer referrerpolicy: document-level `<meta name="referrer" content="no-referrer">` after CSP_META + the no-credentials (no crossorigin) string contract [MSEC-04]
 - [ ] 15-03-PLAN.md — Media-security invariants (traceability suite): allow-scripts absent from media-player.js, deps byte-unchanged, late cross-session media rejected, object-URL revoke-on-destroy; full-suite + oracle gate [MSEC-04]
 - [ ] 15-04-PLAN.md — Docs: SECURITY.md §4 masking vocab + denylist, §6 referrerpolicy/no-credentials completed, Parent-Realm Object-URL Threat Model; ARCHITECTURE.md limitation #6; preserve all 12 purity markers + add new ones in the same change [MSEC-04]
 **Research**: Completed before planning — see 15-RESEARCH.md (parent-realm object-URL blast-radius threat model + the token/PII denylist; the default origin/private-IP denylist was confirmed already-shipped in src/renderer/asset-policy.js, reused not re-derived).
@@ -559,4 +559,4 @@ Phases execute in numeric order. v1.0 (1–11) is complete. v2.0 active order: 1
 | 12. Static Assets by Reference | 3/3 | Complete   | 2026-06-20 |
 | 13. Video/Audio URL + Playback Sync | 4/4 | Complete    | 2026-06-21 |
 | 14. Adaptive Streaming + Adapter Discovery + Fallback | 5/5 | Complete    | 2026-06-21 |
-| 15. Media Security, Masking, Threat Model & Docs | 1/4 | In Progress|  |
+| 15. Media Security, Masking, Threat Model & Docs | 2/4 | In Progress|  |
