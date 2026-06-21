@@ -334,6 +334,80 @@ test('diff ATTR gate keeps a benign comma-in-query http(s) srcset mutation (WR-0
   );
 });
 
+// ---- Codex P2: the diff ATTR gate must pick the gate KIND from the live
+// element so poster mode withholds playable media on a src MUTATION the same
+// way the snapshot/fragment paths do. Gating every src as 'image' let a
+// poster-mode `video.src = <public-https>` mutation write playable bytes to the
+// live mirror. ----
+
+test('diff ATTR gate: poster mode drops a <video src> mutation even for an allowed origin (Codex P2)', async () => {
+  const renderer = await import(RENDERER_MODULE);
+  const doc = makeDiffDoc('<video id="t" data-fsb-nid="1"></video>');
+  const video = doc.getElementById('t');
+  const counters = { staleMisses: 0, applyFailures: 0 };
+  renderer.applyMutations(doc, [
+    { op: 'attr', nid: '1', attr: 'src', val: 'https://cdn.example.com/clip.mp4' },
+  ], counters, {
+    logger: { warn: function () {} },
+    identity: {
+      resolve: function (nid) { return String(nid) === '1' ? video : null; },
+      gateAssetUrl: function (url, kind) { return renderer.gateAssetUrl(url, { mediaMode: 'poster', kind: kind }); },
+    },
+  });
+  assert.equal(video.getAttribute('src'), null, 'poster mode must not let a <video src> mutation write a playable media URL to the live mirror (poster-mode-media)');
+});
+
+test('diff ATTR gate: poster mode drops a <source src> mutation (Codex P2)', async () => {
+  const renderer = await import(RENDERER_MODULE);
+  const doc = makeDiffDoc('<video><source id="t" data-fsb-nid="1"></source></video>');
+  const source = doc.getElementById('t');
+  const counters = { staleMisses: 0, applyFailures: 0 };
+  renderer.applyMutations(doc, [
+    { op: 'attr', nid: '1', attr: 'src', val: 'https://cdn.example.com/clip.webm' },
+  ], counters, {
+    logger: { warn: function () {} },
+    identity: {
+      resolve: function (nid) { return String(nid) === '1' ? source : null; },
+      gateAssetUrl: function (url, kind) { return renderer.gateAssetUrl(url, { mediaMode: 'poster', kind: kind }); },
+    },
+  });
+  assert.equal(source.getAttribute('src'), null, 'poster mode must not let a <source src> mutation write a playable media URL to the live mirror');
+});
+
+test('diff ATTR gate: reference mode writes an allowed <video src> mutation through (Codex P2 counterpoint)', async () => {
+  const renderer = await import(RENDERER_MODULE);
+  const doc = makeDiffDoc('<video id="t" data-fsb-nid="1"></video>');
+  const video = doc.getElementById('t');
+  const counters = { staleMisses: 0, applyFailures: 0 };
+  renderer.applyMutations(doc, [
+    { op: 'attr', nid: '1', attr: 'src', val: 'https://cdn.example.com/clip.mp4' },
+  ], counters, {
+    logger: { warn: function () {} },
+    identity: {
+      resolve: function (nid) { return String(nid) === '1' ? video : null; },
+      gateAssetUrl: function (url, kind) { return renderer.gateAssetUrl(url, { mediaMode: 'reference', kind: kind }); },
+    },
+  });
+  assert.equal(video.getAttribute('src'), 'https://cdn.example.com/clip.mp4', 'reference mode writes an allowed-origin <video src> mutation through (mode-scoped, not a blanket media kill)');
+});
+
+test('diff ATTR gate: poster mode still writes an allowed <img src> mutation through (Codex P2 image path intact)', async () => {
+  const renderer = await import(RENDERER_MODULE);
+  const doc = makeDiffDoc('<img id="t" data-fsb-nid="1">');
+  const img = doc.getElementById('t');
+  const counters = { staleMisses: 0, applyFailures: 0 };
+  renderer.applyMutations(doc, [
+    { op: 'attr', nid: '1', attr: 'src', val: 'https://cdn.example.com/a.png' },
+  ], counters, {
+    logger: { warn: function () {} },
+    identity: {
+      resolve: function (nid) { return String(nid) === '1' ? img : null; },
+      gateAssetUrl: function (url, kind) { return renderer.gateAssetUrl(url, { mediaMode: 'poster', kind: kind }); },
+    },
+  });
+  assert.equal(img.getAttribute('src'), 'https://cdn.example.com/a.png', 'poster mode keeps an allowed <img src> (images are permitted; only playable media is withheld)');
+});
+
 test('parseSrcsetCandidates keeps in-query commas on absolute URLs but still splits relative/data candidates (WR-02)', async () => {
   const { parseSrcsetCandidates } = await import('../src/renderer/sanitize.js');
   // Absolute http(s): the in-query comma stays attached (one candidate).
