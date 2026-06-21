@@ -546,3 +546,128 @@ test('WR-01: a skipElement-excluded <video> emits NO STREAM.MEDIA frames (wire n
     env.teardown();
   }
 });
+
+// ===========================================================================
+// MSEC-03: maskMediaSelector-/blockSelector-matched media emits NO state
+// (twin of the WR-01 skipElement tests above -- swap the predicate; the masked
+// media also degrades to the dimension-only block placeholder on the wire).
+// ===========================================================================
+
+test('MSEC-03: a maskMediaSelector-matched <video> emits NO media[] baseline entry (control <video> unaffected)', () => {
+  const env = setupEnv('<video id="secret-clip"></video><video id="tracked"></video>');
+  try {
+    const secret = env.document.getElementById('secret-clip');
+    const tracked = env.document.getElementById('tracked');
+    stubMedia(secret, { currentTime: 9, paused: false, muted: false, volume: 1, playbackRate: 1, loop: false, ended: false, duration: 50 });
+    stubMedia(tracked, { currentTime: 4, paused: true, muted: false, volume: 1, playbackRate: 1, loop: false, ended: false, duration: 80 });
+
+    env.capture = createCapture({
+      transport: { send() {} },
+      logger: silentLogger(),
+      maskMediaSelector: '#secret-clip',
+    });
+    const payload = env.capture.serializeSnapshot();
+
+    assert.ok(Array.isArray(payload.media), 'snapshot still carries a media[] array for the non-masked element');
+    assert.equal(payload.media.length, 1, 'only the non-masked <video> is baselined');
+    assert.equal(payload.media[0].currentTime, 4, 'the surviving baseline entry is the tracked (non-masked) element');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('MSEC-03: a maskMediaSelector-matched <video> emits NO STREAM.MEDIA frames; the control <video> still emits', async () => {
+  const env = setupEnv('<video id="secret-clip"></video><video id="tracked"></video>');
+  try {
+    const secret = env.document.getElementById('secret-clip');
+    const tracked = env.document.getElementById('tracked');
+    stubMedia(secret, { currentTime: 9, paused: false, muted: false, volume: 1, playbackRate: 1, loop: false, ended: false, duration: 50 });
+    stubMedia(tracked, { currentTime: 4, paused: false, muted: false, volume: 1, playbackRate: 1, loop: false, ended: false, duration: 80 });
+
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({
+      transport,
+      logger: silentLogger(),
+      maskMediaSelector: '#secret-clip',
+    });
+    env.capture.start();
+    await settle(env.window);
+
+    // Discrete + timeupdate events on the MASKED element must produce nothing.
+    const beforeMasked = mediaMsgs(transport).length;
+    for (const evName of DISCRETE_EVENTS) secret.dispatchEvent(new env.window.Event(evName));
+    secret.dispatchEvent(new env.window.Event('timeupdate'));
+    assert.equal(mediaMsgs(transport).length, beforeMasked, 'no STREAM.MEDIA from a maskMediaSelector-matched <video>');
+
+    // The non-masked element is still tracked (targeted gate, not a media kill).
+    const beforeTracked = mediaMsgs(transport).length;
+    tracked.dispatchEvent(new env.window.Event('play'));
+    assert.equal(mediaMsgs(transport).length, beforeTracked + 1, 'the non-masked <video> still emits STREAM.MEDIA');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('MSEC-03: a blockSelector-matched <video> emits NO STREAM.MEDIA and NO media[] entry (pins the shipped block path for media)', async () => {
+  const env = setupEnv('<video id="blocked-clip"></video><video id="tracked"></video>');
+  try {
+    const blocked = env.document.getElementById('blocked-clip');
+    const tracked = env.document.getElementById('tracked');
+    stubMedia(blocked, { currentTime: 9, paused: false, muted: false, volume: 1, playbackRate: 1, loop: false, ended: false, duration: 50 });
+    stubMedia(tracked, { currentTime: 4, paused: false, muted: false, volume: 1, playbackRate: 1, loop: false, ended: false, duration: 80 });
+
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({
+      transport,
+      logger: silentLogger(),
+      blockSelector: '#blocked-clip',
+    });
+    env.capture.start();
+    await settle(env.window);
+
+    // No media[] baseline entry for the blocked element.
+    const snap = transport.sent.find((m) => m.type === STREAM.SNAPSHOT).payload;
+    assert.ok(Array.isArray(snap.media), 'snapshot carries a media[] array');
+    assert.equal(snap.media.length, 1, 'only the non-blocked <video> is baselined');
+    assert.equal(snap.media[0].currentTime, 4, 'the surviving baseline entry is the non-blocked element');
+
+    // No STREAM.MEDIA from the blocked element.
+    const beforeBlocked = mediaMsgs(transport).length;
+    for (const evName of DISCRETE_EVENTS) blocked.dispatchEvent(new env.window.Event(evName));
+    assert.equal(mediaMsgs(transport).length, beforeBlocked, 'no STREAM.MEDIA from a blockSelector-matched <video>');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('MSEC-03: a maskMediaSelector-matched <video> degrades to the dimension-only block placeholder on the wire (no src, no media identity)', () => {
+  const env = setupEnv('<video id="secret-clip" src="https://cdn.example.com/secret.mp4"></video><video id="tracked"></video>');
+  try {
+    const secret = env.document.getElementById('secret-clip');
+    // Give the masked element a concrete live rect so the placeholder carries
+    // dimensions (jsdom returns zeros otherwise).
+    secret.getBoundingClientRect = () => ({ width: 320, height: 240, top: 0, left: 0, right: 320, bottom: 240, x: 0, y: 0 });
+
+    env.capture = createCapture({
+      transport: { send() {} },
+      logger: silentLogger(),
+      maskMediaSelector: '#secret-clip',
+    });
+    const payload = env.capture.serializeSnapshot();
+
+    assert.ok(payload.html.indexOf('https://cdn.example.com/secret.mp4') === -1,
+      'the masked media URL never appears on the wire');
+    // The placeholder is a dimension-only <div> (createBlockPlaceholder): the
+    // masked <video> is replaced, so no <video id="secret-clip"> survives.
+    const tpl = env.document.createElement('template');
+    tpl.innerHTML = payload.html;
+    assert.equal(tpl.content.querySelector('#secret-clip'), null,
+      'the masked <video> is replaced by the placeholder (no surviving media element / identity attr)');
+    assert.ok(tpl.content.querySelector('[rr_width="320px"]'),
+      'the placeholder carries the live dimensions (rr_width)');
+    assert.ok(tpl.content.querySelector('[rr_height="240px"]'),
+      'the placeholder carries the live dimensions (rr_height)');
+  } finally {
+    env.teardown();
+  }
+});
