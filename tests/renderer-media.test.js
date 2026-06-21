@@ -932,6 +932,35 @@ test('STREAM.MEDIA_HINT with empty identity is dropped before the first identity
   }
 });
 
+test('STREAM.MEDIA_HINT element-scope to a stale/unresolved nid is dropped with ONE diagnostic warn (WR-05, never-break)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const pf = recordingPlayerFactory();
+    const rec = recordingLogger();
+    const ctx = streamingMediaViewerFactory(createViewer, env, {
+      mediaMode: 'reference',
+      allowAssetOrigins: ['cdn.example.test'],
+      playerFactory: pf.factory,
+      logger: rec.logger,
+    });
+    // An element-scope hint names a nid that does NOT resolve (no element at
+    // '999' in this snapshot generation). It must not attach, must not throw,
+    // and must emit exactly one diagnostic so the dropped hint is observable.
+    assert.doesNotThrow(() => ctx.transport.emit('ext:dom-media-hint', {
+      scope: 'element', nid: '999', manifestUrl: HLS_MANIFEST, kind: 'hls', ...HINT_IDENTITY,
+    }));
+    assert.equal(pf.calls.attaches.length, 0, 'a stale element-scope nid never attaches');
+    const dropped = rec.warns.filter((a) => typeof a[0] === 'string' && a[0].indexOf('media hint dropped') !== -1);
+    assert.equal(dropped.length, 1, 'exactly one diagnostic warn per dropped element-scope hint (no spam)');
+    assert.equal(dropped[0][1] && dropped[0][1].nid, '999', 'the diagnostic carries the dropped nid');
+    assert.equal(dropped[0][1] && dropped[0][1].reason, 'unresolved', 'the diagnostic classifies the unresolved cause');
+    assert.equal(rec.errors.length, 0, 'a dropped hint logs no error (it is advisory, not a failure)');
+  } finally {
+    env.teardown();
+  }
+});
+
 test('STREAM.MEDIA_HINT with a blocked-origin manifestUrl does NOT attach and degrades to no-manifest (re-gated at the viewer)', async () => {
   const { createViewer } = await import(RENDERER_MODULE);
   const env = setupEnv();

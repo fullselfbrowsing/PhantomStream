@@ -1972,6 +1972,17 @@ export function createViewer(options) {
       if (el && typeof el.play === 'function' && mediaElementHasNoSource(el)) {
         hintBoundNids.add(String(nid));
         bindAdaptiveHint(el, nid, manifestUrl, kind, p.contentType);
+      } else {
+        // WR-05: the named element cannot take the adaptive stream -- either the
+        // nid does not resolve (stale / wrong generation) or it resolves but is
+        // not MSE-opaque (a resolved-but-sourced element stays with the
+        // progressive path). Surface ONE concise diagnostic so a dropped hint is
+        // observable instead of indistinguishable from "successfully handled".
+        // Never throws (logger is advisory); the never-break contract holds.
+        logger.warn('[Renderer] element-scope media hint dropped (unresolved or non-opaque nid)', {
+          nid: String(nid),
+          reason: el ? 'not-opaque' : 'unresolved'
+        });
       }
       markLive('media');
       return;
