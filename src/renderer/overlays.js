@@ -130,6 +130,71 @@ export var OVERLAY_CSS = [
   '.ps-overlay-dialog-message {',
   '  font-size: 14px; color: #e0e0e0; line-height: 1.5;',
   '  word-break: break-word; max-height: 200px; overflow-y: auto;',
+  '}',
+  // ---- Phase 13 (MEDIA-05): media affordance family (13-UI-SPEC States A/B/C).
+  // Parity values reused verbatim from the glow/progress/dialog built-ins:
+  // scrim rgba(0,0,0,0.5); pill rgba(0,0,0,0.75)+blur(4px)+radius 6px; accent
+  // #f59e0b (reserved for the actionable control); text #e0e0e0; glow
+  // 0 0 12px rgba(245,158,11,0.6); system-ui 13/600; play button >= 44x44.
+  // State A: blocked-play scrim clipped to the element rect.
+  '.ps-overlay-media-blocked {',
+  '  position: absolute;',
+  '  background: rgba(0, 0, 0, 0.5);',
+  '  display: flex; align-items: center; justify-content: center;',
+  '  pointer-events: none;', // the scrim is passive; only the button opts in
+  '}',
+  // State A: centered circular play button (the one actionable control).
+  '.ps-overlay-media-button {',
+  '  box-sizing: border-box;',
+  '  min-width: 44px; min-height: 44px;',
+  '  display: flex; align-items: center; justify-content: center;',
+  '  border: 2px solid #f59e0b;',
+  '  border-radius: 50%;',
+  '  box-shadow: 0 0 12px rgba(245, 158, 11, 0.6);',
+  '  background: transparent;',
+  '  color: #f59e0b;', // currentColor for the inline-SVG play glyph
+  '  cursor: pointer;',
+  '  pointer-events: auto;',
+  '}',
+  '@media (prefers-reduced-motion: no-preference) {',
+  '  .ps-overlay-media-button:hover, .ps-overlay-media-button:focus {',
+  '    filter: brightness(1.1);',
+  '  }',
+  '}',
+  // State B: unmute pill anchored bottom-left of the element rect.
+  '.ps-overlay-media-unmute {',
+  '  position: absolute;',
+  '  display: inline-flex; align-items: center; gap: 4px;',
+  '  background: rgba(0, 0, 0, 0.75);',
+  '  backdrop-filter: blur(4px);',
+  '  -webkit-backdrop-filter: blur(4px);',
+  '  color: #e0e0e0;',
+  '  font: 600 13px/1.2 system-ui, sans-serif;',
+  '  padding: 4px 12px;',
+  '  border-radius: 6px;',
+  '  cursor: pointer;',
+  '  pointer-events: auto;',
+  '}',
+  '.ps-overlay-media-unmute-icon {',
+  '  display: inline-flex; color: #f59e0b;', // amber speaker glyph fill
+  '}',
+  '@media (prefers-reduced-motion: no-preference) {',
+  '  .ps-overlay-media-unmute:hover, .ps-overlay-media-unmute:focus {',
+  '    filter: brightness(1.1);',
+  '  }',
+  '}',
+  // State C: passive poster-only caption (no accent, no pointer events).
+  '.ps-overlay-media-poster {',
+  '  position: absolute;',
+  '  display: inline-flex; align-items: center;',
+  '  background: rgba(0, 0, 0, 0.75);',
+  '  backdrop-filter: blur(4px);',
+  '  -webkit-backdrop-filter: blur(4px);',
+  '  color: #e0e0e0;',
+  '  font: 600 13px/1.2 system-ui, sans-serif;',
+  '  padding: 4px 12px;',
+  '  border-radius: 6px;',
+  '  pointer-events: none;',
   '}'
 ].join('\n');
 
@@ -153,6 +218,22 @@ var ICON_SVG = {
     + '<path d="M20 5H4c-1.1 0-1.99.9-1.99 2L2 17c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7'
     + 'c0-1.1-.9-2-2-2zm-9 3h2v2h-2V8zm0 3h2v2h-2v-2zM8 8h2v2H8V8zm0 3h2v2H8v-2zm-1 2H5v-2h2v2z'
     + 'm0-3H5V8h2v2zm9 7H8v-2h8v2zm0-4h-2v-2h2v2zm0-3h-2V8h2v2zm3 3h-2v-2h2v2zm0-3h-2V8h2v2z"/></svg>'
+};
+
+// Phase 13 media affordance glyphs (13-UI-SPEC: inline SVG, the zero-dependency
+// Font-Awesome-replacement precedent of ICON_SVG above). fill: currentColor so
+// the affordance accent (#f59e0b) applies. These are the ONLY innerHTML strings
+// the media affordances assign -- every label is set via textContent.
+var MEDIA_GLYPH = {
+  // play triangle (centered in the blocked-play button)
+  play: '<svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">'
+    + '<path d="M8 5v14l11-7z"/></svg>',
+  // muted speaker (line-sized for the unmute pill)
+  mutedSpeaker: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">'
+    + '<path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0'
+    + 'c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06'
+    + 'c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18'
+    + 'v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>'
 };
 
 /**
@@ -249,6 +330,10 @@ export function mapHostPointToViewport(point, scale) {
  *   Dispatch one STREAM.OVERLAY payload through the registry.
  * @property {(payload: Object) => void} handleDialogMessage
  *   STREAM.DIALOG handler (dialog card show/hide).
+ * @property {(kind: string, payload: ?Object, ctx?: {anchorRect?: ?Object}) => void} show
+ *   Drive a registered overlay kind directly from renderer state (the media
+ *   affordances are renderer-state-driven, not wire-driven; 13-UI-SPEC). ctx
+ *   carries the pre-resolved anchorRect. A null payload hides (reset contract).
  * @property {() => void} resetOverlays
  *   Hide all kinds (new-snapshot reset, dashboard.js:2762-2764 parity).
  */
@@ -442,6 +527,188 @@ export function createOverlays(opts) {
   register('glow', renderGlow);
   register('progress', renderProgress);
 
+  // --- Phase 13 media affordances (13-UI-SPEC States A/B/C). Siblings of the
+  // built-ins, registered through the same Map. Elements are created lazily on
+  // first show and persist across show/hide (a null payload hides -- the
+  // universal reset contract). Interactive controls (blocked-play button,
+  // unmute pill) set pointer-events:auto and invoke a payload.onActivate
+  // callback on click + Enter/Space; the poster caption is passive. ALL text is
+  // set via textContent; the ONLY innerHTML is the static MEDIA_GLYPH SVGs. ---
+  var mediaBlockedEl = null;
+  var mediaBlockedBtn = null;
+  var mediaBlockedActivate = null; // current onActivate (re-pointed per show)
+  var mediaUnmuteEl = null;
+  var mediaUnmuteActivate = null;
+  var mediaPosterEl = null;
+
+  /**
+   * Invoke a stored onActivate callback in containment -- a throwing host
+   * handler routes to the logger and never breaks the affordance.
+   * @param {?Function} fn
+   */
+  function safeActivate(fn) {
+    if (typeof fn !== 'function') return;
+    try { fn(); } catch (err) { logger.error('[Renderer] media affordance onActivate failed', err); }
+  }
+
+  /** Attach click + Enter/Space activation to an interactive control. */
+  function wireActivation(el, getHandler) {
+    el.addEventListener('click', function () { safeActivate(getHandler()); });
+    el.addEventListener('keydown', function (ev) {
+      if (ev && (ev.key === 'Enter' || ev.key === ' ' || ev.key === 'Spacebar')) {
+        if (typeof ev.preventDefault === 'function') ev.preventDefault();
+        safeActivate(getHandler());
+      }
+    });
+  }
+
+  /** Apply an anchor rect to an absolutely-positioned affordance element. */
+  function anchorAffordance(el, anchorRect) {
+    if (!anchorRect) return;
+    el.style.top = anchorRect.top + 'px';
+    el.style.left = anchorRect.left + 'px';
+    el.style.width = anchorRect.width + 'px';
+    el.style.height = anchorRect.height + 'px';
+  }
+
+  /**
+   * State A -- blocked-play affordance. Non-null payload renders a scrim
+   * clipped to the rect with a centered >=44x44 amber play button; null hides.
+   * The button is the one actionable control (pointer-events:auto, role=button,
+   * focusable, aria-label, inline-SVG play glyph). onActivate fires on
+   * click/Enter/Space (a user gesture, so the re-issued play() is allowed).
+   * @param {?Object} value
+   * @param {?Object} anchorRect
+   */
+  function renderMediaBlocked(value, anchorRect) {
+    if (!value) {
+      if (mediaBlockedEl) mediaBlockedEl.style.display = 'none';
+      mediaBlockedActivate = null;
+      return;
+    }
+    if (!mediaBlockedEl) {
+      mediaBlockedEl = doc.createElement('div');
+      mediaBlockedEl.className = 'ps-overlay-media-blocked';
+      mediaBlockedEl.style.zIndex = '25'; // above progress (20), below dialog (30)
+      mediaBlockedBtn = doc.createElement('div');
+      mediaBlockedBtn.className = 'ps-overlay-media-button';
+      mediaBlockedBtn.setAttribute('role', 'button');
+      mediaBlockedBtn.setAttribute('tabindex', '0');
+      mediaBlockedBtn.setAttribute('aria-label', 'Play mirrored media');
+      mediaBlockedBtn.style.pointerEvents = 'auto';
+      // 44x44 hit-target floor set inline so it holds regardless of CSS
+      // delivery (13-UI-SPEC; the button auto-grows to this minimum even over a
+      // small <audio> rect).
+      mediaBlockedBtn.style.minWidth = '44px';
+      mediaBlockedBtn.style.minHeight = '44px';
+      mediaBlockedBtn.innerHTML = MEDIA_GLYPH.play; // static glyph -- ONLY innerHTML
+      wireActivation(mediaBlockedBtn, function () { return mediaBlockedActivate; });
+      mediaBlockedEl.appendChild(mediaBlockedBtn);
+      layer.appendChild(mediaBlockedEl);
+    }
+    mediaBlockedActivate = (typeof value.onActivate === 'function') ? value.onActivate : null;
+    anchorAffordance(mediaBlockedEl, anchorRect);
+    mediaBlockedEl.style.display = 'flex';
+  }
+
+  /**
+   * State B -- unmute affordance. Non-null payload renders a bottom-left pill
+   * (amber muted-speaker glyph + "Unmute" label via textContent); null hides.
+   * The pill is actionable (pointer-events:auto, role=button, focusable,
+   * aria-label). onActivate fires on click/Enter/Space.
+   * @param {?Object} value
+   * @param {?Object} anchorRect
+   */
+  function renderMediaUnmute(value, anchorRect) {
+    if (!value) {
+      if (mediaUnmuteEl) mediaUnmuteEl.style.display = 'none';
+      mediaUnmuteActivate = null;
+      return;
+    }
+    if (!mediaUnmuteEl) {
+      mediaUnmuteEl = doc.createElement('div');
+      mediaUnmuteEl.className = 'ps-overlay-media-unmute';
+      mediaUnmuteEl.style.zIndex = '25';
+      mediaUnmuteEl.setAttribute('role', 'button');
+      mediaUnmuteEl.setAttribute('tabindex', '0');
+      mediaUnmuteEl.setAttribute('aria-label', 'Unmute mirrored media');
+      mediaUnmuteEl.style.pointerEvents = 'auto';
+      var icon = doc.createElement('span');
+      icon.className = 'ps-overlay-media-unmute-icon';
+      icon.innerHTML = MEDIA_GLYPH.mutedSpeaker; // static glyph -- ONLY innerHTML
+      var label = doc.createElement('span');
+      label.className = 'ps-overlay-media-unmute-label';
+      label.textContent = 'Unmute'; // text via textContent (security invariant)
+      mediaUnmuteEl.appendChild(icon);
+      mediaUnmuteEl.appendChild(label);
+      wireActivation(mediaUnmuteEl, function () { return mediaUnmuteActivate; });
+      layer.appendChild(mediaUnmuteEl);
+    }
+    mediaUnmuteActivate = (typeof value.onActivate === 'function') ? value.onActivate : null;
+    // Anchor bottom-left of the rect (mirrors the progress-pill anchor).
+    if (anchorRect) {
+      mediaUnmuteEl.style.left = anchorRect.left + 8 + 'px';
+      mediaUnmuteEl.style.top = (anchorRect.top + anchorRect.height - 8 - 24) + 'px';
+    }
+    mediaUnmuteEl.style.display = 'inline-flex';
+  }
+
+  /**
+   * State C -- poster-only caption (no-poster fallback). Passive: pointer-events
+   * none, no accent, no activation, text "Media (poster only)" via textContent.
+   * Null hides.
+   * @param {?Object} value
+   * @param {?Object} anchorRect
+   */
+  function renderMediaPoster(value, anchorRect) {
+    if (!value) {
+      if (mediaPosterEl) mediaPosterEl.style.display = 'none';
+      return;
+    }
+    if (!mediaPosterEl) {
+      mediaPosterEl = doc.createElement('div');
+      mediaPosterEl.className = 'ps-overlay-media-poster';
+      mediaPosterEl.style.zIndex = '24';
+      mediaPosterEl.style.pointerEvents = 'none';
+      mediaPosterEl.textContent = 'Media (poster only)'; // textContent only
+      layer.appendChild(mediaPosterEl);
+    }
+    // Centered in the rect.
+    if (anchorRect) {
+      mediaPosterEl.style.left = (anchorRect.left + anchorRect.width / 2) + 'px';
+      mediaPosterEl.style.top = (anchorRect.top + anchorRect.height / 2) + 'px';
+      mediaPosterEl.style.transform = 'translate(-50%, -50%)';
+    }
+    mediaPosterEl.style.display = 'inline-flex';
+  }
+
+  register('media-blocked', renderMediaBlocked);
+  register('media-unmute', renderMediaUnmute);
+  register('media-poster', renderMediaPoster);
+
+  /**
+   * Drive a registered overlay kind directly from renderer state (NOT a wire
+   * message). The media affordances appear/disappear as a function of local
+   * play() outcome / muted mismatch / mediaMode (13-UI-SPEC Motion section), so
+   * the renderer calls show(kind, payload, ctx) where ctx.anchorRect is the
+   * pre-resolved host rect for the element (or ctx carries { value, scale } for
+   * the standard resolver). A null payload hides (the universal reset). Errors
+   * in the renderFn are contained (safeRenderOverlay -> logger).
+   * @param {string} kind
+   * @param {?Object} payload
+   * @param {{anchorRect?: ?Object}} [ctx]
+   */
+  function show(kind, payload, ctx) {
+    var renderFn = registry.get(kind);
+    if (!renderFn) {
+      logger.warn('[Renderer] show() unknown overlay kind ignored', kind);
+      return;
+    }
+    var anchorRect = (ctx && ctx.anchorRect) ? ctx.anchorRect : null;
+    var value = (payload === undefined) ? null : payload;
+    safeRenderOverlay(kind, renderFn, value, anchorRect);
+  }
+
   /**
    * Dispatch one STREAM.OVERLAY payload. Every own key except the identity
    * keys (streamSessionId / snapshotId) is an overlay kind:
@@ -523,6 +790,7 @@ export function createOverlays(opts) {
     register: register,
     handleOverlayMessage: handleOverlayMessage,
     handleDialogMessage: handleDialogMessage,
+    show: show,
     resetOverlays: resetOverlays
   };
 }

@@ -123,7 +123,11 @@ test('renderer innerHTML assignment sinks are allowlisted and explained', () => 
   const expectedInnerHtmlAssignments = {
     'diff.js': 2,
     'index.js': 2,
-    'overlays.js': 2
+    // overlays.js: 2 dialog ICON_SVG writes + 2 Phase 13 media MEDIA_GLYPH
+    // writes (play triangle, muted speaker). All four are STATIC inline-SVG
+    // glyph constants -- the sanctioned zero-dependency icon pattern; no
+    // payload-derived string is ever assigned via innerHTML (13-UI-SPEC).
+    'overlays.js': 4
   };
 
   for (const file of rendererModules()) {
@@ -138,7 +142,8 @@ test('renderer innerHTML assignment sinks are allowlisted and explained', () => 
       expected,
       `src/renderer/${file} has ${count} innerHTML assignment sink(s); ` +
         'new wire-content sinks must route through sanitizeFragment. ' +
-        'Only diff.js/index.js template parsing and overlays.js static ICON_SVG writes are sanctioned.'
+        'Only diff.js/index.js template parsing and overlays.js static ' +
+        'ICON_SVG / MEDIA_GLYPH glyph writes are sanctioned.'
     );
   }
 

@@ -243,11 +243,27 @@ test('semantic addressing does not expand renderer remote-control dispatch behav
   for (const forbidden of ['REMOTE_CONTROL', 'Request control', 'Authorization hook']) {
     assert.equal(rendererSource.includes(forbidden), false, 'source must not contain ' + forbidden);
   }
-  for (const eventName of ['click', 'type', 'scroll']) {
+  // The reverse remote-control surface forwards user INPUT from the viewer to
+  // the captured tab. The guard forbids new input-FORWARDING listeners. Phase
+  // 13's media affordances add LOCAL-only activation listeners (click + keydown
+  // on the in-host overlay play/unmute controls) that drive the in-iframe
+  // element directly and NEVER call transport.send/safeSend -- they are not a
+  // remote-control expansion, so 'click' is no longer blanket-banned here. The
+  // input-capture event names that WOULD represent forwarding stay forbidden.
+  for (const eventName of ['type', 'scroll', 'pointermove', 'pointerdown', 'mousemove']) {
     assert.equal(
       new RegExp("addEventListener\\(\\s*['\\\"]" + eventName + "['\\\"]").test(rendererSource),
       false,
-      'renderer must not add a new ' + eventName + ' dispatch listener'
+      'renderer must not add a new ' + eventName + ' input-forwarding listener'
     );
   }
+  // Defense for the affordance click/keydown listeners: assert none of the
+  // renderer's addEventListener callbacks forward over the wire. The media
+  // affordance handlers (overlays.js wireActivation) invoke a local onActivate
+  // only; there is no transport.send / safeSend reachable from a DOM listener.
+  assert.equal(
+    /addEventListener\([^)]*\)[\s\S]{0,400}?(?:transport\.send|safeSend)\s*\(/.test(rendererSource),
+    false,
+    'no renderer DOM listener may forward input over the wire (affordances are local-only)'
+  );
 });
