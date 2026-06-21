@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Asset & Media Streaming
 status: executing
-stopped_at: Completed 15-02-PLAN.md
-last_updated: "2026-06-21T19:13:08.391Z"
-last_activity: "2026-06-21 -- 15-02 complete: MSEC-04 no-referrer meta + omit-credentials posture shipped (renderer srcdoc)"
+stopped_at: Completed 15-03-PLAN.md
+last_updated: "2026-06-21T19:21:39.100Z"
+last_activity: "2026-06-21 -- 15-03 complete: MSEC-04 media-security traceability suite (4 invariants) + Wave-2 gate green (suite 700/700, oracle 48/48)"
 progress:
   total_phases: 15
   completed_phases: 13
   total_plans: 73
-  completed_plans: 71
+  completed_plans: 72
   percent: 87
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-06-19)
 ## Current Position
 
 Phase: 15 (Media Security, Masking, Threat Model & Docs) — EXECUTING
-Plan: 3 of 4
-Status: 15-02 complete (MSEC-04 renderer no-referrer meta + omit-credentials posture); ready for 15-03
-Last activity: 2026-06-21 -- 15-02 complete: MSEC-04 no-referrer meta + omit-credentials posture shipped
+Plan: 4 of 4
+Status: 15-03 complete (MSEC-04 media-security traceability suite + Wave-2 regression gate green); ready for 15-04 (docs)
+Last activity: 2026-06-21 -- 15-03 complete: media-security traceability suite (tests/security-media.test.js); full suite 700/700, oracle 48/48
 
 **v2.0 phase order:** 12 → 13 → 14 → 15
 
@@ -109,6 +109,7 @@ Last activity: 2026-06-21 -- 15-02 complete: MSEC-04 no-referrer meta + omit-cre
 | Phase 14 P05 | 4min | 2 tasks | 3 files |
 | Phase 15 P01 | 33min | 3 tasks | 3 files |
 | Phase 15 P02 | 6min | 1 task | 3 files |
+| Phase 15 P03 | 5min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -155,6 +156,7 @@ Earlier v1.0 decisions are retained in PROJECT.md Key Decisions and the prior ph
 - [Phase ?]: [Phase 14-05]: hls.js declared ONLY as an OPTIONAL peerDependency ({ hls.js: >=1.5.0 } + peerDependenciesMeta.optional:true) -- npm neither auto-installs nor warns when absent; dependencies stays exactly { ws: 8.21.0 }, hls.js never a hard/dev dep, node_modules/hls.js absent. Zero-hard-dep PROVEN by package:smoke importing ./renderer in an hls.js-absent sandbox (resolves only because the hls.js import is dynamic-only, Plan 02); a named zero-hard-dep-violation smoke assertion (before the broad subpath loop) + a package-publish deps-shape guard catch any future top-level-import/hard-dep leak (T-14-17/T-14-18). publint 'All good!', attw exit 0, full suite 660/660, oracle 48/48. MADPT-01 fully closed; Phase 14 complete.
 - [Phase ?]: [Phase 15-01]: MSEC-03 capture masking spine shipped -- 3 host options (maskMediaSelector factory-validated, maskAssetUrls token/PII strip, maskAssetUrlFn fail-closed-to-BLOCK redactor) routed through ONE new 'asset-url'/'media-url' sanitizeForWire dispatch wrapping a PURE maskAssetUrlForWire helper + documented TOKEN_PARAM_DENYLIST (AWS SigV4/SigV2, GCP, Azure SAS, generic; case-insensitive exact-name OR x-amz-/x-goog- prefix). Off-by-default returns the ORIGINAL url string when nothing stripped (Pitfall 1: never URL.toString()) so the wire stays byte-identical (oracle 48/48, NO new ledger entry). maskMediaWithAncestors ORed into BOTH media-tracker skip guards + the blockSelector placeholder path -> masked <video>/<audio> emits no STREAM.MEDIA and degrades to the dimension-only placeholder (A3: plain block placeholder, no 'masked' reason). Zero new deps; full suite 689/689.
 - [Phase 15-02]: MSEC-04 viewer-fetch leakage control shipped -- ONE document-level <meta name="referrer" content="no-referrer"> injected IMMEDIATELY after CSP_META (before charset/viewport/first stylesheet link/payload <img>) at BOTH src/renderer/snapshot.js return sites (buildSnapshotHtml :673 + container-less buildFramePlaceholderHtml :690), so the mirrored page URL (token-bearing) never leaks in a Referer header to third-party CDNs on any parser- or CSS-initiated fetch (img/video/source/poster/background-image/font). One document meta beats per-element referrerpolicy (covers CSS-initiated fetches none could reach). NO crossorigin added -- allow-same-origin sandbox + no crossorigin already omits credentials; forcing anonymous would break non-CORS assets (locked); the test asserts indexOf('crossorigin')===-1 on the srcdoc (the 3 source hits are comment-only). CSP_META BYTE-UNCHANGED (default-src 'none', media-src ... blob:, img-src no-blob, no script-src, no connect-src). renderer-media-csp.test.js +6 pins (present/exactly-one/ordered-after-CSP-and-before-charset+first-link+first-img/no-crossorigin/container-less); renderer-snapshot.test.js CSP-first verbatim pin updated to <head>+CSP+referrer+charset (Rule 1: the meta displaced a sibling adjacency assertion -- intent preserved). Live referrer/credential suppression is the deferred real-browser UAT (A2); string contract unit-pinned. Renderer-only edit -> NO wire impact, oracle 48/48 unchanged, NO new ledger entry; zero new deps; full suite 696/696.
+- [Phase 15-03]: Named media-security traceability suite (tests/security-media.test.js, MSEC-04) pins 4 invariants backing the Plan-04 object-URL threat model -- media-player.js zero allow-scripts outside comments (purity glob untouched, Pitfall 6), deps byte-unchanged ({ws}+optional hls.js peer), late cross-session STREAM.MEDIA rejected by isCurrentStream (cites renderer-media.test.js:411), parent-realm object-URL revoke-on-destroy (cites renderer-media-player.test.js + focused self-contained case); kept independent of the purity test (Plan 04 owns markers). Phase-15 Wave-2 gate: full suite 700/700, oracle 48/48 no new ledger entry, package-publish 6/6.
 
 ### Pending Todos
 
@@ -182,6 +184,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-06-21T19:05:40.923Z
+Last session: 2026-06-21T19:20:49.367Z
 Stopped at: Completed 15-01-PLAN.md
 Resume file: None
