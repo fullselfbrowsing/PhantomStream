@@ -2,7 +2,7 @@
 phase: 15
 slug: media-security-masking-threat-model-docs
 status: draft
-nyquist_compliant: false
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-06-21
 ---
@@ -79,12 +79,12 @@ created: 2026-06-21
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references (1 new file + 3 extensions)
-- [ ] No watch-mode flags
-- [ ] Differential oracle stays 48/48 (masking off-by-default → byte-identical); no new ledger entry
-- [ ] `dependencies`/`peerDependencies` byte-unchanged (no new deps)
-- [ ] `nyquist_compliant: true` set in frontmatter (after planner maps tasks)
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies (every task carries <acceptance_criteria>/<automated>; Plan 01 creates the Wave-0 file + extensions)
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (Plan 01: new security-asset-url-mask.test.js + capture-media.test.js extension; Plan 02: renderer-media-csp.test.js; Plan 04: security-chokepoint-purity.test.js)
+- [x] No watch-mode flags
+- [x] Differential oracle stays 48/48 (masking off-by-default → byte-identical); no new ledger entry (Plan 01 Task 3 + Plan 03 Task 2 gate it)
+- [x] `dependencies`/`peerDependencies` byte-unchanged (no new deps; Plan 03 Task 1 re-asserts)
+- [x] `nyquist_compliant: true` set in frontmatter (after planner maps tasks)
 
-**Approval:** pending
+**Approval:** planner-mapped 2026-06-21 (4 plans, 2 waves; nyquist_compliant)
