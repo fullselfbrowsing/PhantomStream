@@ -33,7 +33,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Milestone v2.0 — Asset & Media Streaming (Phases 12–15):**
 
 - [x] **Phase 12: Static Assets by Reference** - Verify/harden the already-shipped by-reference asset pipeline; `currentSrc` pinning; placeholder fallback; precise viewer CSP; front-loaded fail-closed origin policy + `mediaMode` (completed 2026-06-20)
-- [ ] **Phase 13: Video/Audio URL + Playback Sync** - Progressive `<video>`/`<audio>` from source URL; throttled `STREAM.MEDIA` side channel; drift-corrected pure-function reconciler; autoplay-policy-correct viewer
+- [x] **Phase 13: Video/Audio URL + Playback Sync** - Progressive `<video>`/`<audio>` from source URL; throttled `STREAM.MEDIA` side channel; drift-corrected pure-function reconciler; autoplay-policy-correct viewer (completed 2026-06-21)
 - [ ] **Phase 14: Adaptive Streaming + Adapter Discovery + Fallback** - Best-effort HLS/DASH via an optional, lazy, parent-realm player; opt-in adapter manifest discovery; MSE-no-manifest/DRM → poster; live-stream handling
 - [ ] **Phase 15: Media Security, Masking, Threat Model & Docs** - Complete URL/media masking + `referrerpolicy="no-referrer"`; threat-review the parent-realm object-URL blast radius; media security tests; SECURITY/ARCHITECTURE docs
 
@@ -376,7 +376,7 @@ Plans:
 - [x] 13-03-PLAN.md — Renderer slice: media-src CSP + string-layer media URL gate (pre-parse SSRF fix) + affordance overlays + handleMedia parent-realm driver (muted-autoplay, onMediaBlocked, mediaMode poster) (MEDIA-01, MEDIA-05, MWIRE-01)
 
 **Wave 3** *(blocked on 13-01, 13-02)*
-- [ ] 13-04-PLAN.md — Oracle slice: media-playback-sync fixture + scenario + single D27 ledger entry keeping the differential oracle green (MEDIA-02, MWIRE-01)
+- [x] 13-04-PLAN.md — Oracle slice: media-playback-sync fixture + scenario + single D27 ledger entry keeping the differential oracle green (MEDIA-02, MWIRE-01)
 
 ### Phase 14: Adaptive Streaming + Adapter Discovery + Fallback
 **Goal**: Best-effort adaptive playback — when an HLS (`.m3u8`) or DASH (`.mpd`) manifest is available, the viewer plays it via an optional, lazy player running in a renderer-owned **parent realm** (never inside the mirror sandbox); Playwright/CDP and extension adapters surface manifest URLs by network observation as opt-in hints with graceful absence; MSE-without-manifest/DRM degrade to poster with a documented reason; live streams are handled — the mirror never breaks
@@ -442,6 +442,6 @@ Phases execute in numeric order. v1.0 (1–11) is complete. v2.0 active order: 1
 | 10. npm Packaging & 0.x Publish | 5/5 | Complete | 2026-06-16 |
 | 11. FSB Swap-In → 1.0 | — | Complete (verified in FSB repo) | 2026-06-16 |
 | 12. Static Assets by Reference | 3/3 | Complete   | 2026-06-20 |
-| 13. Video/Audio URL + Playback Sync | 3/4 | In Progress|  |
+| 13. Video/Audio URL + Playback Sync | 4/4 | Complete   | 2026-06-21 |
 | 14. Adaptive Streaming + Adapter Discovery + Fallback | 0/TBD | Not started | - |
 | 15. Media Security, Masking, Threat Model & Docs | 0/TBD | Not started | - |

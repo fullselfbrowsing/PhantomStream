@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Asset & Media Streaming
-status: executing
-stopped_at: Completed 13-03-PLAN.md
-last_updated: "2026-06-21T04:08:08.733Z"
-last_activity: 2026-06-21 -- Phase 13 Plan 03 complete (renderer media driver + media-src CSP/SSRF gate + affordances)
+status: verifying
+stopped_at: Completed 13-04-PLAN.md
+last_updated: "2026-06-21T04:21:46.641Z"
+last_activity: 2026-06-21 -- Phase 13 Plan 04 complete (media-playback-sync oracle slice + D27 ledger entry; oracle 48/48, full suite 580/580)
 progress:
   total_phases: 15
   completed_phases: 11
   total_plans: 64
-  completed_plans: 63
-  percent: 98
+  completed_plans: 64
+  percent: 100
 ---
 
 # Project State
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-06-19)
 
 Phase: 13 (Video/Audio URL + Playback Sync) — EXECUTING
 Plan: 4 of 4
-Status: Ready to execute (Plans 01-03 complete; 04 = oracle slice / UAT)
-Last activity: 2026-06-21 — Phase 13 Plan 03 complete (renderer media driver + media-src CSP/SSRF gate + 3 affordances)
+Status: Phase complete — ready for verification
+Last activity: 2026-06-21 — Phase 13 Plan 04 complete (media-playback-sync fixture/scenario + D27 ledger entry; differential oracle stays green at 48/48, full suite 580/580)
 
 **v2.0 phase order:** 12 → 13 → 14 → 15
 
@@ -99,6 +99,7 @@ Last activity: 2026-06-21 — Phase 13 Plan 03 complete (renderer media driver +
 | Phase 13 P01 | 9min | 2 tasks | 6 files |
 | Phase 13 P02 | 11min | 2 tasks | 2 files |
 | Phase 13 P03 | 38min | 3 tasks | 8 files |
+| Phase 13 P04 | 9min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -132,6 +133,7 @@ Earlier v1.0 decisions are retained in PROJECT.md Key Decisions and the prior ph
 - [Phase ?]: [Phase 13-02]: startMediaTracker is a scroll-twin armed/torn at the startScrollTracker sites; media events do not bubble so listeners are PER-ELEMENT (Map+records), with added-node attach + removed-node detach; STREAM.MEDIA discrete events emit immediately, timeupdate throttled at MEDIA_SYNC_THROTTLE_MS and playing-only; every payload nid-addressed + identity-stamped + sentAt-stamped; no media bytes on the wire.
 - [Phase 13-03]: media-src http: https: data: added to CSP_META (twin of img-src, NO blob: -- Phase 14; default-src 'none'/no script-src retained). gateSnapshotAssets generalized (findImgTagEnd->findTagEnd, a unified <img>/<video>/<source> pre-parse scan via nextAssetOpener) so <video src>/<video poster>/<source src> to a blocked origin are neutralized to the dimensioned placeholder at the STRING layer before the parser prefetches (Pitfall 5 SSRF fix); gateFragmentMedia is post-parse defense-in-depth + poster-mode source strip.
 - [Phase 13-03]: handleMedia (case STREAM.MEDIA; default already ignores it for old viewers) staleness-guards via isCurrentStream, resolves the nid, runs reconcileMediaDrift, and drives the inert in-iframe element cross-realm from the PARENT realm via applyMediaAction (seeking-hold, readyState>=1 seek gate, seekable.length rejoin guard). ensurePlaying: muted=true before first play; if (p !== undefined && typeof p.catch === 'function') jsdom guard; NotAllowedError -> media-blocked affordance + onMediaBlocked(nid) CONFIG callback (assetOriginPolicy-hook family, contained-not-rethrown), never wedges. Unmute trigger: el.muted && payload.muted===false in reference -> show media-unmute (onActivate sets muted=false+volume then hides). poster/off: no driver, no affordance (source already gate-neutralized). Snapshot media[] baseline applied once per nid on first bind (readyState-gated) then reconciler owns it (Pitfall 7). Sandbox stays EXACTLY allow-same-origin. No D27 ledger entry (renderer-only slice; the media-playback-sync fixture + D27 land in 13-04). Full suite 577/577.
+- [Phase 13-04]: D27-media-playback-sync ledger entry + a deterministically-firing media-playback-sync fixture/scenario keep the differential oracle green (48/48, was 45) now that capture emits media[] + STREAM.MEDIA; full suite 580/580 (was 577). ONE appliesTo predicate covers BOTH Shape A (extracted-only trailing STREAM.MEDIA; refMsg undefined, extMsg.type === STREAM.MEDIA) and Shape B (same-index SNAPSHOT where only the extracted payload.media is non-empty) per the D26 single-predicate discipline -- compareStreams returns the first match, so a second same-index entry would be stale-flagged. Cites MEDIA-02/MWIRE-01, NOT MEDIA-03 (the renderer-side reconciler emits no wire message; it is covered by Plan 01's pure unit tests). normalize.js unchanged -- normalizeExtracted passes payload.media through, so the SNAPSHOT diverges on the new top-level media key naturally (D26 needed no normalizer change either, but because its markers lived in payload.html). The beforeStart paused=false defineProperty stub on BOTH sides is load-bearing (the extracted tracker's timeupdate heartbeat returns early while el.paused, and jsdom reports an unloaded element as paused); the finite-duration stub drives the VOD baseline (not live:true). Task 1 proved the divergence by the oracle hard-failing UNDECLARED DIVERGENCE; Task 2 landed D27 and restored green with D27 firing and not stale (the stale-entry detector passes). Envelope/relay untouched.
 
 ### Pending Todos
 
@@ -159,6 +161,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-06-21T04:08:08.729Z
-Stopped at: Completed 13-03-PLAN.md
+Last session: 2026-06-21T04:21:46.636Z
+Stopped at: Completed 13-04-PLAN.md
 Resume file: None
