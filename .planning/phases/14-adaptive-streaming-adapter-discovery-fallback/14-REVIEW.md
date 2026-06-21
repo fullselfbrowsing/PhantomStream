@@ -29,6 +29,20 @@ findings:
   info: 6
   total: 11
 status: issues_found
+resolution:
+  resolved_at: 2026-06-21T00:00:00Z
+  scope: warnings
+  warnings_resolved: 5
+  info_deferred: 6
+  status: warnings_resolved
+  full_suite: 665 passed / 0 failed
+  package_smoke: green (hls.js absent)
+  commits:
+    WR-01: d02f851
+    WR-02: 1a0988a
+    WR-03: 275a50b
+    WR-04: 8aafcaa
+    WR-05: b338f54
 ---
 
 # Phase 14: Code Review Report
@@ -36,7 +50,7 @@ status: issues_found
 **Reviewed:** 2026-06-21T00:00:00Z
 **Depth:** standard
 **Files Reviewed:** 19
-**Status:** issues_found
+**Status:** issues_found (all 5 Warnings RESOLVED; 6 Info findings deferred)
 
 ## Summary
 
@@ -80,6 +94,7 @@ origin gate, a stale-identity bypass window, and documentation/contract drift.
 
 ### WR-01: Playwright manifest observer accepts responses from ANY frame (cross-frame manifest injection, mitigated only by the origin gate)
 
+**Resolved:** commit `d02f851` — `handleManifestResponse` now resolves the response's initiating frame (via `response.frame()` or `response.request().frame()`, guarded) and drops a non-main-frame response, degrading to accept only when frame info is unavailable. The CDP `Network.responseReceived` path tracks the main-frame CDP id from `Page.frameNavigated` and drops mismatched `frameId`s. Sub-frame regression test added.
 **File:** `src/adapters/playwright.js:243-260`
 **Issue:** `handleManifestResponse` reads `response.url()` and
 `response.headers()` but never checks the initiating frame. Every other
@@ -118,6 +133,7 @@ exposes it.
 
 ### WR-02: Extension manifest observer scopes `chrome.webRequest` to `<all_urls>` with no tab/initiator restriction
 
+**Resolved:** commit `1a0988a` — the listener filter now carries `tabId` once the streamed tab id is known (re-registered when it becomes known/changes, since it is absent at install time), and `handleManifestCompleted` drops `details.tabId` mismatches against `sessionState.tabId` as the robust belt-and-suspenders guard. Graceful absence preserved (no opt-in → no listener; unknown tab id or no `details.tabId` → accept). Unrelated-tab regression test added.
 **File:** `src/adapters/extension.js:386-394`
 **Issue:** When discovery is opted in, the listener is registered with
 `{ urls: ['<all_urls>'] }` and no `tabId`/`windowId` filter. Every completed
@@ -146,6 +162,7 @@ streamed tab id becomes known if it was absent at install time.)
 
 ### WR-03: Empty-identity media hint bypasses the staleness guard during the pre-snapshot window
 
+**Resolved:** commit `275a50b` — fixed at the renderer (defense-in-depth across all adapters) rather than the two adapters: `handleMediaHint` now drops an empty-identity hint while `active.streamSessionId` is still `''` (no generation established), so a hint can never out-race the snapshot that defines its generation. Once a snapshot establishes identity, `isCurrentStream` governs as before; the old-viewer-ignores-unknown-type behavior is unchanged. Pre-snapshot-window regression test added.
 **File:** `src/adapters/playwright.js:280-305`, `src/adapters/extension.js:347-372`, `src/protocol/messages.js:338-348`
 **Issue:** Both adapters initialize `currentIdentity = { streamSessionId: '',
 snapshotId: 0 }` and only update it once they snoop an identity-bearing STREAM
@@ -174,6 +191,7 @@ function emitMediaHint(manifestUrl, kind, contentType) {
 
 ### WR-04: `attachViaLazyHls` registers the DRM `encrypted` listener but the per-nid `destroy` cannot remove it, so a late `encrypted` event re-degrades a torn-down element
 
+**Resolved:** commit `8aafcaa` — the `encrypted` handler is now a named reference removed (guarded) in the player's `destroy`, before `hls.destroy()` (which still revokes the object URL hls.js minted). A late `encrypted` after teardown is now a no-op. Post-teardown regression test added.
 **File:** `src/renderer/media-player.js:236-261, 177-190`
 **Issue:** The lazy-hls branch attaches a `{ once: true }` `encrypted` listener to
 `videoEl` (line 248). `destroy(nid)` (lines 177-190) tears down the hls instance
@@ -202,6 +220,7 @@ var player = { destroy: function () {
 
 ### WR-05: Element-scope hint to a non-opaque or stale element is silently dropped with no degrade and no diagnostic
 
+**Resolved:** commit `b338f54` — `handleMediaHint` now emits one concise `logger.warn` per dropped element-scope hint, classifying the cause (`unresolved` vs `not-opaque`), so a dropped hint is observable instead of indistinguishable from a handled one. The never-break contract is kept: it does not throw and does not degrade when there is no element to degrade (logger is advisory). Note: the fix uses `logger.warn` per the directive rather than the report's suggested `degrade('no-manifest')`, avoiding the IN-02 reason-overload concern. Dropped-hint regression test added.
 **File:** `src/renderer/index.js:1959-1970`
 **Issue:** In `handleMediaHint`, an `element`-scope hint binds only when the
 element resolves AND is MSE-opaque (line 1964). Every other element-scope
