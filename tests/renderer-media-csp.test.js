@@ -14,6 +14,19 @@
 //      (13-RESEARCH Pitfall 5). Allowed origins pass unchanged; a `>` inside a
 //      quoted media attribute must not truncate the quote-aware tag scan.
 //
+// Phase 15 Plan 02 Task 1 (MSEC-04) adds a third contract:
+//   3. Viewer-fetch leakage: the assembled srcdoc head must carry exactly ONE
+//      document-level `<meta name="referrer" content="no-referrer">` placed
+//      IMMEDIATELY after CSP_META -- before charset/viewport, the first
+//      stylesheet <link>, and any payload <img> -- so the referrer policy is
+//      parsed before any subresource fetch (Pitfall 4). It also asserts the
+//      omit-credentials posture is preserved: NO `crossorigin` attribute appears
+//      anywhere in the srcdoc (the allow-same-origin sandbox + no crossorigin
+//      already yields no-credential cross-origin GETs; forcing crossorigin
+//      ="anonymous" would break non-CORS assets -- locked decision). Live
+//      referrer/credential suppression is the deferred real-browser UAT (A2);
+//      these are string-level pins (jsdom never parses srcdoc or issues fetches).
+//
 // Assertions run on the STRING output of gateSnapshotAssets / buildSnapshotHtml
 // (no DOM parse), so they pin the pre-parse timing directly.
 
@@ -61,6 +74,103 @@ test('media-src add does not regress default-src, leak a script-src, or widen co
   assert.ok(/img-src\s+http:\s+https:\s+data:/.test(srcdoc), 'img-src must be retained unchanged');
   const imgDirective = srcdoc.slice(srcdoc.indexOf('img-src'), srcdoc.indexOf(';', srcdoc.indexOf('img-src')));
   assert.ok(imgDirective.indexOf('blob:') === -1, 'blob: is NOT added to img-src (media-src only)');
+});
+
+// --- Phase 15 (MSEC-04): document-level no-referrer meta + omit-credentials posture ---
+
+/** Count the number of matches of a global regex in a string. */
+function countMatches(str, re) {
+  const m = str.match(re);
+  return m ? m.length : 0;
+}
+
+test('MSEC-04: buildSnapshotHtml carries a document-level <meta name="referrer" content="no-referrer">', async () => {
+  const snap = await import(SNAPSHOT_MODULE);
+  const srcdoc = snap.buildSnapshotHtml({ html: '<p>x</p>' });
+  assert.ok(
+    /<meta name="referrer" content="no-referrer">/.test(srcdoc),
+    'srcdoc must contain a document-level <meta name="referrer" content="no-referrer"> (MSEC-04 referrer leakage control)'
+  );
+});
+
+test('MSEC-04: exactly ONE referrer meta is emitted (no duplication)', async () => {
+  const snap = await import(SNAPSHOT_MODULE);
+  const srcdoc = snap.buildSnapshotHtml({ html: '<p>x</p>' });
+  assert.equal(
+    countMatches(srcdoc, /name="referrer"/g),
+    1,
+    'exactly one referrer meta must be present (one document-level control covers every viewer-side fetch)'
+  );
+});
+
+test('MSEC-04: the referrer meta sits immediately after CSP_META (precedes charset)', async () => {
+  const snap = await import(SNAPSHOT_MODULE);
+  const srcdoc = snap.buildSnapshotHtml({ html: '<p>x</p>' });
+  const cspIdx = srcdoc.indexOf('Content-Security-Policy');
+  const refIdx = srcdoc.indexOf('<meta name="referrer"');
+  const charsetIdx = srcdoc.indexOf('<meta charset=');
+  assert.ok(cspIdx !== -1 && refIdx !== -1 && charsetIdx !== -1, 'CSP, referrer, and charset metas must all be present');
+  assert.ok(cspIdx < refIdx, 'the referrer meta must come AFTER CSP_META');
+  assert.ok(refIdx < charsetIdx, 'the referrer meta must come BEFORE <meta charset=> (immediately after CSP_META)');
+});
+
+test('MSEC-04: the referrer meta precedes the first <link rel="stylesheet"> (ordering pin, Pitfall 4)', async () => {
+  const snap = await import(SNAPSHOT_MODULE);
+  // A payload with a stylesheet so a <link rel="stylesheet"> exists in the output.
+  const srcdoc = snap.buildSnapshotHtml({ html: '<p>x</p>', stylesheets: ['https://cdn.example.com/site.css'] });
+  const refIdx = srcdoc.indexOf('<meta name="referrer"');
+  const linkIdx = srcdoc.indexOf('<link rel="stylesheet"');
+  assert.ok(refIdx !== -1, 'referrer meta must be present');
+  assert.ok(linkIdx !== -1, 'a stylesheet <link> must be present for this ordering assertion');
+  assert.ok(
+    refIdx < linkIdx,
+    'the referrer policy must be parsed BEFORE the first stylesheet link (a subresource fetch)'
+  );
+});
+
+test('MSEC-04: the referrer meta precedes the first <img in the payload (ordering pin, Pitfall 4)', async () => {
+  const snap = await import(SNAPSHOT_MODULE);
+  // A payload whose body html contains an <img> so a subresource-bearing tag exists.
+  const srcdoc = snap.buildSnapshotHtml({ html: '<img data-fsb-nid="1" src="https://cdn.example.com/a.png">' });
+  const refIdx = srcdoc.indexOf('<meta name="referrer"');
+  const imgIdx = srcdoc.indexOf('<img');
+  assert.ok(refIdx !== -1, 'referrer meta must be present');
+  assert.ok(imgIdx !== -1, 'an <img> must be present in the assembled body for this ordering assertion');
+  assert.ok(
+    refIdx < imgIdx,
+    'the referrer policy must be parsed BEFORE the first payload <img> (the parser fetches it during parse)'
+  );
+});
+
+test('MSEC-04: NO crossorigin attribute appears anywhere in the srcdoc (omit-credentials posture)', async () => {
+  const snap = await import(SNAPSHOT_MODULE);
+  // Exercise a payload with stylesheets + an <img> -- none of the assembly paths
+  // may introduce a crossorigin attribute (forcing CORS would break non-CORS assets).
+  const srcdoc = snap.buildSnapshotHtml({
+    html: '<img data-fsb-nid="1" src="https://cdn.example.com/a.png">',
+    stylesheets: ['https://cdn.example.com/site.css'],
+  });
+  assert.equal(
+    srcdoc.indexOf('crossorigin'),
+    -1,
+    'no crossorigin attribute may appear (the allow-same-origin sandbox + no crossorigin already omits credentials)'
+  );
+});
+
+test('MSEC-04: the container-less buildFramePlaceholderHtml return site also carries the referrer meta after CSP_META', async () => {
+  const snap = await import(SNAPSHOT_MODULE);
+  // The second buildSnapshotHtml-family return site (the container-less variant)
+  // must ALSO place the referrer meta immediately after CSP_META.
+  const srcdoc = snap.buildFramePlaceholderHtml({ label: 'X', origin: 'https://other.example.com' });
+  assert.ok(
+    /<meta name="referrer" content="no-referrer">/.test(srcdoc),
+    'the container-less srcdoc variant must also carry the no-referrer meta'
+  );
+  const cspIdx = srcdoc.indexOf('Content-Security-Policy');
+  const refIdx = srcdoc.indexOf('<meta name="referrer"');
+  const charsetIdx = srcdoc.indexOf('<meta charset=');
+  assert.ok(cspIdx < refIdx && refIdx < charsetIdx, 'referrer meta is ordered after CSP_META and before charset here too');
+  assert.equal(srcdoc.indexOf('crossorigin'), -1, 'no crossorigin attribute in the container-less variant either');
 });
 
 test('<video src> to a blocked origin is neutralized at the STRING layer pre-parse', async () => {
