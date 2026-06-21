@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Asset & Media Streaming
 status: milestone_complete
-stopped_at: Milestone complete (Phase 15 was final phase)
+stopped_at: "v2.0 complete + audited + live-validated; tagged v2.0 (local). Light close done; formal milestones/ archival + REQUIREMENTS reset deferred to /gsd:new-milestone for v2.1."
 last_updated: 2026-06-21T20:01:05.052Z
-last_activity: "2026-06-21 -- 15-04 complete: MSEC-04 security-contract docs; purity markers extended; suite 700/700"
+last_activity: "2026-06-21 -- v2.0 shipped: all 15 phases complete (704/704); milestone audit tech_debt (residual adaptive-MSE UAT); foregrounded FSB pass validated Phase 13 media playback live; tagged v2.0"
 progress:
   total_phases: 15
-  completed_phases: 14
+  completed_phases: 15
   total_plans: 73
   completed_plans: 73
-  percent: 93
+  percent: 100
 ---
 
 # Project State
