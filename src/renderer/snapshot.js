@@ -195,6 +195,8 @@ function attrsBlobIsUnreliable(attrs) {
 var IMG_OPEN_RE = /<img\b/gi;
 /** Match the START of a <video start tag (`<video` + a name boundary). */
 var VIDEO_OPEN_RE = /<video\b/gi;
+/** Match the START of an <audio start tag (`<audio` + a name boundary). */
+var AUDIO_OPEN_RE = /<audio\b/gi;
 /** Match the START of a <source start tag (`<source` + a name boundary). */
 var SOURCE_OPEN_RE = /<source\b/gi;
 // Leading substring of the dimensioned blocked-origin placeholder emitted by
@@ -321,8 +323,8 @@ function gateOneImgTag(attrs, gate) {
 }
 
 /**
- * Gate the bounded attribute blob of a single <video> or <source> start tag and
- * return the replacement markup. Phase 13 (MEDIA-01 / V12 SSRF): a real
+ * Gate the bounded attribute blob of a single <video>/<audio>/<source> start tag
+ * and return the replacement markup. Phase 13 (MEDIA-01 / V12 SSRF): a real
  * browser's parser prefetches <video src>, <video poster>, and <source src>
  * DURING srcdoc parse -- exactly like <img src> -- so any blocked fetchable URL
  * here must be neutralized at the string layer before the parser sees it.
@@ -343,7 +345,7 @@ function gateOneImgTag(attrs, gate) {
  * A blocked `poster` (its own origin denied) always forces the placeholder: the
  * poster is the one fetch poster mode permits, so if it is forbidden there is
  * nothing left to render.
- * @param {string} tagName  'video' or 'source' (re-emit token when allowed).
+ * @param {string} tagName  'video', 'audio', or 'source' (re-emit token when allowed).
  * @param {string} attrs    The attribute blob (already correctly bounded).
  * @param {(url: string, kind: string) => { allow: boolean, reason?: string }} gate
  * @returns {string}
@@ -457,7 +459,7 @@ export function gateSnapshotAssets(html, gate) {
   var out = '';
   var cursor = 0; // index of the next un-copied char in html
   while (cursor < html.length) {
-    // Find the nearest of the three openers at or after the cursor.
+    // Find the nearest asset opener at or after the cursor.
     var next = nextAssetOpener(html, cursor);
     if (!next) {
       break; // no more asset openers
@@ -485,21 +487,22 @@ export function gateSnapshotAssets(html, gate) {
     } else {
       var replacement = gateOneMediaTag(next.tag, attrs, gate);
       out += replacement;
-      // WR-03: when a <video> CONTAINER is neutralized to the placeholder <div>
-      // (not re-emitted, not surgically src-stripped), its child <source>/<track>
-      // and its `</video>` close tag would otherwise be left orphaned in the
-      // stream (a `</video>` with no opener). A self-closing '/' just before '>'
-      // means the start tag had no body to consume. Detect the placeholder by
-      // its marker, and -- for a non-self-closing <video> -- consume through the
-      // matching `</video>` so the placeholder fully replaces the element. A
-      // <source> is void (no close tag) and is never a container, so it is
-      // unaffected. If no matching close tag is found (unterminated element), we
-      // fall back to resuming past the start tag rather than swallowing the rest
+      // WR-03: when a <video>/<audio> CONTAINER is neutralized to the placeholder
+      // <div> (not re-emitted, not surgically src-stripped), its child
+      // <source>/<track> and its `</video>`/`</audio>` close tag would otherwise be
+      // left orphaned in the stream (a close tag with no opener). A self-closing
+      // '/' just before '>' means the start tag had no body to consume. Detect the
+      // placeholder by its marker, and -- for a non-self-closing container --
+      // consume through the matching close tag so the placeholder fully replaces
+      // the element. A <source> is void (no close tag) and is never a container, so
+      // it is unaffected. If no matching close tag is found (unterminated element),
+      // we fall back to resuming past the start tag rather than swallowing the rest
       // of the document.
       var wasNeutralized = replacement.indexOf(PLACEHOLDER_MARKER) === 0;
       var selfClosed = html.charAt(tagEnd - 1) === '/';
-      if (wasNeutralized && next.tag === 'video' && !selfClosed) {
-        var closeEnd = findMatchingCloseTag(html, tagEnd + 1, 'video');
+      var isContainer = (next.tag === 'video' || next.tag === 'audio');
+      if (wasNeutralized && isContainer && !selfClosed) {
+        var closeEnd = findMatchingCloseTag(html, tagEnd + 1, next.tag);
         cursor = (closeEnd === -1) ? (tagEnd + 1) : closeEnd;
       } else {
         cursor = tagEnd + 1; // resume just past this tag's '>'
@@ -511,7 +514,7 @@ export function gateSnapshotAssets(html, gate) {
 }
 
 /**
- * Find the nearest <img>/<video>/<source> start-tag opener at or after `from`.
+ * Find the nearest <img>/<video>/<audio>/<source> start-tag opener at or after `from`.
  * Returns { index, attrsStart, tag } for the earliest match, or null when none
  * remains. Each regex is reset and seeked from `from` so the scan is
  * cursor-driven (the unified gateSnapshotAssets loop owns the cursor; we do not
@@ -525,6 +528,7 @@ function nextAssetOpener(html, from) {
   var specs = [
     { re: IMG_OPEN_RE, tag: 'img' },
     { re: VIDEO_OPEN_RE, tag: 'video' },
+    { re: AUDIO_OPEN_RE, tag: 'audio' },
     { re: SOURCE_OPEN_RE, tag: 'source' }
   ];
   for (var i = 0; i < specs.length; i++) {

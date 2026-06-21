@@ -703,6 +703,55 @@ test('string layer strips a blocked <source srcset> but keeps an allowed src (Co
   }
 });
 
+// Codex P1: the pre-parse scanner enumerated only <img>/<video>/<source>, so an
+// <audio src> was never string-gated -- the parser could start the media GET
+// during srcdoc parse (a private-origin SSRF here) before the post-parse pass
+// removes it. Scanning <audio> closes that hole; the container-orphan guard must
+// also consume the matching </audio> when the element is neutralized.
+test('string layer scans <audio> -- a blocked origin is neutralized, </audio> not orphaned (Codex P1)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(
+      createViewer,
+      env,
+      { mediaMode: 'reference' },
+      {
+        html: '<audio src="https://169.254.169.254/track.mp3">'
+          + '<source src="https://169.254.169.254/t.ogg"></audio>',
+      }
+    );
+    const srcdoc = ctx.iframe.getAttribute('srcdoc');
+    assert.equal(srcdoc.includes('169.254'), false, 'a blocked <audio src> (and its swallowed child <source>) must not survive pre-parse');
+    assert.equal((srcdoc.match(/<\/audio>/gi) || []).length, 0, 'the neutralized <audio> container consumes its </audio> (no orphan close tag)');
+    assert.ok(srcdoc.includes('data-ps-asset-unavailable'), 'the blocked <audio> degrades to a placeholder');
+  } finally {
+    env.teardown();
+  }
+});
+
+// Poster mode withholds every playable source; <audio src> must be stripped at
+// the string layer just like <video src>/<source src>, while the <audio> tag
+// itself survives (surgical strip, not a wholesale placeholder swap).
+test('poster mode strips <audio src> at the string layer (Codex P1)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(
+      createViewer,
+      env,
+      { mediaMode: 'poster', allowAssetOrigins: ['cdn.example.test'] },
+      { html: '<audio src="https://cdn.example.test/track.webm"></audio>' }
+    );
+    const srcdoc = ctx.iframe.getAttribute('srcdoc');
+    assert.equal(srcdoc.includes('track.webm'), false, 'poster mode strips the playable <audio src> media URL pre-parse');
+    assert.equal((srcdoc.match(/<audio\b/gi) || []).length, 1, 'the <audio> tag itself survives the poster strip');
+    assert.equal((srcdoc.match(/<\/audio>/gi) || []).length, 1, 'exactly one </audio> close tag (no orphan)');
+  } finally {
+    env.teardown();
+  }
+});
+
 test('driver holds while element.seeking is true (skips a new seek -- Pitfall 6)', async () => {
   const { createViewer } = await import(RENDERER_MODULE);
   const env = setupEnv();
