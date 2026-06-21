@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Asset & Media Streaming
 status: executing
-stopped_at: Phase 12 Plan 12-03 complete (renderer fetch gate + mediaMode + currentSrc pin; MSEC-01/MSEC-02/ASST-02/ASST-03 GREEN; full suite 449/449). Phase 12 (Static Assets by Reference) is now 3/3 plans complete.
-last_updated: "2026-06-20T08:40:00.000Z"
-last_activity: 2026-06-20
+stopped_at: Phase 13 UI-SPEC approved
+last_updated: "2026-06-21T03:15:52.444Z"
+last_activity: 2026-06-21 -- Phase 13 planning complete
 progress:
   total_phases: 15
-  completed_phases: 10
-  total_plans: 60
+  completed_phases: 11
+  total_plans: 64
   completed_plans: 60
-  percent: 67
+  percent: 73
 ---
 
 # Project State
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-06-19)
 
 Phase: 12 (static-assets-by-reference) — COMPLETE (3/3 plans)
 Plan: 3 of 3 (12-03 complete)
-Status: 12-03 complete (renderer fetch-gate + mediaMode + currentSrc pin GREEN; full suite 449/449). Phase 12 done; Phase 13 (Video/Audio URL + Playback Sync) is next to plan.
-Last activity: 2026-06-20
+Status: Ready to execute
+Last activity: 2026-06-21 -- Phase 13 planning complete
 
 **v2.0 phase order:** 12 → 13 → 14 → 15
 
@@ -150,6 +150,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-06-20T07:53:50.700Z
-Stopped at: Roadmap complete; 20/20 v2.0 requirements mapped; Phase 12 (Static Assets by Reference) is next to plan
-Resume file: None
+Last session: 2026-06-21T02:39:40.436Z
+Stopped at: Phase 13 UI-SPEC approved
+Resume file: .planning/phases/13-video-audio-url-playback-sync/13-UI-SPEC.md
