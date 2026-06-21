@@ -1129,3 +1129,106 @@ test('live reuse: a live payload with an empty seekable range does NOT seek (the
     env.teardown();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Phase 14 Plan 03 Task 3: wire the Phase-13 State-C media-poster caption from
+// handleMedia (close the 13-UI-REVIEW Fix 1 BLOCKER -- renderMediaPoster was
+// registered at overlays.js but never show()n from index.js). In poster mode a
+// poster-LESS element shows "Media (poster only)"; an element WITH a surviving
+// poster keeps it hidden; 'off' mode renders nothing.
+// ---------------------------------------------------------------------------
+
+test('State C: poster mode + a poster-LESS element SHOWS the media-poster caption over the rect', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    // The snapshot <video> has NO poster attribute -> State C: the caption must show.
+    const ctx = streamingMediaViewerFactory(
+      createViewer, env,
+      { mediaMode: 'poster' },
+      { html: '<video></video>' }
+    );
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 5, paused: false, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), ...IDENTITY,
+    });
+    const cap = env.document.querySelector('.ps-overlay-media-poster');
+    assert.ok(cap && cap.style.display !== 'none', 'the media-poster caption is shown for a posterless poster-mode element');
+    assert.equal(cap.textContent, 'Media (poster only)', 'the locked State C caption copy appears');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('State C: poster mode + an element WITH a surviving poster keeps the caption HIDDEN', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    // The poster is an allowed origin so it survives gateFragmentMedia; the
+    // caption must NOT show (the poster image is the explanation).
+    const ctx = streamingMediaViewerFactory(
+      createViewer, env,
+      { mediaMode: 'poster', allowAssetOrigins: ['cdn.example.test'] },
+      { html: '<video poster="https://cdn.example.test/p.jpg"></video>' }
+    );
+    // Sanity: the poster survived the poster-mode gate (only the playable source
+    // is stripped in poster mode, not the poster image).
+    assert.equal(ctx.video.getAttribute('poster'), 'https://cdn.example.test/p.jpg', 'the gated poster survived');
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 5, paused: false, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), ...IDENTITY,
+    });
+    const cap = env.document.querySelector('.ps-overlay-media-poster');
+    assert.ok(!cap || cap.style.display === 'none', 'the caption stays hidden when a poster is present');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('State C: off mode renders nothing (no media-poster caption driven)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(
+      createViewer, env,
+      { mediaMode: 'off' },
+      { html: '<video></video>' }
+    );
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 5, paused: false, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), ...IDENTITY,
+    });
+    const cap = env.document.querySelector('.ps-overlay-media-poster');
+    assert.ok(!cap || cap.style.display === 'none', 'off mode drives no poster caption');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('State C: a posterless caption is HIDDEN again once a poster appears on a re-bind (null-payload hide path)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    // First: posterless -> caption shown.
+    const ctx = streamingMediaViewerFactory(
+      createViewer, env,
+      { mediaMode: 'poster', allowAssetOrigins: ['cdn.example.test'] },
+      { html: '<video></video>' }
+    );
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 5, paused: false, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), ...IDENTITY,
+    });
+    const cap = env.document.querySelector('.ps-overlay-media-poster');
+    assert.ok(cap && cap.style.display !== 'none', 'caption shown for the posterless element first');
+    // Now the same element gains a surviving poster -> the next media tick hides it.
+    ctx.video.setAttribute('poster', 'https://cdn.example.test/p.jpg');
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 6, paused: false, playbackRate: 1, duration: 120,
+      sentAt: Date.now(), ...IDENTITY,
+    });
+    assert.equal(cap.style.display, 'none', 'the caption hides once a poster is present (null-payload hide)');
+  } finally {
+    env.teardown();
+  }
+});

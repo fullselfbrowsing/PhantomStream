@@ -1803,9 +1803,27 @@ export function createViewer(options) {
   function handleMedia(payload) {
     if (viewerState !== 'streaming') return;
     if (!isCurrentStream(payload, active)) return;
-    // poster/off: the source is neutralized at the gate; never drive or surface
-    // an affordance (13-UI-SPEC State C: poster is a still frame).
-    if (mediaMode !== 'reference') { markLive('media'); return; }
+    // poster/off: the source is neutralized at the gate; never drive playback or
+    // surface a playback affordance (13-UI-SPEC State C: poster is a still frame).
+    if (mediaMode !== 'reference') {
+      // State C wire (13-UI-REVIEW Fix 1 -- the dead-code BLOCKER): in POSTER mode
+      // a media element whose gated `poster` did NOT survive renders as an
+      // unexplained blank, so drive the registered-but-never-shown media-poster
+      // caption: show it IFF the element has no surviving poster, else hide it
+      // (the poster image is the explanation). 'off' mode renders nothing.
+      if (mediaMode === 'poster') {
+        var posterNid = payload && payload.nid;
+        var posterEl = resolveIndexedNode(posterNid);
+        var hasPoster = !!(posterEl && posterEl.getAttribute && posterEl.getAttribute('poster'));
+        if (posterEl && !hasPoster) {
+          overlays.show('media-poster', { nid: posterNid }, { anchorRect: resolveNidRect(posterNid) });
+        } else {
+          overlays.show('media-poster', null);
+        }
+      }
+      markLive('media');
+      return;
+    }
     var nid = payload && payload.nid;
     var el = resolveIndexedNode(nid);
     if (!el || typeof el.play !== 'function') return;
