@@ -91,6 +91,52 @@ test('all three blocked media URLs in one snapshot are neutralized together', as
   assert.ok(out.indexOf('localhost/y.webm') === -1, 'blocked source src gone');
 });
 
+// WR-03: a neutralized <video> placeholder must FULLY replace the element --
+// consuming its child <source>/<track> and the matching </video> -- not just
+// swap the start tag (which would orphan the </video> close tag and leave the
+// children dangling, producing structurally malformed markup).
+test('WR-03: a blocked <video> placeholder consumes its children and </video> (no orphaned close tag)', async () => {
+  const snap = await import(SNAPSHOT_MODULE);
+  const gate = await referenceGate();
+  const html =
+    '<video data-fsb-nid="1" src="https://10.0.0.5/x.mp4">'
+    + '<source data-fsb-nid="2" src="http://localhost/y.webm">'
+    + '<track kind="subtitles" src="https://10.0.0.5/c.vtt"></video>';
+  const out = snap.gateSnapshotAssets(html, gate);
+  // The element collapses to exactly one inert placeholder.
+  assert.ok(out.indexOf('data-ps-asset-unavailable') !== -1, 'a placeholder replaces the blocked <video>');
+  assert.equal((out.match(/<\/video>/gi) || []).length, 0, 'no orphaned </video> close tag survives');
+  assert.equal((out.match(/<source\b/gi) || []).length, 0, 'no leftover <source> child survives');
+  assert.equal((out.match(/<track\b/gi) || []).length, 0, 'no leftover <track> child survives');
+  // No blocked URL anywhere (children are discarded, not re-emitted).
+  assert.ok(out.indexOf('10.0.0.5') === -1 && out.indexOf('localhost/y.webm') === -1, 'no blocked media URL survives');
+});
+
+test('WR-03: content after a neutralized <video> is preserved (cursor resumes past </video>)', async () => {
+  const snap = await import(SNAPSHOT_MODULE);
+  const gate = await referenceGate();
+  const html =
+    'BEFORE<video data-fsb-nid="1" src="http://10.0.0.5/x.mp4"><source src="http://10.0.0.5/y.webm"></video>'
+    + 'AFTER<p data-fsb-nid="9">tail</p>';
+  const out = snap.gateSnapshotAssets(html, gate);
+  assert.equal((out.match(/<\/video>/gi) || []).length, 0, 'no orphaned </video>');
+  assert.ok(out.indexOf('BEFORE') === 0, 'leading content preserved');
+  assert.ok(out.indexOf('AFTER<p data-fsb-nid="9">tail</p>') !== -1, 'trailing content after </video> preserved intact');
+});
+
+test('WR-03: an allowed <video> keeps its body and close tag intact (no over-consume regression)', async () => {
+  const snap = await import(SNAPSHOT_MODULE);
+  const gate = await referenceGate();
+  const html =
+    '<video data-fsb-nid="1" src="https://cdn.example.com/clip.mp4">'
+    + '<source data-fsb-nid="2" src="https://cdn.example.com/clip.webm"></video>NEXT';
+  const out = snap.gateSnapshotAssets(html, gate);
+  // referenceGate widens nothing, so cdn.example.com (public https) is allowed.
+  assert.equal((out.match(/<\/video>/gi) || []).length, 1, 'the allowed <video> keeps exactly one </video>');
+  assert.ok(out.indexOf('https://cdn.example.com/clip.webm') !== -1, 'the allowed child <source> is preserved');
+  assert.ok(out.indexOf('NEXT') !== -1, 'content after the allowed element is preserved');
+});
+
 test('an allowed https media origin passes through unchanged', async () => {
   const snap = await import(SNAPSHOT_MODULE);
   const gate = await referenceGate();

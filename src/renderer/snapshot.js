@@ -115,6 +115,54 @@ function findTagEnd(html, from) {
 }
 
 /**
+ * Find the index just past the matching `</tagName>` close tag for a container
+ * element (`<video>`/`<audio>`) whose start tag has already been consumed
+ * (review WR-03). Scanning starts at `from` (just past the start tag's `>`) and
+ * tracks nesting depth: a nested same-name start tag (`<video ...>`, but not a
+ * self-closing `<video/>`) increments depth, a `</tagName>` decrements it, and
+ * the position just past the `>` of the depth-0 close tag is returned. Quoted
+ * attribute values are skipped quote-aware (a `>` inside `"..."`/`'...'`/`` `...` ``
+ * does not close a tag), reusing findTagEnd to step over each opener's
+ * attributes. Returns -1 when no matching close tag exists (the element ran to
+ * EOF unterminated) -- the caller then falls back to resuming just past the
+ * start tag rather than consuming the rest of the document.
+ * @param {string} html     The full markup.
+ * @param {number} from     Index just past the start tag's `>`.
+ * @param {string} tagName  Lowercase container tag name ('video' / 'audio').
+ * @returns {number} Index just past the matching `</tagName>`, or -1.
+ */
+function findMatchingCloseTag(html, from, tagName) {
+  var openRe = new RegExp('<' + tagName + '\\b', 'gi');
+  var closeRe = new RegExp('</' + tagName + '\\s*>', 'gi');
+  var depth = 0;
+  var i = from;
+  while (i < html.length) {
+    openRe.lastIndex = i;
+    closeRe.lastIndex = i;
+    var openM = openRe.exec(html);
+    var closeM = closeRe.exec(html);
+    if (!closeM) return -1; // no close tag remains -> unterminated
+    if (openM && openM.index < closeM.index) {
+      // A nested same-name start tag before the next close. Only count it as a
+      // nesting opener if it is NOT self-closing (`<video/>` opens nothing).
+      var openTagEnd = findTagEnd(html, openM.index + openM[0].length);
+      if (openTagEnd === -1) return -1; // malformed opener runs to EOF
+      var isSelfClosing = html.charAt(openTagEnd - 1) === '/';
+      if (!isSelfClosing) depth++;
+      i = openTagEnd + 1;
+      continue;
+    }
+    // The next relevant token is a close tag.
+    if (depth === 0) {
+      return closeM.index + closeM[0].length; // just past `</tagName>`
+    }
+    depth--;
+    i = closeM.index + closeM[0].length;
+  }
+  return -1;
+}
+
+/**
  * True when a bounded <img> attribute blob cannot be confidently parsed, so the
  * scanner's tag boundary may disagree with a real HTML parser's and the tag
  * must FAIL CLOSED instead of being re-emitted (review WR-01).
@@ -149,6 +197,12 @@ var IMG_OPEN_RE = /<img\b/gi;
 var VIDEO_OPEN_RE = /<video\b/gi;
 /** Match the START of a <source start tag (`<source` + a name boundary). */
 var SOURCE_OPEN_RE = /<source\b/gi;
+// Leading substring of the dimensioned blocked-origin placeholder emitted by
+// assetUnavailablePlaceholderTag. Single source of truth so gateSnapshotAssets
+// can detect when a media tag was neutralized to a placeholder (vs re-emitted
+// or surgically src-stripped) and consume the container's body accordingly
+// (review WR-03).
+var PLACEHOLDER_MARKER = '<div data-ps-asset-unavailable=';
 /** Pull a double/single/unquoted attribute value out of an attrs blob. */
 function readTagAttr(attrs, name) {
   var re = new RegExp(name + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s"\'>]+))', 'i');
@@ -185,7 +239,7 @@ function setTagAttr(attrs, name, value) {
 function assetUnavailablePlaceholderTag(attrs) {
   var w = readTagAttr(attrs, 'rr_width') || readTagAttr(attrs, 'width') || '';
   var h = readTagAttr(attrs, 'rr_height') || readTagAttr(attrs, 'height') || '';
-  var out = '<div data-ps-asset-unavailable="blocked-origin"';
+  var out = PLACEHOLDER_MARKER + '"blocked-origin"';
   if (w) out += ' rr_width="' + escapeAttribute(w) + '"';
   if (h) out += ' rr_height="' + escapeAttribute(h) + '"';
   out += '></div>';
@@ -410,10 +464,30 @@ export function gateSnapshotAssets(html, gate) {
     // the opener token + attrs + '>' preserves it.
     if (next.tag === 'img') {
       out += gateOneImgTag(attrs, gate);
+      cursor = tagEnd + 1; // resume just past this tag's '>'
     } else {
-      out += gateOneMediaTag(next.tag, attrs, gate);
+      var replacement = gateOneMediaTag(next.tag, attrs, gate);
+      out += replacement;
+      // WR-03: when a <video> CONTAINER is neutralized to the placeholder <div>
+      // (not re-emitted, not surgically src-stripped), its child <source>/<track>
+      // and its `</video>` close tag would otherwise be left orphaned in the
+      // stream (a `</video>` with no opener). A self-closing '/' just before '>'
+      // means the start tag had no body to consume. Detect the placeholder by
+      // its marker, and -- for a non-self-closing <video> -- consume through the
+      // matching `</video>` so the placeholder fully replaces the element. A
+      // <source> is void (no close tag) and is never a container, so it is
+      // unaffected. If no matching close tag is found (unterminated element), we
+      // fall back to resuming past the start tag rather than swallowing the rest
+      // of the document.
+      var wasNeutralized = replacement.indexOf(PLACEHOLDER_MARKER) === 0;
+      var selfClosed = html.charAt(tagEnd - 1) === '/';
+      if (wasNeutralized && next.tag === 'video' && !selfClosed) {
+        var closeEnd = findMatchingCloseTag(html, tagEnd + 1, 'video');
+        cursor = (closeEnd === -1) ? (tagEnd + 1) : closeEnd;
+      } else {
+        cursor = tagEnd + 1; // resume just past this tag's '>'
+      }
     }
-    cursor = tagEnd + 1; // resume just past this tag's '>'
   }
   out += html.slice(cursor);
   return out;
