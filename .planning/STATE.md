@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Asset & Media Streaming
 status: executing
-stopped_at: Completed 13-04-PLAN.md
-last_updated: "2026-06-21T10:48:23.660Z"
-last_activity: 2026-06-21 -- Phase 14 planning complete
+stopped_at: Completed 14-01-PLAN.md
+last_updated: "2026-06-21T15:08:00.000Z"
+last_activity: 2026-06-21 -- Completed 14-01 (adaptive-streaming protocol + filter spine)
 progress:
   total_phases: 15
   completed_phases: 12
   total_plans: 69
-  completed_plans: 64
+  completed_plans: 65
   percent: 80
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-19)
 
 **Core value:** A live, trustworthy, low-bandwidth, semantically addressable mirror of a real browser tab — capture → relay → render → remote-control must work end-to-end as a standalone framework.
-**Current focus:** Phase 14 — adaptive streaming + adapter discovery + fallback
+**Current focus:** Phase 14 — Adaptive Streaming + Adapter Discovery + Fallback
 
 ## Current Position
 
-Phase: 14
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-06-21 -- Phase 14 planning complete
+Phase: 14 (Adaptive Streaming + Adapter Discovery + Fallback) — EXECUTING
+Plan: 2 of 5
+Status: 14-01 complete (protocol + filter spine); ready to execute 14-02
+Last activity: 2026-06-21 -- Completed 14-01-PLAN.md
 
 **v2.0 phase order:** 12 → 13 → 14 → 15
 
@@ -101,6 +101,7 @@ Last activity: 2026-06-21 -- Phase 14 planning complete
 | Phase 13 P02 | 11min | 2 tasks | 2 files |
 | Phase 13 P03 | 38min | 3 tasks | 8 files |
 | Phase 13 P04 | 9min | 2 tasks | 4 files |
+| Phase 14 P01 | 18min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -136,6 +137,9 @@ Earlier v1.0 decisions are retained in PROJECT.md Key Decisions and the prior ph
 - [Phase 13-03]: handleMedia (case STREAM.MEDIA; default already ignores it for old viewers) staleness-guards via isCurrentStream, resolves the nid, runs reconcileMediaDrift, and drives the inert in-iframe element cross-realm from the PARENT realm via applyMediaAction (seeking-hold, readyState>=1 seek gate, seekable.length rejoin guard). ensurePlaying: muted=true before first play; if (p !== undefined && typeof p.catch === 'function') jsdom guard; NotAllowedError -> media-blocked affordance + onMediaBlocked(nid) CONFIG callback (assetOriginPolicy-hook family, contained-not-rethrown), never wedges. Unmute trigger: el.muted && payload.muted===false in reference -> show media-unmute (onActivate sets muted=false+volume then hides). poster/off: no driver, no affordance (source already gate-neutralized). Snapshot media[] baseline applied once per nid on first bind (readyState-gated) then reconciler owns it (Pitfall 7). Sandbox stays EXACTLY allow-same-origin. No D27 ledger entry (renderer-only slice; the media-playback-sync fixture + D27 land in 13-04). Full suite 577/577.
 - [Phase 13-04]: D27-media-playback-sync ledger entry + a deterministically-firing media-playback-sync fixture/scenario keep the differential oracle green (48/48, was 45) now that capture emits media[] + STREAM.MEDIA; full suite 580/580 (was 577). ONE appliesTo predicate covers BOTH Shape A (extracted-only trailing STREAM.MEDIA; refMsg undefined, extMsg.type === STREAM.MEDIA) and Shape B (same-index SNAPSHOT where only the extracted payload.media is non-empty) per the D26 single-predicate discipline -- compareStreams returns the first match, so a second same-index entry would be stale-flagged. Cites MEDIA-02/MWIRE-01, NOT MEDIA-03 (the renderer-side reconciler emits no wire message; it is covered by Plan 01's pure unit tests). normalize.js unchanged -- normalizeExtracted passes payload.media through, so the SNAPSHOT diverges on the new top-level media key naturally (D26 needed no normalizer change either, but because its markers lived in payload.html). The beforeStart paused=false defineProperty stub on BOTH sides is load-bearing (the extracted tracker's timeupdate heartbeat returns early while el.paused, and jsdom reports an unloaded element as paused); the finite-duration stub drives the VOD baseline (not live:true). Task 1 proved the divergence by the oracle hard-failing UNDECLARED DIVERGENCE; Task 2 landed D27 and restored green with D27 firing and not stale (the stale-entry detector passes). Envelope/relay untouched.
 
+- [Phase 14-01]: STREAM.MEDIA_HINT='ext:dom-media-hint' (twin of STREAM.MEDIA) + MediaHintPayload typedef (nid?/scope/manifestUrl/kind/contentType?/identity-stamped) added to src/protocol/messages.js; collision-free in Object.values(STREAM) (A2) + raw-round-trips under the 1 MiB cap; constants.js untouched (op needs none); index.js barrel already re-exports it. Both adapters' Object.keys(STREAM) allow-sets (playwright.js:78, extension.js:21) auto-include it, so MEDIA_HINT is relayable with NO adapter edit -- only Plan 02 emission code is new. Old viewers ignore the unknown type (renderer dispatch default); envelope/relay byte-unchanged.
+- [Phase 14-01]: classifyManifest({url, contentType}) is a pure exported 'hls'|'dash'|null classifier (content-type-first -- the robust signal for extensionless/signed CDN URLs -- then .m3u8/.mpd path extension; URL-OR-content-type, either independently sufficient). HLS token set: application/vnd.apple.mpegurl + x-mpegurl + audio[-x]/mpegurl; DASH: application/dash+xml. manifestPathOf wraps new URL() in try/catch with a regex query/hash strip so a malformed/hostile url never throws (T-14-03). Two Wave-0 scaffolds created green: tests/media-hint-filter.test.js (9 filter tests) + tests/renderer-media-player.test.js (1 harness placeholder, installStubMediaSource + stubVideoEl, NO media-player.js import until Plan 02). Full suite 601/601 (was 588); differential oracle 48/48 UNCHANGED -- no D-ledger entry (the hint originates in the adapter, not src/capture/; A4 confirmed). dependencies stays { ws: 8.21.0 }.
+
 ### Pending Todos
 
 None yet.
@@ -162,6 +166,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-06-21T04:21:46.636Z
-Stopped at: Completed 13-04-PLAN.md
+Last session: 2026-06-21T15:08:00.000Z
+Stopped at: Completed 14-01-PLAN.md
 Resume file: None

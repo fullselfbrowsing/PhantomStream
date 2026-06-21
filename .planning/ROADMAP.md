@@ -485,7 +485,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 14-01-PLAN.md — Protocol + filter spine: STREAM.MEDIA_HINT op + MediaHintPayload + pure classifyManifest + Wave 0 test scaffolds
+- [x] 14-01-PLAN.md — Protocol + filter spine: STREAM.MEDIA_HINT op + MediaHintPayload + pure classifyManifest + Wave 0 test scaffolds
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -554,5 +554,5 @@ Phases execute in numeric order. v1.0 (1–11) is complete. v2.0 active order: 1
 | 11. FSB Swap-In → 1.0 | — | Complete (verified in FSB repo) | 2026-06-16 |
 | 12. Static Assets by Reference | 3/3 | Complete   | 2026-06-20 |
 | 13. Video/Audio URL + Playback Sync | 4/4 | Complete    | 2026-06-21 |
-| 14. Adaptive Streaming + Adapter Discovery + Fallback | 0/5 | Planned | - |
+| 14. Adaptive Streaming + Adapter Discovery + Fallback | 1/5 | In Progress|  |
 | 15. Media Security, Masking, Threat Model & Docs | 0/TBD | Not started | - |
