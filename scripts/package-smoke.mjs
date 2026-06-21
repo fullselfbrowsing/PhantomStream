@@ -25,6 +25,22 @@ try {
   await run('npm', ['init', '-y'], { cwd: tempDir });
   await run('npm', ['install', tarballPath], { cwd: tempDir });
 
+  // Zero-hard-dependency proof (Phase 14-05 / MADPT-01) — runs FIRST, before the broad
+  // subpath loop below, so a renderer regression is attributed by THIS named check rather
+  // than surfacing as a generic ERR_MODULE_NOT_FOUND buried among the other subpaths. The
+  // temp sandbox installs ONLY PhantomStream + its hard deps ({ ws }); hls.js is an OPTIONAL
+  // peerDependency and is NOT installed here. Importing the `./renderer` subpath must still
+  // succeed — it does only because src/renderer/media-player.js references hls.js via a
+  // dynamic `import('hls.js')` inside tryLazyImportHls(), never a top-level import. A
+  // regression (a top-level `import 'hls.js'` anywhere reachable from `./renderer`) throws
+  // ERR_MODULE_NOT_FOUND, which this step turns into a clear, attributable
+  // `zero-hard-dep-violation` failure. Do NOT install hls.js in this sandbox — its ABSENCE
+  // is the proof.
+  await assertHlsNotInstalled(tempDir);
+  await run(process.execPath, ['--input-type=module', '-e', buildZeroHardDepRendererCheckSource()], {
+    cwd: tempDir,
+  });
+
   await run(process.execPath, ['--input-type=module', '-e', buildImportCheckSource()], {
     cwd: tempDir,
   });
@@ -77,6 +93,41 @@ function buildImportCheckSource() {
   return specifiers.map(function (specifier) {
     return 'await import(' + JSON.stringify(specifier) + ');';
   }).join('\n');
+}
+
+// Hard-fail if hls.js somehow got installed into the smoke sandbox: its ABSENCE is the
+// load-bearing proof of the zero-hard-dependency guarantee. A present hls.js would let a
+// regressed top-level import pass silently, defeating buildZeroHardDepRendererCheckSource().
+async function assertHlsNotInstalled(dir) {
+  try {
+    await readFile(join(dir, 'node_modules', 'hls.js', 'package.json'), 'utf8');
+  } catch {
+    return; // expected path: hls.js is not installed
+  }
+  throw new Error(
+    'zero-hard-dep-smoke-misconfigured: hls.js is installed in the smoke sandbox — ' +
+      'it must stay ABSENT so the ./renderer import proves the dynamic-import-only contract',
+  );
+}
+
+// Focused, NAMED zero-hard-dep assertion: import ONLY the `./renderer` subpath in the
+// hls.js-absent sandbox and translate any failure into an attributable message. This is the
+// single most important packaging guarantee of Phase 14 (the renderer's hls.js import is
+// dynamic-only); see the call site for the full rationale.
+function buildZeroHardDepRendererCheckSource() {
+  const rendererSpecifier = PACKAGE_JSON.name + '/renderer';
+  return [
+    'try {',
+    '  await import(' + JSON.stringify(rendererSpecifier) + ');',
+    '} catch (error) {',
+    '  const detail = (error && error.message) ? error.message : String(error);',
+    '  throw new Error(',
+    '    "zero-hard-dep-violation: ' + rendererSpecifier + ' requires hls.js to import — " +',
+    '    "hls.js must be referenced via a dynamic import(\'hls.js\') only, never a top-level import " +',
+    '    "(hls.js is an OPTIONAL peerDependency and is NOT installed here). Underlying error: " + detail',
+    '  );',
+    '}',
+  ].join('\n');
 }
 
 function run(command, args, options = {}) {
