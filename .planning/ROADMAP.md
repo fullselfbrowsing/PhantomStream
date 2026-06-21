@@ -489,7 +489,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 14-02-PLAN.md — Parent-realm media-player.js (native-HLS/playerFactory/lazy-hls/degrade) + media-unavailable overlay + media-src blob: CSP
+- [x] 14-02-PLAN.md — Parent-realm media-player.js (native-HLS/playerFactory/lazy-hls/degrade) + media-unavailable overlay + media-src blob: CSP
 - [ ] 14-04-PLAN.md — Adapter manifest discovery: opt-in Playwright page.on('response')/CDP + extension webRequest/debugger emitting hints
 
 **Wave 3** *(blocked on Wave 2 completion)*
@@ -554,5 +554,5 @@ Phases execute in numeric order. v1.0 (1–11) is complete. v2.0 active order: 1
 | 11. FSB Swap-In → 1.0 | — | Complete (verified in FSB repo) | 2026-06-16 |
 | 12. Static Assets by Reference | 3/3 | Complete   | 2026-06-20 |
 | 13. Video/Audio URL + Playback Sync | 4/4 | Complete    | 2026-06-21 |
-| 14. Adaptive Streaming + Adapter Discovery + Fallback | 1/5 | In Progress|  |
+| 14. Adaptive Streaming + Adapter Discovery + Fallback | 2/5 | In Progress|  |
 | 15. Media Security, Masking, Threat Model & Docs | 0/TBD | Not started | - |
