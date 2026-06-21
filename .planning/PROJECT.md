@@ -70,16 +70,14 @@ The evaluation harness and research paper are deferred to milestone v2.1.
 - ✓ Static assets by reference — `<img>`/`srcset`/`<picture>`/`<source>`/SVG `<image>`/`background-image`/`<video>` poster resolve to absolute source URLs and render in the viewer by fetching from origin (no image bytes on the relay), `currentSrc`-pinned, with a fail-closed viewer-fetch origin policy, `mediaMode` switch, precise CSP, and placeholder degradation for non-shareable (`blob:`/oversized-`data:`) refs — Validated in Phase 12 (ASST-01..05, MSEC-01, MSEC-02)
 - ✓ Progressive `<video>`/`<audio>` playback + sync — media plays in the viewer from the source URL (no media bytes on the relay), driven cross-realm from the parent over a new throttled `STREAM.MEDIA` side channel with a pure drift reconciler (hold / ±5% rate-nudge / hard-seek / live rejoin-edge), muted-autoplay default + blocked-play & unmute affordances, `media-src` CSP + poster-mode string-layer SSRF gating, envelope/relay untouched and old viewers safely ignoring the new type — Validated in Phase 13 (MEDIA-01..05, MWIRE-01, MWIRE-02); real-browser playback UAT tracked in `13-HUMAN-UAT.md`
 - ✓ Adaptive streaming + adapter discovery + fallback — best-effort HLS/DASH plays via an optional, lazy player in a renderer-owned **parent realm** that binds a `MediaSource` `blob:` object URL cross-realm to the inert in-iframe `<video>` (sandbox unchanged; hls.js is an optional `peerDependency`, dynamic-`import()`-only — the published module stays zero-runtime-dep); Playwright/CDP + extension adapters surface manifest URLs by opt-in network observation (`STREAM.MEDIA_HINT`) with graceful absence; MSE/`blob`/DRM degrade to poster with an observable reason via a single never-rethrowing `degrade()` sink; live streams reuse the reconciler live-edge branch — the mirror never breaks — Validated in Phase 14 (MADPT-01..04); real-browser MSE/live/DRM UAT tracked in `14-HUMAN-UAT.md`
+- ✓ Media security contract completed — asset/media URL **masking** vocabulary (`maskMediaSelector` omits the URL + emits no `STREAM.MEDIA` → placeholder; `maskAssetUrls` strips a documented token/PII query-param denylist, off-by-default + byte-identical so the differential oracle is untouched; `maskAssetUrlFn` fail-closed) via the capture `sanitizeForWire` chokepoint; a document-level `referrerpolicy="no-referrer"` + omit-credentials viewer fetch; the **parent-realm object-URL blast-radius threat model** + media security tests; `docs/SECURITY.md`/`docs/ARCHITECTURE.md` updated (limitation #6 — `<video>`/`<audio>` now mirrored by reference) — Validated in Phase 15 (MSEC-03, MSEC-04); real-browser security UAT tracked in `15-HUMAN-UAT.md`
 
 ### Active
 
-<!-- Current scope (milestone v2.0 — Asset & Media Streaming). Building toward these. -->
-<!-- Phases 12 (static assets), 13 (progressive media + sync), 14 (adaptive + fallback) complete → moved to Validated. Only Phase 15 (media security completion) remains. -->
+<!-- Milestone v2.0 — Asset & Media Streaming — is functionally COMPLETE (all 15 phases verified; real-browser media/security UAT deferred per environment limits and tracked in 13/14/15-HUMAN-UAT.md). -->
+<!-- Next milestone v2.1 (Evaluation & Research Paper, provisional Phases 16–17): EVAL-* evaluation corpus/harness, PAPR-* system-track paper. Opened when v2.0 is archived. -->
 
-**Media security & privacy (Phase 15 — the final milestone phase):**
-- [ ] Complete the security contract threaded through Phases 12–14: asset/media URL **masking** vocabulary + `referrerpolicy="no-referrer"`, a threat-model of the parent-realm object-URL blast radius, media-specific security tests, and the SECURITY/ARCHITECTURE docs (the fail-closed origin policy + `mediaMode: 'off'|'poster'|'reference'` were already shipped in Phase 12)
-
-<!-- Deferred to milestone v2.1 (Evaluation & Research Paper): EVAL-* evaluation corpus/harness, PAPR-* system-track paper. -->
+_No active in-scope requirements — v2.0 complete; v2.1 not yet opened._
 
 ### Out of Scope
 
@@ -168,4 +166,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-21 — milestone v2.0 nearly complete: Phases 12 (static assets), 13 (progressive media + `STREAM.MEDIA` sync), and 14 (adaptive HLS/DASH + adapter discovery + fallback) complete; only Phase 15 (media security/masking/threat-model/docs) remains. Real-browser media/MSE UAT for Phases 13–14 deferred (jsdom has no MSE; FSB automation runs tabs hidden) and tracked in 13/14-HUMAN-UAT.md. Eval harness + paper deferred to v2.1.*
+*Last updated: 2026-06-21 — milestone v2.0 (Asset & Media Streaming) FUNCTIONALLY COMPLETE: all 15 phases verified — static assets by reference (12), progressive `<video>`/`<audio>` + `STREAM.MEDIA` sync (13), adaptive HLS/DASH + adapter discovery + fallback (14), and the media security/masking/threat-model/docs completion (15). Real-browser media/MSE/security UAT deferred (jsdom has no MSE; the FSB automation browser runs tabs hidden) and tracked in 13/14/15-HUMAN-UAT.md. Next: milestone audit → complete → cleanup, then v2.1 (Evaluation & Research Paper). Eval harness + paper deferred to v2.1.*
