@@ -689,6 +689,14 @@ export function createCapture(config) {
   var valueCaptureActive = false;
   var valueListenerRoots = new WeakSet();
   var valueListenerRecords = [];
+  // Media tracker bookkeeping (STREAM.MEDIA). Mirrors the value-tracker's
+  // root-set/records pair (above): media events do NOT bubble, so listeners
+  // are PER-ELEMENT and must be explicitly torn down. mediaTracked maps a live
+  // <video>/<audio> to its bound listener handlers + per-element lastMediaSend
+  // throttle stamp; mediaTrackedRecords is the iteration order for teardown.
+  var mediaTrackingActive = false;
+  var mediaTracked = new Map();
+  var mediaTrackedRecords = [];
   var nativeAttachShadow = null;
   var attachShadowProto = null;
   var pendingStyleSourceChanges = new Map();
@@ -4072,6 +4080,10 @@ export function createCapture(config) {
               frames: addedPayload.frames || []
             }, frameRecord);
             diffs.push(boundMutationDiffForBudget(addDiff));
+            // STREAM.MEDIA: a mutation-added <video>/<audio> (or a subtree
+            // containing one) must receive listeners -- media events do not
+            // bubble, so they are not caught by any delegated handler.
+            attachMediaListenersUnder(added);
           } else if (added.nodeType === Node.TEXT_NODE || added.nodeType === Node.CDATA_SECTION_NODE) {
             sawBareTextNode = true;
           }
@@ -4081,6 +4093,10 @@ export function createCapture(config) {
         for (var r = 0; r < m.removedNodes.length; r++) {
           var removed = m.removedNodes[r];
           if (removed.nodeType === Node.ELEMENT_NODE) {
+            // STREAM.MEDIA: release listeners for a removed <video>/<audio>
+            // subtree before any wire-drop short-circuit, so a tracked media
+            // element can never emit after it leaves the live DOM.
+            detachMediaListenersUnder(removed);
             if (wireDroppedWithAncestors(removed)) continue;
             var nid = getTrackedNodeId(removed);
             if (!nid) continue; // Not tracked
@@ -4617,6 +4633,162 @@ export function createCapture(config) {
     return entry;
   }
 
+  /**
+   * Build a MediaSyncPayload from a LIVE media element and emit it on the wire
+   * (MWIRE-01). The payload is the baseline entry enriched with the triggering
+   * event name, a capture-side sentAt latency stamp, and the stream identity
+   * stamps so the renderer's isCurrentStream guard rejects stale cross-
+   * generation frames. nid reuses the tracked id (or assigns one). No media
+   * BYTES are ever sent -- only nid-addressed playback state (T-13-05).
+   * @param {HTMLMediaElement} el
+   * @param {string} eventName
+   */
+  function sendMediaState(el, eventName) {
+    var payload = {
+      nid: getTrackedNodeId(el) || ensureNodeId(el),
+      event: eventName,
+      currentTime: el.currentTime,
+      paused: !!el.paused,
+      muted: !!el.muted,
+      volume: el.volume,
+      playbackRate: el.playbackRate,
+      loop: !!el.loop,
+      ended: !!el.ended,
+      sentAt: Date.now(),
+      streamSessionId: streamSessionId || '',
+      snapshotId: currentSnapshotId || 0
+    };
+    if (isFinite(el.duration)) payload.duration = el.duration;
+    else payload.live = true;
+    safeSend(STREAM.MEDIA, payload);
+  }
+
+  /**
+   * Attach per-element media listeners to one <video>/<audio>. Discrete
+   * transition events flush a STREAM.MEDIA immediately; timeupdate is the
+   * throttled drift heartbeat -- it returns early while paused (heartbeat is
+   * playing-only) then applies a per-element MEDIA_SYNC_THROTTLE_MS gate
+   * (mirrors the scroll tracker's now-lastSend timestamp check), bounding the
+   * 1 MiB-capped relay against timeupdate flooding (T-13-06). Idempotent:
+   * re-attaching a tracked element is a no-op (added-node + startMediaTracker
+   * can both reach the same element).
+   * @param {Element} el
+   */
+  function attachMediaListeners(el) {
+    if (!mediaTrackingActive || !el || el.nodeType !== Node.ELEMENT_NODE) return;
+    if (typeof el.addEventListener !== 'function') return;
+    var tag = el.tagName ? String(el.tagName).toLowerCase() : '';
+    if (tag !== 'video' && tag !== 'audio') return;
+    if (mediaTracked.has(el)) return;
+
+    var record = { lastMediaSend: 0, handlers: {} };
+
+    // Discrete transition events: emit immediately (coalesced by the browser's
+    // own one-event-per-transition delivery).
+    var discrete = ['play', 'pause', 'seeked', 'ratechange', 'ended', 'volumechange', 'loadedmetadata'];
+    for (var i = 0; i < discrete.length; i++) {
+      (function (name) {
+        var handler = function () {
+          if (!mediaTrackingActive) return;
+          sendMediaState(el, name);
+        };
+        record.handlers[name] = handler;
+        el.addEventListener(name, handler);
+      })(discrete[i]);
+    }
+
+    // timeupdate: throttled drift heartbeat, only while playing.
+    var timeupdateHandler = function () {
+      if (!mediaTrackingActive) return;
+      if (el.paused) return; // heartbeat is playing-only
+      var now = Date.now();
+      if (now - record.lastMediaSend < MEDIA_SYNC_THROTTLE_MS) return;
+      record.lastMediaSend = now;
+      sendMediaState(el, 'timeupdate');
+    };
+    record.handlers.timeupdate = timeupdateHandler;
+    el.addEventListener('timeupdate', timeupdateHandler);
+
+    mediaTracked.set(el, record);
+    mediaTrackedRecords.push(el);
+  }
+
+  /**
+   * Detach the media listeners from one element and forget it. Safe on an
+   * untracked element (no-op). Called on element removal and on teardown.
+   * @param {Element} el
+   */
+  function detachMediaListeners(el) {
+    var record = mediaTracked.get(el);
+    if (!record) return;
+    if (typeof el.removeEventListener === 'function') {
+      for (var name in record.handlers) {
+        if (Object.prototype.hasOwnProperty.call(record.handlers, name)) {
+          el.removeEventListener(name, record.handlers[name]);
+        }
+      }
+    }
+    mediaTracked.delete(el);
+    var idx = mediaTrackedRecords.indexOf(el);
+    if (idx !== -1) mediaTrackedRecords.splice(idx, 1);
+  }
+
+  /**
+   * Attach media listeners to a root (if it is a media element) and to every
+   * <video>/<audio> descendant. Used by the added-node mutation path so a
+   * mutation-inserted media element (or a subtree containing one) is tracked.
+   * @param {Element} root
+   */
+  function attachMediaListenersUnder(root) {
+    if (!mediaTrackingActive || !root || root.nodeType !== Node.ELEMENT_NODE) return;
+    var tag = root.tagName ? String(root.tagName).toLowerCase() : '';
+    if (tag === 'video' || tag === 'audio') attachMediaListeners(root);
+    if (typeof root.querySelectorAll !== 'function') return;
+    var nested = root.querySelectorAll('video, audio');
+    for (var i = 0; i < nested.length; i++) attachMediaListeners(nested[i]);
+  }
+
+  /**
+   * Detach media listeners from a removed root and any tracked <video>/<audio>
+   * descendant. Used by the removed-node mutation path so a detached subtree's
+   * media listeners are released (no leak, no post-removal emissions).
+   * @param {Element} root
+   */
+  function detachMediaListenersUnder(root) {
+    if (!root || root.nodeType !== Node.ELEMENT_NODE) return;
+    detachMediaListeners(root);
+    if (typeof root.querySelectorAll !== 'function') return;
+    var nested = root.querySelectorAll('video, audio');
+    for (var i = 0; i < nested.length; i++) detachMediaListeners(nested[i]);
+  }
+
+  /**
+   * Start the media tracker: walk every current <video>/<audio> and attach
+   * per-element listeners (scroll-twin lifecycle; armed in start()/resume()).
+   * Idempotent -- re-arming first tears down any prior listeners so a restart
+   * cannot double-bind.
+   */
+  function startMediaTracker() {
+    stopMediaTracker();
+    mediaTrackingActive = true;
+    var els = collectTrackedMediaElements();
+    for (var i = 0; i < els.length; i++) attachMediaListeners(els[i]);
+    logger.info('[DOM Stream] Media tracker started');
+  }
+
+  /**
+   * Stop the media tracker: detach every per-element listener and clear the
+   * bookkeeping (torn down in start() re-arm, stop(), and pause()).
+   */
+  function stopMediaTracker() {
+    mediaTrackingActive = false;
+    var els = mediaTrackedRecords.slice();
+    for (var i = 0; i < els.length; i++) detachMediaListeners(els[i]);
+    mediaTracked = new Map();
+    mediaTrackedRecords = [];
+    logger.info('[DOM Stream] Media tracker stopped');
+  }
+
   // =========================================================================
   // 4. Overlay Event Broadcaster
   // =========================================================================
@@ -4694,6 +4866,7 @@ export function createCapture(config) {
     if (streaming) {
       stopMutationStream();
       stopScrollTracker();
+      stopMediaTracker();
     }
     beginStreamSession();
     clearNodeMirror();
@@ -4703,6 +4876,7 @@ export function createCapture(config) {
     startMutationStream();
     startValueCapture();
     startScrollTracker();
+    startMediaTracker();
     streaming = true;
     broadcastOverlayState(true);
   }
@@ -4715,6 +4889,7 @@ export function createCapture(config) {
     logger.info('[DOM Stream] Stop requested');
     stopMutationStream();
     stopScrollTracker();
+    stopMediaTracker();
     streaming = false;
     clearNodeMirror();
     safeFlush();
@@ -4728,6 +4903,7 @@ export function createCapture(config) {
     logger.info('[DOM Stream] Pause requested');
     stopMutationStream();
     stopScrollTracker();
+    stopMediaTracker();
     // Keep streaming = true (paused state, not stopped)
   }
 
@@ -4745,6 +4921,7 @@ export function createCapture(config) {
     startMutationStream();
     startValueCapture();
     startScrollTracker();
+    startMediaTracker();
     streaming = true;
   }
 

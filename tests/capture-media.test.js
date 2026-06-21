@@ -233,3 +233,251 @@ test('Task 1: finite duration -> entry.duration set + NO live; non-finite (Infin
 
   dom.window.close();
 });
+
+// ===========================================================================
+// Task 2: startMediaTracker/stopMediaTracker -- per-element listeners,
+// immediate discrete events + throttled heartbeat, added-node + teardown
+// ===========================================================================
+
+/** STREAM.MEDIA messages recorded on a loopback transport. */
+function mediaMsgs(transport) {
+  return transport.sent.filter((m) => m.type === STREAM.MEDIA);
+}
+
+/**
+ * Install a controllable Date.now on the jsdom window AND globalThis (capture
+ * reads the ambient Date). Returns { advance, restore }. node:test mock.timers
+ * does NOT move Date.now, so the throttle window needs a manual clock.
+ */
+function installClock(win, startMs) {
+  let nowMs = startMs;
+  const realGlobal = globalThis.Date;
+  const realWin = win.Date;
+  function FakeDate(...args) {
+    if (args.length === 0) return new realGlobal(nowMs);
+    return new realGlobal(...args);
+  }
+  FakeDate.now = () => nowMs;
+  FakeDate.prototype = realGlobal.prototype;
+  globalThis.Date = FakeDate;
+  win.Date = FakeDate;
+  return {
+    advance(ms) { nowMs += ms; },
+    set(ms) { nowMs = ms; },
+    restore() { globalThis.Date = realGlobal; win.Date = realWin; },
+  };
+}
+
+const DISCRETE_EVENTS = ['play', 'pause', 'seeked', 'ratechange', 'ended', 'volumechange', 'loadedmetadata'];
+
+test('Task 2: each discrete media event emits exactly one STREAM.MEDIA immediately, nid-addressed + identity-stamped + sentAt-stamped (MWIRE-01)', async () => {
+  const env = setupEnv('<video id="v"></video>');
+  try {
+    const v = env.document.getElementById('v');
+    stubMedia(v, { currentTime: 7.5, paused: false, muted: false, volume: 1, playbackRate: 1.25, loop: false, ended: false, duration: 100 });
+
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const before = mediaMsgs(transport).length;
+
+    for (const evName of DISCRETE_EVENTS) {
+      const countBefore = mediaMsgs(transport).length;
+      v.dispatchEvent(new env.window.Event(evName));
+      const after = mediaMsgs(transport);
+      assert.equal(after.length, countBefore + 1, 'exactly one STREAM.MEDIA per "' + evName + '" event');
+      const p = after[after.length - 1].payload;
+      assert.equal(p.event, evName, 'payload carries the triggering event name');
+      assert.ok(typeof p.nid === 'string' && p.nid.length > 0, 'payload is nid-addressed');
+      assert.ok(env.capture.getNodeId(v) === p.nid, 'nid matches the tracked element');
+      assert.equal(p.currentTime, 7.5, 'full state: currentTime');
+      assert.equal(p.playbackRate, 1.25, 'full state: playbackRate');
+      assert.equal(p.duration, 100, 'finite duration carried');
+      assert.equal('live' in p, false, 'finite duration -> no live');
+      assert.equal(typeof p.sentAt, 'number', 'sentAt monotonic stamp present');
+      assert.match(p.streamSessionId, /^stream_[a-z0-9]+_[a-z0-9]+$/, 'identity: streamSessionId');
+      assert.equal(typeof p.snapshotId, 'number', 'identity: snapshotId');
+      assert.ok(p.snapshotId > 0);
+    }
+
+    assert.ok(mediaMsgs(transport).length === before + DISCRETE_EVENTS.length, 'one message per discrete event, no extras');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('Task 2: a live (non-finite duration) element encodes live:true and omits duration on the wire (Infinity->null trap, MWIRE-01)', async () => {
+  const env = setupEnv('<audio id="a"></audio>');
+  try {
+    const a = env.document.getElementById('a');
+    stubMedia(a, { currentTime: 0, paused: false, muted: true, volume: 1, playbackRate: 1, loop: false, ended: false, duration: Infinity });
+
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    a.dispatchEvent(new env.window.Event('play'));
+    const msgs = mediaMsgs(transport);
+    assert.ok(msgs.length >= 1, '<audio> emits STREAM.MEDIA (MEDIA-04 identical model)');
+    const p = msgs[msgs.length - 1].payload;
+    assert.equal(p.live, true, 'live stream -> live:true');
+    assert.equal('duration' in p, false, 'live stream -> no duration field on the wire');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('Task 2: timeupdate is throttled at MEDIA_SYNC_THROTTLE_MS while playing -- two within the window send one, a third past it sends another (T-13-06 DoS mitigation)', async () => {
+  const env = setupEnv('<video id="v"></video>');
+  let clock;
+  try {
+    const v = env.document.getElementById('v');
+    stubMedia(v, { currentTime: 1, paused: false, muted: false, volume: 1, playbackRate: 1, loop: false, ended: false, duration: 500 });
+
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    // Install the clock AFTER start() so the snapshot/lifecycle sends keep real time.
+    clock = installClock(env.window, 1000000);
+    const base = mediaMsgs(transport).length;
+
+    // First timeupdate primes lastMediaSend at t0.
+    v.dispatchEvent(new env.window.Event('timeupdate'));
+    assert.equal(mediaMsgs(transport).length, base + 1, 'first timeupdate sends');
+
+    // Second timeupdate within the throttle window: suppressed.
+    clock.advance(MEDIA_SYNC_THROTTLE_MS - 1);
+    v.dispatchEvent(new env.window.Event('timeupdate'));
+    assert.equal(mediaMsgs(transport).length, base + 1, 'second timeupdate inside the window is throttled (no send)');
+
+    // Third timeupdate after advancing past the window: sends again.
+    clock.advance(2);
+    v.dispatchEvent(new env.window.Event('timeupdate'));
+    assert.equal(mediaMsgs(transport).length, base + 2, 'timeupdate past the throttle window sends');
+  } finally {
+    if (clock) clock.restore();
+    env.teardown();
+  }
+});
+
+test('Task 2: timeupdate sends NOTHING while the element is paused (heartbeat is playing-only)', async () => {
+  const env = setupEnv('<video id="v"></video>');
+  try {
+    const v = env.document.getElementById('v');
+    stubMedia(v, { currentTime: 5, paused: true, muted: false, volume: 1, playbackRate: 1, loop: false, ended: false, duration: 500 });
+
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const base = mediaMsgs(transport).length;
+    v.dispatchEvent(new env.window.Event('timeupdate'));
+    v.dispatchEvent(new env.window.Event('timeupdate'));
+    assert.equal(mediaMsgs(transport).length, base, 'no STREAM.MEDIA from timeupdate while paused');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('Task 2: a mutation-added <video> AND a mutation-added <audio> both receive listeners (added-node coverage, MEDIA-04)', async () => {
+  const env = setupEnv('<div id="root"></div>');
+  try {
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const root = env.document.getElementById('root');
+    const addedVideo = env.document.createElement('video');
+    const addedAudio = env.document.createElement('audio');
+    root.appendChild(addedVideo);
+    root.appendChild(addedAudio);
+    await settle(env.window); // MutationObserver delivers the addedNodes
+
+    stubMedia(addedVideo, { currentTime: 2, paused: false, muted: true, volume: 1, playbackRate: 1, loop: false, ended: false, duration: 50 });
+    stubMedia(addedAudio, { currentTime: 4, paused: false, muted: true, volume: 1, playbackRate: 1, loop: false, ended: false, duration: 70 });
+
+    const beforeV = mediaMsgs(transport).length;
+    addedVideo.dispatchEvent(new env.window.Event('play'));
+    assert.equal(mediaMsgs(transport).length, beforeV + 1, 'mutation-added <video> is tracked');
+    const pv = mediaMsgs(transport).pop().payload;
+    assert.ok(env.capture.getNodeId(addedVideo) === pv.nid, 'added <video> payload nid matches');
+
+    const beforeA = mediaMsgs(transport).length;
+    addedAudio.dispatchEvent(new env.window.Event('play'));
+    assert.equal(mediaMsgs(transport).length, beforeA + 1, 'mutation-added <audio> is tracked');
+    const pa = mediaMsgs(transport).pop().payload;
+    assert.ok(env.capture.getNodeId(addedAudio) === pa.nid, 'added <audio> payload nid matches');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('Task 2: after stop() and after pause(), dispatching events on a previously-tracked element emits NOTHING (listeners torn down)', async () => {
+  const env = setupEnv('<video id="v"></video>');
+  try {
+    const v = env.document.getElementById('v');
+    stubMedia(v, { currentTime: 9, paused: false, muted: false, volume: 1, playbackRate: 1, loop: false, ended: false, duration: 80 });
+
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    // Sanity: tracked while streaming.
+    const live = mediaMsgs(transport).length;
+    v.dispatchEvent(new env.window.Event('play'));
+    assert.equal(mediaMsgs(transport).length, live + 1, 'tracked while streaming');
+
+    // After pause(): listeners removed.
+    env.capture.pause();
+    const afterPauseBase = mediaMsgs(transport).length;
+    v.dispatchEvent(new env.window.Event('play'));
+    v.dispatchEvent(new env.window.Event('seeked'));
+    assert.equal(mediaMsgs(transport).length, afterPauseBase, 'no STREAM.MEDIA after pause() (listeners detached)');
+
+    // Resume re-arms, then stop() tears down again.
+    env.capture.resume();
+    await settle(env.window);
+    env.capture.stop();
+    const afterStopBase = mediaMsgs(transport).length;
+    v.dispatchEvent(new env.window.Event('play'));
+    assert.equal(mediaMsgs(transport).length, afterStopBase, 'no STREAM.MEDIA after stop() (listeners detached)');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('Task 2: a removed element\'s listeners are detached -- events on it after removal emit nothing', async () => {
+  const env = setupEnv('<div id="root"><video id="v"></video></div>');
+  try {
+    const v = env.document.getElementById('v');
+    stubMedia(v, { currentTime: 3, paused: false, muted: false, volume: 1, playbackRate: 1, loop: false, ended: false, duration: 40 });
+
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({ transport, logger: silentLogger() });
+    env.capture.start();
+    await settle(env.window);
+
+    const live = mediaMsgs(transport).length;
+    v.dispatchEvent(new env.window.Event('play'));
+    assert.equal(mediaMsgs(transport).length, live + 1, 'tracked while present');
+
+    // Remove the element from the live DOM; the MutationObserver removal path
+    // must detach its media listeners.
+    v.parentNode.removeChild(v);
+    await settle(env.window);
+
+    const afterRemoval = mediaMsgs(transport).length;
+    v.dispatchEvent(new env.window.Event('play'));
+    assert.equal(mediaMsgs(transport).length, afterRemoval, 'no STREAM.MEDIA after element removal (listeners detached)');
+  } finally {
+    env.teardown();
+  }
+});
