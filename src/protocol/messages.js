@@ -347,3 +347,65 @@ export function isCurrentStream(msg, active) {
   }
   return true;
 }
+
+// HLS content-type tokens (lowercased, charset-stripped before compare). DASH
+// is the single application/dash+xml token below. CDNs frequently serve
+// extensionless or signed manifest URLs, so the content-type is the more
+// robust of the two signals.
+const HLS_CONTENT_TYPES = {
+  'application/vnd.apple.mpegurl': true,
+  'application/x-mpegurl': true,
+  'audio/mpegurl': true,
+  'audio/x-mpegurl': true,
+};
+const DASH_CONTENT_TYPE = 'application/dash+xml';
+
+/**
+ * Extract a lowercased URL path, ignoring query/hash, defensively. A malformed
+ * url never throws: a `new URL()` failure falls back to a regex strip of the
+ * first `?`/`#` (mirrors the isHlsManifest defensiveness in 14-RESEARCH). A
+ * non-string url yields an empty path.
+ * @param {*} url
+ * @returns {string} lowercased path (or '' on failure)
+ */
+function manifestPathOf(url) {
+  if (typeof url !== 'string' || url === '') return '';
+  try {
+    return new URL(url).pathname.toLowerCase();
+  } catch (e) {
+    // Not an absolute/parseable URL: strip query + hash, then lowercase.
+    return String(url).split('#')[0].split('?')[0].toLowerCase();
+  }
+}
+
+/**
+ * Pure manifest classifier: is an observed response an adaptive-streaming
+ * manifest, and of which kind? Returns `'hls'` for an `.m3u8` path OR an HLS
+ * content-type; `'dash'` for an `.mpd` path OR `application/dash+xml`; `null`
+ * otherwise. URL-OR-content-type: either signal is independently sufficient.
+ *
+ * Never throws (T-14-03): a malformed/hostile url string is a guarded `null`
+ * (or a regex-fallback classification when the extension is still discernible),
+ * so it can never wedge the adapter. Project convention: a pure helper returns
+ * a primitive, not the `{ok,...}` fallible shape.
+ *
+ * @param {{url?: string, contentType?: string}} [input]
+ * @returns {'hls'|'dash'|null}
+ */
+export function classifyManifest(input) {
+  if (!input) return null;
+  // Content-type first (the more robust signal): lowercase, drop the ;charset.
+  const ct = (typeof input.contentType === 'string' ? input.contentType : '')
+    .split(';')[0].trim().toLowerCase();
+  if (ct) {
+    if (HLS_CONTENT_TYPES[ct]) return 'hls';
+    if (ct === DASH_CONTENT_TYPE) return 'dash';
+  }
+  // URL path extension (query/hash ignored; malformed url -> guarded).
+  const path = manifestPathOf(input.url);
+  if (path) {
+    if (/\.m3u8$/.test(path)) return 'hls';
+    if (/\.mpd$/.test(path)) return 'dash';
+  }
+  return null;
+}
