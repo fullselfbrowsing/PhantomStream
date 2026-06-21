@@ -504,6 +504,32 @@ test('degrade tears down the bound element: removeAttribute(src) + load() guarde
   }
 });
 
+test('lazy-hls: destroy(nid) removes the encrypted listener so a late encrypted after teardown is a no-op (WR-04)', async () => {
+  const { createMediaPlayer } = await import(MEDIA_PLAYER_MODULE);
+  const env = setupEnv();
+  try {
+    installStubMediaSource(env.window);
+    const { Hls, rec } = stubHls();
+    const { deps, unavailable } = playerDeps(env, { tryLazyImportHls: async function () { return Hls; } });
+    const player = createMediaPlayer(deps);
+    const { el } = playerVideoStub(env.document, {}); // non-native HLS -> lazy path
+    await player.attach(el, M3U8, { nid: '9' });
+
+    // Tear the player down for an UNRELATED reason (clean per-nid teardown, the
+    // mse-opaque/destroyAll path) -- the element stays live in the document.
+    player.destroy('9');
+    assert.equal(rec.destroyed, 1, 'hls.destroy() ran on teardown (object URL revoked)');
+    assert.equal(unavailable.length, 0, 'no degrade fired from the clean teardown');
+
+    // A late 'encrypted' on the now-detached element must NOT re-degrade a nid
+    // the player no longer owns (the listener was removed in destroy).
+    el.dispatchEvent(new env.window.Event('encrypted'));
+    assert.equal(unavailable.length, 0, 'a late encrypted after teardown is a no-op (listener removed)');
+  } finally {
+    env.teardown();
+  }
+});
+
 test('destroyAll: tears down every live player (Plan 03 re-snapshot reset)', async () => {
   const { createMediaPlayer } = await import(MEDIA_PLAYER_MODULE);
   const env = setupEnv();

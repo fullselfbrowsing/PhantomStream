@@ -245,14 +245,31 @@ export function createMediaPlayer(deps) {
       // explicit config WITHOUT emeEnabled so it can never be true.
       var hls = new Hls({});
       // The cheapest reliable DRM signal: the child element's 'encrypted' event.
-      videoEl.addEventListener('encrypted', function () { degrade(ctx.nid, 'drm'); }, { once: true });
+      // Hold the NAMED handler so destroy() can remove it -- an anonymous closure
+      // could never be unregistered, leaving the listener armed on the still-live
+      // child after teardown so a late 'encrypted' would re-degrade a torn-down
+      // nid (re-showing the overlay + re-invoking onMediaUnavailable for an
+      // element the player no longer owns). { once: true } still bounds a live
+      // fire to one; removal makes a post-teardown fire a no-op (WR-04).
+      var onEncrypted = function () { degrade(ctx.nid, 'drm'); };
+      videoEl.addEventListener('encrypted', onEncrypted, { once: true });
       hls.on(Hls.Events.ERROR, function (_e, info) {
         if (!info || !info.fatal) return;
         degrade(ctx.nid, (info.type === Hls.ErrorTypes.KEY_SYSTEM_ERROR) ? 'drm' : 'mse-opaque');
       });
       hls.loadSource(manifestUrl); // LOAD first
       hls.attachMedia(videoEl);    // THEN attach the bare in-iframe element
-      var player = { destroy: function () { try { hls.destroy(); } catch (e) { /* contained */ } } };
+      var player = { destroy: function () {
+        // Remove the DRM listener FIRST so a late 'encrypted' after teardown is
+        // a no-op, then destroy hls (which revokes the parent-realm object URL
+        // it minted -- the no-leak property, IN-01). Both steps are contained.
+        try {
+          if (typeof videoEl.removeEventListener === 'function') {
+            videoEl.removeEventListener('encrypted', onEncrypted);
+          }
+        } catch (e) { /* contained */ }
+        try { hls.destroy(); } catch (e) { /* contained */ }
+      } };
       registry.set(ctx.nid, { nid: ctx.nid, kind: 'hls', videoEl: videoEl, player: player });
       return { kind: 'hls', hls: hls, player: player };
     } catch (e) {
