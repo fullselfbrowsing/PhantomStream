@@ -1,81 +1,67 @@
-# Requirements: PhantomStream
+# Requirements: PhantomStream — Milestone v2.0 (Asset & Media Streaming)
 
-**Defined:** 2026-06-09
+**Defined:** 2026-06-19
 **Core Value:** A live, trustworthy, low-bandwidth, *semantically addressable* mirror of a real browser tab — capture → relay → render → remote-control must work end-to-end as a standalone framework.
 
-## v1 Requirements
+> Milestone v1.0 (Phases 1–11: standalone framework, npm publish `@full-self-browsing/phantom-stream@0.1.0`, FSB swap-in) is shipped. Its requirements are recorded in `MILESTONES.md` and `PROJECT.md` → Validated. This file scopes **milestone v2.0 — Asset & Media Streaming**.
 
-Requirements for initial release. Each maps to roadmap phases.
+## Milestone Thesis
 
-### Capture Core (CAPT)
+Mirror media **by reference, not by value**: stream asset and media **URLs** (plus small playback-state messages), and let the viewer fetch the bytes from the original CDN/source over its own network. The relay still carries only text + URLs — the low-bandwidth core value is preserved. Research (`.planning/research/v2.0-media/`) confirmed the by-reference asset pipeline is already ~80–90% shipped, so v2.0 concentrates on **playback sync**, **adaptive playback**, and a **new viewer-side-fetch security surface**.
 
-- [x] **CAPT-01**: Host can run the capture core in any injection context via an injected `Transport` interface (`send`/`flush`) — zero `chrome.runtime` / `window.FSB` references in core
-- [x] **CAPT-02**: Host can control capture lifecycle (`start`/`stop`/`pause`/`resume`) with fresh-session semantics matching the reference implementation
-- [x] **CAPT-03**: Extracted capture preserves the reference reliability defenses: rAF-batched diffs, self-watchdog force-flush, session/snapshot identity stamping, budgeted whole-subtree truncation with single-pass layout reads
-- [x] **CAPT-04**: Extracted capture output is verified against `reference/` via a differential test harness on frozen fixtures, with an intentional-divergence ledger
-- [ ] **CAPT-05**: Typed text in form fields is mirrored — explicit input-event capture beyond MutationObserver (`value` property changes)
-- [ ] **CAPT-06**: Nodes added after the snapshot carry computed styles consistent with snapshot-era siblings
-- [x] **CAPT-07**: Node identity is WeakMap-based — the observed page is no longer mutated with `data-fsb-nid` attributes, while the wire-addressing contract (diff ops, overlays, remote control) is preserved
-- [ ] **CAPT-08**: Open shadow DOM content is mirrored (serialization, diffs, and addressing extend into shadow roots)
-- [ ] **CAPT-09**: Same-origin iframe content is mirrored; cross-origin iframes render as labeled placeholders
-- [ ] **CAPT-10**: Stylesheet-centric (CSSOM) capture mode is available behind a config flag — handles cross-origin `cssRules` fallback, `insertRule`-injected styles, and `adoptedStyleSheets`
-- [ ] **CAPT-11**: Viewer can request on-demand subtree fetch to recover truncated regions without waiting for the next snapshot
+## v2.0 Requirements
 
-### Security & Privacy (SEC)
+Each maps to exactly one roadmap phase.
 
-- [x] **SEC-01**: All serialization paths (snapshot, `add`-op subtrees, `attr` ops) strip `on*` event-handler attributes and `javascript:` URLs
-- [x] **SEC-02**: Viewer renders exclusively in a sandboxed iframe without `allow-scripts`; the embed security contract is documented
-- [x] **SEC-03**: Capture-side privacy masking with rrweb-compatible vocabulary (`blockSelector`, `maskTextSelector`, `maskInputs`, custom mask fns) applied in all serialization paths — masked content never leaves the captured page
-- [x] **SEC-04**: Remote control activation is gated by a host-provided consent/authorization hook
+### Static Assets by Reference (ASST)
 
-### Viewer (VIEW)
+- [x] **ASST-01**: Image assets (`<img>`, `srcset`, `<picture>`, `<source>`, SVG `<image>`) are mirrored by reference and render in the viewer by loading the original absolute source URL — no image bytes traverse the relay
+- [x] **ASST-02**: CSS `background-image` and `<video>` poster URLs resolve to absolute source URLs on the wire and render in the viewer
+- [x] **ASST-03**: The displayed image variant is pinned via `currentSrc` so the cross-origin viewer (different DPR/viewport) loads the same asset the origin showed, not a re-negotiated one
+- [x] **ASST-04**: Non-shareable references (`blob:`/origin-local object URLs; oversized `data:` URIs) are detected and degrade to a dimensioned placeholder, never a broken reference
+- [x] **ASST-05**: The viewer CSP is opened precisely enough to fetch referenced assets (scoped `media-src`/`img-src`) while keeping `default-src 'none'` and no `script-src`
 
-- [x] **VIEW-01**: Host can embed the viewer as a framework-agnostic component (`createViewer({ container, transport })`) with viewport-adaptive scaling
-- [x] **VIEW-02**: Host can subscribe to lifecycle/connection-state events (`connecting`/`live`/`stale`/`disconnected`) and stream-health telemetry via `on()`
-- [x] **VIEW-03**: Host can address mirrored elements semantically through a public node-identity API (e.g. highlight/query the node an agent is about to touch)
-- [x] **VIEW-04**: Overlay channel is a documented, extensible message type — action glow and progress ship as built-ins; hosts can define custom DOM-anchored overlays
-- [x] **VIEW-05**: Remote control works through the mirror: click/type/scroll reverse-mapped from viewer coordinates and replayed in the real tab
-- [x] **VIEW-06**: Scroll position and native `alert`/`confirm`/`prompt` dialogs are mirrored (parity with reference)
+### Time-Based Media + Playback Sync (MEDIA)
 
-### Transport & Relay (RELY)
+- [x] **MEDIA-01**: Progressive/direct `<video>` (mp4/webm) plays in the viewer, loading bytes from the source URL — never through the relay
+- [x] **MEDIA-02**: Initial media state (currentTime, paused, muted, volume, playbackRate, loop, duration) is captured in the snapshot as the baseline for deltas
+- [x] **MEDIA-03**: Playback changes (play/pause, seek, ratechange) stream over the throttled media-sync channel and are applied in the viewer with drift-corrected interpolation — hard-seek only on large drift, never per-message
+- [x] **MEDIA-04**: `<audio>` elements are mirrored by the same URL + playback-state model as video
+- [x] **MEDIA-05**: The viewer honors autoplay policy (muted-autoplay default; observable affordance when `play()` is rejected) — the mirror never wedges on a blocked play
 
-- [x] **RELY-01**: Relay is transport-agnostic with pluggable backends; a self-hostable WebSocket reference implementation ships with per-message size cap and oversize diagnostics
-- [x] **RELY-02**: Compression envelope uses native `CompressionStream('deflate-raw')` by default with lz-string-compatible decode for FSB backward compatibility; async codec preserves message ordering
+### Media Protocol & Sync Contract (MWIRE)
 
-### Host Adapters (ADPT)
+- [x] **MWIRE-01**: A `STREAM.MEDIA` throttled side-channel op carries nid-addressed playback state, envelope-backward-compatible (old viewers ignore the unknown type), within the raw-relay + 1 MiB-cap contract — relay and envelope are untouched
+- [x] **MWIRE-02**: The drift reconciler is a pure, configurable, jsdom-unit-testable function (sync logic verified without a real media timeline)
 
-- [x] **ADPT-01**: Extension MV3 adapter — content-script injection + service-worker relay client including the `chrome.alarms` watchdog
-- [x] **ADPT-02**: Playwright/CDP adapter — `addInitScript`/`Page.addScriptToEvaluateOnNewDocument` injection + binding bridge, shipped as a single-file inject artifact
-- [x] **ADPT-03**: Bookmarklet adapter — loader stub that injects the capture bundle into the current page
-- [x] **ADPT-04**: Embedded-SDK adapter — first-party pages can import and run capture directly (script tag / module import)
+### Adaptive Streaming + Fallback (MADPT)
 
-### Demos & Packaging (PKG)
+- [x] **MADPT-01**: Best-effort adaptive playback — when an HLS (`.m3u8`) or DASH (`.mpd`) manifest URL is available, the viewer plays it via an optional, lazy player running in a renderer-owned, **parent-realm** surface (never inside the mirror sandbox); only `hls.js` is added (optional, lazy), DASH via a host-provided-player seam
+- [x] **MADPT-02**: The Playwright/CDP and extension adapters can surface manifest URLs not present as a plain element `src` (network observation), fed to the viewer as opt-in hints with graceful absence
+- [x] **MADPT-03**: Media that cannot be referenced (MSE/`blob:` without a discoverable manifest, DRM/EME) degrades to poster/placeholder with an observable, documented reason — the mirror never breaks
+- [x] **MADPT-04**: Live streams (infinite/NaN duration) are handled — live-edge sync, no absolute seek
 
-- [x] **PKG-01**: `npx phantom-stream demo` works end-to-end: capture a page in one tab, mirror it live in another through the bundled relay
-- [x] **PKG-02**: Playwright-driven demo: a script drives a real page while the viewer mirrors it live with working remote control
-- [ ] **PKG-03**: npm package published as `@full-self-browsing/phantom-stream` — ESM-only subpath exports, JSDoc-generated `.d.ts`, `attw`/`publint` clean, provenance via trusted publishing
-- [ ] **PKG-04**: Quickstart docs cover each adapter with a < 5-minute path to a live mirror
+### Media Security & Privacy (MSEC)
 
-### FSB Integration (FSB)
+- [x] **MSEC-01**: A fail-closed host origin/scheme policy hook governs which asset/media URLs the viewer may fetch (conservative default: https-only, block private/internal ranges) — mitigates viewer-side SSRF, tracking-pixel/live-viewer confirmation, and DoS amplification
+- [x] **MSEC-02**: A `mediaMode` switch (`off` | `poster` | `reference`) lets hosts choose the privacy/bandwidth posture; the default is documented
+- [x] **MSEC-03**: Asset/media URL masking — the host masking vocabulary redacts/blocks asset+media URLs (signed CDN URLs carry tokens/PII) and `maskMediaSelector`/`blockSelector` omit private media URLs from the wire; masked media degrades to placeholder
+- [x] **MSEC-04**: Viewer-side fetch minimizes leakage (`referrerpolicy="no-referrer"`, no credentials by default); secrets-on-the-wire implications are documented; the sandbox token is unchanged (the `allow-scripts`-forbidden static scan covers media code paths)
 
-- [ ] **FSB-01**: FSB can swap its bundled streaming code for the published package — verified end-to-end (live preview, remote control, watchdog/eviction recovery)
+## Future Requirements
 
-### Evaluation (EVAL)
+Deferred to later milestones. Tracked but not in the v2.0 roadmap.
 
-- [ ] **EVAL-01**: Frozen, replayable site corpus (HAR record/replay) with scripted activity levels (idle, reading, agent-driven automation)
-- [ ] **EVAL-02**: Bandwidth and latency measured for PhantomStream vs WebRTC screen capture, CDP screencast, and rrweb live mode under identical corpus conditions with a documented baseline-config protocol
-- [ ] **EVAL-03**: Style-capture strategy ablation: full enumeration vs curated inlining vs stylesheet-centric, on payload size, serialize latency, and fidelity
-- [ ] **EVAL-04**: Fidelity scoring combines pixel metrics (pixelmatch/SSIM) with a DOM-level semantic-fidelity metric, plus a failure taxonomy
-- [ ] **EVAL-05**: The harness runs as the framework's performance regression suite (repeatable locally/CI)
+### Milestone v2.1 — Evaluation & Research Paper
 
-### Research Paper (PAPR)
-
-- [ ] **PAPR-01**: Full system-track paper draft (abstract through discussion: design rationale, production reliability, evaluation results) ready for submission to a WWW/UIST/CHI-tier venue
-- [ ] **PAPR-02**: Related-work treatment grounded in primary sources (rrweb internals, co-browsing systems, CDP screencast, agent-observability viewers)
-
-## v2 Requirements
-
-Deferred to future release. Tracked but not in current roadmap.
+- **EVAL-01**: Frozen, replayable site corpus (HAR record/replay) with scripted activity levels (idle, reading, agent-driven automation)
+- **EVAL-02**: Bandwidth and latency measured for PhantomStream vs WebRTC screen capture, CDP screencast, and rrweb live mode under identical corpus conditions with a documented baseline-config protocol
+- **EVAL-03**: Style-capture strategy ablation: full enumeration vs curated inlining vs stylesheet-centric, on payload size, serialize latency, and fidelity
+- **EVAL-04**: Fidelity scoring combines pixel metrics (pixelmatch/SSIM) with a DOM-level semantic-fidelity metric, plus a failure taxonomy
+- **EVAL-05**: The harness runs as the framework's performance regression suite (repeatable locally/CI)
+- **EVAL-06** (new): A media-by-reference evaluation arm — bandwidth/latency/fidelity of URL-reference media vs CDP screencast/WebRTC pixel capture (feeds the v2.0 story into the paper)
+- **PAPR-01**: Full system-track paper draft (abstract through discussion: design rationale, production reliability, evaluation results) ready for submission to a WWW/UIST/CHI-tier venue
+- **PAPR-02**: Related-work treatment grounded in primary sources (rrweb internals, co-browsing systems, CDP screencast, agent-observability viewers)
 
 ### Fidelity & Channels
 
@@ -91,71 +77,55 @@ Deferred to future release. Tracked but not in current roadmap.
 
 ## Out of Scope
 
-Explicitly excluded. Documented to prevent scope creep.
+Explicitly excluded for v2.0. Documented to prevent scope creep.
 
 | Feature | Reason |
 |---------|--------|
-| Replay storage + timeline player | rrweb's mature home turf; dilutes live-mirror identity; protocol JSON is persistable by hosts if needed |
-| Multi-writer CRDT collaboration | Single-writer authoritative tab = no merge problem; the paper argues this explicitly |
-| Universal proxy-based co-browsing (Surfly model) | HTML-rewriting arms race + MITM liability; adapters cover every legitimately-controlled injection context |
-| Live `<video>`/`<audio>`/canvas streaming (WebRTC fallback) | Drags in a media pipeline; destroys the bandwidth story; poster/placeholder documented instead |
-| Built-in calls/chat/drawing-annotation toolkits | Product features, not framework features; the overlay channel is the extension point |
-| Analytics capture (console, network, heatmaps) | Different product category; expands privacy surface; plugin seam suffices |
-| Cross-origin iframe content mirroring | Browser security boundary; industry-standard limitation; labeled placeholders instead |
-| Mobile / non-Chromium-first support | v1 targets Chromium contexts (MV3, CDP); portability later |
+| WebRTC / pixel media relay; re-encoding/transcoding media | Destroys the low-bandwidth core value (1080p30 WebRTC ≈ 14 Mbps, ~100–1000× a DOM-diff mirror); v2.0 mirrors media by URL reference instead |
+| `<canvas>`/WebGL pixel-frame streaming; Web Audio / `getUserMedia` capture | Drags in a media/raster pipeline and expands the privacy surface; conflicts with the bandwidth and sandbox posture |
+| DRM/EME content mirroring | Encrypted media is unshareable by design; degrade to poster |
+| MSE/`blob:` media with no discoverable manifest | Origin-local object URLs are dead at the viewer; best-effort manifest discovery else poster |
+| Media-byte inlining (`data:` for video/audio) | Reintroduces byte transport and blows the size budget; reference-only (a byte-capped *image* inline is the only v2.x escape hatch worth considering) |
+| Frame-accurate sync guarantees | Drift-corrected best-effort sync is the contract; exact frame lockstep is not achievable or needed by reference |
+| Running any media player inside the mirror iframe | Would require `allow-scripts` — a catastrophic XSS regression; adaptive players run in the parent realm |
+| Replay storage + timeline player | rrweb's home turf; protocol JSON is persistable by hosts if needed |
+| Multi-writer CRDT collaboration | Single-writer authoritative tab = no merge problem |
+| Cross-origin iframe content mirroring | Browser security boundary; labeled placeholders instead |
+| Mobile / non-Chromium-first support | Targets Chromium contexts (MV3, CDP); portability later |
 | FSB feature work in this repo | FSB only consumes the package; its code stays in the FSB repo |
 
 ## Traceability
 
-Which phases cover which requirements. Updated during roadmap creation.
+Which phases cover which requirements. Finalized during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CAPT-01 | Phase 1 | Complete |
-| CAPT-02 | Phase 1 | Complete |
-| CAPT-03 | Phase 1 | Complete |
-| CAPT-04 | Phase 1 | Complete |
-| CAPT-05 | Phase 8 | Pending |
-| CAPT-06 | Phase 8 | Pending |
-| CAPT-07 | Phase 7 | Complete |
-| CAPT-08 | Phase 8 | Pending |
-| CAPT-09 | Phase 8 | Pending |
-| CAPT-10 | Phase 9 | Pending |
-| CAPT-11 | Phase 8 | Pending |
-| SEC-01 | Phase 3 | Complete |
-| SEC-02 | Phase 3 | Complete |
-| SEC-03 | Phase 3 | Complete |
-| SEC-04 | Phase 5 | Complete |
-| VIEW-01 | Phase 2 | Complete |
-| VIEW-02 | Phase 4 | Complete |
-| VIEW-03 | Phase 7 | Complete |
-| VIEW-04 | Phase 2 | Complete |
-| VIEW-05 | Phase 5 | Complete |
-| VIEW-06 | Phase 2 | Complete |
-| RELY-01 | Phase 4 | Complete |
-| RELY-02 | Phase 4 | Complete |
-| ADPT-01 | Phase 6 | Complete |
-| ADPT-02 | Phase 5 | Complete |
-| ADPT-03 | Phase 6 | Complete |
-| ADPT-04 | Phase 2 | Complete |
-| PKG-01 | Phase 4 | Complete |
-| PKG-02 | Phase 5 | Complete |
-| PKG-03 | Phase 10 | Pending |
-| PKG-04 | Phase 10 | Pending |
-| FSB-01 | Phase 11 | Pending |
-| EVAL-01 | Phase 12 | Pending |
-| EVAL-02 | Phase 12 | Pending |
-| EVAL-03 | Phase 12 | Pending |
-| EVAL-04 | Phase 12 | Pending |
-| EVAL-05 | Phase 12 | Pending |
-| PAPR-01 | Phase 13 | Pending |
-| PAPR-02 | Phase 13 | Pending |
+| ASST-01 | Phase 12 | Complete |
+| ASST-02 | Phase 12 | Complete |
+| ASST-03 | Phase 12 | Complete |
+| ASST-04 | Phase 12 | Complete |
+| ASST-05 | Phase 12 | Complete |
+| MSEC-01 | Phase 12 | Complete |
+| MSEC-02 | Phase 12 | Complete |
+| MEDIA-01 | Phase 13 | Complete |
+| MEDIA-02 | Phase 13 | Complete |
+| MEDIA-03 | Phase 13 | Complete |
+| MEDIA-04 | Phase 13 | Complete |
+| MEDIA-05 | Phase 13 | Complete |
+| MWIRE-01 | Phase 13 | Complete |
+| MWIRE-02 | Phase 13 | Complete |
+| MADPT-01 | Phase 14 | Complete |
+| MADPT-02 | Phase 14 | Complete |
+| MADPT-03 | Phase 14 | Complete |
+| MADPT-04 | Phase 14 | Complete |
+| MSEC-03 | Phase 15 | Complete |
+| MSEC-04 | Phase 15 | Complete |
 
 **Coverage:**
-- v1 requirements: 39 total (earlier "32" was a miscount; corrected during roadmap creation)
-- Mapped to phases: 39
-- Unmapped: 0 ✓
+- v2.0 requirements: 20 total
+- Mapped to phases: 20 (validated by roadmapper — each requirement maps to exactly one phase, no orphans, no duplicates)
+- Unmapped: 0
 
 ---
-*Requirements defined: 2026-06-09*
-*Last updated: 2026-06-09 after roadmap creation (traceability populated)*
+*Requirements defined: 2026-06-19 (milestone v2.0 — Asset & Media Streaming)*
+*v1.0 requirements archived in MILESTONES.md and PROJECT.md → Validated*

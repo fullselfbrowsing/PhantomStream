@@ -53,6 +53,45 @@ test('package scripts and files whitelist define the publish validation surface'
   }
 });
 
+test('hls.js is an OPTIONAL peerDependency only, never a hard or dev dependency', () => {
+  const pkg = readJson('package.json');
+
+  // Zero new hard runtime dep: dependencies stays exactly { ws } (the relay only).
+  assert.deepEqual(
+    pkg.dependencies,
+    { ws: '8.21.0' },
+    'dependencies must be exactly { ws: "8.21.0" } — hls.js is NOT a hard runtime dep',
+  );
+
+  // hls.js is declared under peerDependencies with a version range string (>=1.5.0 floor).
+  assert.equal(
+    typeof pkg.peerDependencies?.['hls.js'],
+    'string',
+    'peerDependencies["hls.js"] is a version-range string',
+  );
+
+  // peerDependenciesMeta marks it optional -> npm will not auto-install it and will not
+  // warn when it is absent. This IS the zero-hard-dep, host-controlled posture.
+  assert.equal(
+    pkg.peerDependenciesMeta?.['hls.js']?.optional,
+    true,
+    'peerDependenciesMeta["hls.js"].optional === true (npm does not auto-install / warn when absent)',
+  );
+
+  // Guard against any future hard-dep or dev-dep leak (T-14-17 / T-14-18): a top-level
+  // import or an `npm i hls.js` into this repo would surface here.
+  assert.equal(
+    pkg.dependencies?.['hls.js'],
+    undefined,
+    'hls.js must never appear in dependencies',
+  );
+  assert.equal(
+    pkg.devDependencies?.['hls.js'],
+    undefined,
+    'hls.js must never appear in devDependencies (the smoke proves the package works with hls.js ABSENT)',
+  );
+});
+
 test('public package exports expose types first and runtime defaults last', () => {
   const pkg = readJson('package.json');
 

@@ -271,13 +271,14 @@ test('handle has exactly detach, destroy, getViewportMapping, semantic addressin
         'destroy',
         'detach',
         'getViewportMapping',
+        'handleSnapshot',
         'highlightNode',
         'on',
         'registerOverlay',
         'requestSubtree',
         'resolveNode',
       ],
-      'handle surface is locked to exactly nine members'
+      'handle surface is locked to exactly ten members (Phase 12 adds the host-driven handleSnapshot entry point)'
     );
     assert.equal(typeof env.viewer.detach, 'function');
     assert.equal(typeof env.viewer.destroy, 'function');
@@ -288,6 +289,7 @@ test('handle has exactly detach, destroy, getViewportMapping, semantic addressin
     assert.equal(typeof env.viewer.requestSubtree, 'function');
     assert.equal(typeof env.viewer.registerOverlay, 'function');
     assert.equal(typeof env.viewer.on, 'function');
+    assert.equal(typeof env.viewer.handleSnapshot, 'function');
   } finally {
     env.teardown();
   }

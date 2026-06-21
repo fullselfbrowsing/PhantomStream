@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PhantomStream media-playback-sync fixture</title>
+  <style>
+    video, audio { display: block; }
+  </style>
+</head>
+<body>
+  <h1 id="media-heading">Media playback sync fixture</h1>
+  <p id="media-intro">A page carrying a progressive video and audio element present at snapshot time.</p>
+
+  <!-- A <video> and <audio> present at snapshot time so the extracted core's
+       serializeDOM emits a non-empty payload.media baseline array (the FSB
+       reference emits no media[] field). The src URLs ride absolutified on
+       the snapshot HTML on BOTH sides (no divergence there); the divergence
+       this fixture exists to surface is the extracted-only media[] baseline
+       plus the STREAM.MEDIA side channel, claimed by ledger entry D27. -->
+  <video id="media-vid" src="https://cdn.fixture.test/clip.mp4" preload="none"></video>
+  <audio id="media-aud" src="https://cdn.fixture.test/clip.mp3" preload="none"></audio>
+
+  <div id="media-footer">A trailing block so the snapshot has stable structure.</div>
+</body>
+</html>

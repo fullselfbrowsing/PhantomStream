@@ -34,11 +34,141 @@
 // || inline defaulting, function expressions, named exports, explicit .js
 // import extensions, factory-time validation as the ONLY throwing site.
 
-import { buildSnapshotHtml, buildFramePlaceholderHtml } from './snapshot.js';
+import { buildSnapshotHtml, buildFramePlaceholderHtml, gateSnapshotAssets } from './snapshot.js';
 import { applyMutations } from './diff.js';
-import { sanitizeFragment, scrubCssText } from './sanitize.js';
+import { sanitizeFragment, scrubCssText, parseSrcsetCandidates } from './sanitize.js';
 import { createOverlays, mapRectToHost, OVERLAY_CSS } from './overlays.js';
+import { classifyAssetOrigin } from './asset-policy.js';
+import { createMediaPlayer } from './media-player.js';
 import { STREAM, CONTROL, isCurrentStream } from '../protocol/messages.js';
+import { reconcileMediaDrift, DEFAULT_MEDIA_RECONCILE_CONFIG } from '../protocol/media-reconcile.js';
+
+// ---- Phase 12 (MSEC-01/MSEC-02): the renderer pre-write fetch gate ----
+//
+// v2.0 changes the viewer's verb from render-inert to FETCH. gateAssetUrl is
+// the single orchestrator every write site consults BEFORE an asset URL
+// reaches the mirror DOM, so the viewer's browser never issues a GET for a
+// blocked origin (snapshot: pre-srcdoc string layer; diff ADD/subtree:
+// pre-importNode on inert template content; diff ATTR: pre-setAttribute).
+//
+// Pure and fail-closed (mirrors compileMaskSelector's fail-closed-and-loud
+// precedent): it takes the per-viewer posture in ctx so it is unit-testable
+// in isolation and reused unchanged across all four sites. Precedence:
+//   1. mediaMode 'off'              -> block ALL asset fetch (no surface).
+//   2. allowAssetOrigins host match -> ALLOW (explicit host widen of the
+//                                       conservative default; the only way a
+//                                       private/non-https host is reachable).
+//   3. classifyAssetOrigin(url)     -> classifier deny is authoritative
+//                                       (https-only + private-range deny)
+//                                       unless (2) widened it.
+//   4. assetOriginPolicy(url, ctx)  -> host hook, fail-closed: a throw OR any
+//                                       non-true return BLOCKS (never opens).
+//   5. mediaMode 'poster' | 'reference' -> in 'poster' mode the playable-media
+//                                       kinds ('media' = <video src>, 'source'
+//                                       = <source src>) are BLOCKED so no media
+//                                       GET issues (Phase 13 CR-01: the poster
+//                                       image is the only fetch poster mode
+//                                       permits); poster images and <img>
+//                                       pass under 'poster'. 'reference' permits
+//                                       all by-reference assets.
+var VALID_MEDIA_MODES = { off: true, poster: true, reference: true };
+
+/** Extract a lowercased hostname from a URL string, or '' on parse failure. */
+function assetUrlHost(url) {
+  try {
+    return new URL(String(url)).hostname.toLowerCase();
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * True when any candidate in a srcset value is blocked by the supplied gate.
+ * Reuses the shared per-candidate parser so the fragment gate covers srcset
+ * with the same vocabulary as the snapshot/diff gates (review WR-03/WR-04).
+ * Unparseable input fails closed (treated as blocked).
+ * @param {string} srcset
+ * @param {(url: string, kind: string) => { allow: boolean }} gateAsset
+ * @returns {boolean}
+ */
+function srcsetHasBlockedCandidate(srcset, gateAsset) {
+  if (!srcset) return false;
+  try {
+    var candidates = parseSrcsetCandidates(srcset);
+    for (var i = 0; i < candidates.length; i++) {
+      var url = candidates[i].url;
+      if (!url) continue;
+      var verdict = gateAsset(url, 'image');
+      if (!verdict || !verdict.allow) return true;
+    }
+    return false;
+  } catch (e) {
+    return true; // unparseable srcset: fail closed
+  }
+}
+
+/**
+ * The renderer's pre-write asset fetch gate (MSEC-01/MSEC-02). Pure: decides
+ * allow/deny for a single asset URL under the posture carried in ctx. Every
+ * branch that is not an explicit allow fails closed.
+ *
+ * @param {string} url Absolute asset URL about to be written into the mirror.
+ * @param {Object} [ctx] Posture: { mediaMode, allowAssetOrigins, assetOriginPolicy, kind }.
+ * @returns {{ allow: boolean, reason: string }}
+ */
+export function gateAssetUrl(url, ctx) {
+  var c = ctx || {};
+  var mode = VALID_MEDIA_MODES[c.mediaMode] ? c.mediaMode : 'reference';
+
+  // (1) mediaMode 'off': no viewer fetch surface at all.
+  if (mode === 'off') return { allow: false, reason: 'media-off' };
+
+  // (2) allowAssetOrigins widen: an explicitly allowlisted host is reachable
+  // even if the conservative classifier would otherwise deny it.
+  var host = assetUrlHost(url);
+  var allowlist = Array.isArray(c.allowAssetOrigins) ? c.allowAssetOrigins : null;
+  var widened = false;
+  if (allowlist && host) {
+    for (var i = 0; i < allowlist.length; i++) {
+      if (String(allowlist[i]).toLowerCase() === host) { widened = true; break; }
+    }
+  }
+
+  // (3) classifier: authoritative deny unless (2) widened the host.
+  if (!widened) {
+    var verdict = classifyAssetOrigin(url);
+    if (!verdict.allowed) return { allow: false, reason: verdict.reason };
+  }
+
+  // (4) host hook, fail-closed: throw OR non-true -> block.
+  if (typeof c.assetOriginPolicy === 'function') {
+    var ok;
+    try {
+      ok = c.assetOriginPolicy(url, c);
+    } catch (e) {
+      return { allow: false, reason: 'hook-threw' };
+    }
+    if (ok !== true) return { allow: false, reason: 'hook-denied' };
+  }
+
+  // (5) posture: in 'poster' mode the ONLY fetch poster mode permits is the
+  // poster image itself -- no playable media source may issue a GET (CR-01 /
+  // 13-RESEARCH Open Q3). A playable source fetches the full media bytes, which
+  // is exactly the GET poster mode exists to suppress; this MUST be enforced at
+  // the STRING layer (the authoritative pre-srcdoc gate -- the parser prefetches
+  // <video src>/<source src> DURING parse, before any post-parse scrub can run).
+  // kinds 'media' (<video src>) and 'source' (<source src>) are the playable-
+  // source kinds; 'poster' and 'image' stay allowed (the poster image is the
+  // one thing poster mode renders). 'reference' mode permits all by-reference
+  // assets and is unaffected. Fail-closed posture, mirroring the gate's other
+  // explicit denies.
+  if (mode === 'poster' && (c.kind === 'media' || c.kind === 'source')) {
+    return { allow: false, reason: 'poster-mode-media' };
+  }
+
+  // 'poster' permits poster images; 'reference' permits all by-reference assets.
+  return { allow: true, reason: 'ok' };
+}
 
 /**
  * The host-injected viewer transport. Mirrors the capture Transport's
@@ -152,13 +282,33 @@ export function computeScale(pageW, pageH, containerW, containerH) {
 export function createViewer(options) {
   var cfg = options || {};
 
-  var container = cfg.container;
+  // Container resolution: `mount` is accepted as an alias for `container`
+  // (the host-driven asset-gate path and embedders that think in "mount
+  // points" use it). When the resolved container carries no ownerDocument,
+  // cfg.document is the construction-document fallback (see `doc` below).
+  var hostDriven = !cfg.container && !!cfg.mount; // mount alias == host-driven API
+  var container = cfg.container || cfg.mount;
   if (!container || typeof container.appendChild !== 'function') {
     throw new Error('viewer-container-required');
   }
+  // Transport requirement depends on the API style. The wire-driven API
+  // (cfg.container) REQUIRES a complete transport -- the original contract,
+  // and a partial { send } / { onMessage } still throws. The host-driven API
+  // (cfg.mount) makes transport OPTIONAL: such viewers drive handleSnapshot
+  // directly (Phase 12 asset path) and need no socket, so a no-op transport
+  // keeps the dispatch wiring intact without one. A provided transport is
+  // always validated regardless of style.
   var transport = cfg.transport;
-  if (!transport || typeof transport.send !== 'function'
-      || typeof transport.onMessage !== 'function') {
+  if (transport) {
+    if (typeof transport.send !== 'function' || typeof transport.onMessage !== 'function') {
+      throw new Error('viewer-transport-required');
+    }
+  } else if (hostDriven) {
+    transport = {
+      send: function () {},
+      onMessage: function () { return function () {}; }
+    };
+  } else {
     throw new Error('viewer-transport-required');
   }
   var logger = cfg.logger || {
@@ -170,9 +320,190 @@ export function createViewer(options) {
     ? Math.max(0, cfg.disconnectDelayMs)
     : 750;
 
+  // Phase 12 asset-fetch posture (MSEC-01/MSEC-02). Validate mediaMode at
+  // factory time -- the ONLY sanctioned throw site (capture precedent); an
+  // invalid value is a host misconfiguration, not a per-message error.
+  var mediaMode = cfg.mediaMode == null ? 'reference' : String(cfg.mediaMode);
+  if (!VALID_MEDIA_MODES[mediaMode]) {
+    throw new Error('viewer-mediamode-invalid');
+  }
+  var assetOriginPolicy = typeof cfg.assetOriginPolicy === 'function'
+    ? cfg.assetOriginPolicy
+    : null;
+  var allowAssetOrigins = Array.isArray(cfg.allowAssetOrigins)
+    ? cfg.allowAssetOrigins.slice()
+    : null;
+  // Phase 13 (MEDIA-05): onMediaBlocked is a CONFIG callback (the
+  // assetOriginPolicy-hook family), NOT an on('state'|'health') subscription
+  // (which throws on other names). Invoked with the element nid when a
+  // programmatic play() rejects with NotAllowedError; its errors are contained
+  // to the logger (never rethrown). mediaReconcileConfig overrides merge over
+  // DEFAULT_MEDIA_RECONCILE_CONFIG (the reconciler tolerances stay tunable).
+  var onMediaBlocked = typeof cfg.onMediaBlocked === 'function' ? cfg.onMediaBlocked : null;
+  var mediaReconcileConfig = (cfg.mediaReconcileConfig && typeof cfg.mediaReconcileConfig === 'object')
+    ? cfg.mediaReconcileConfig
+    : DEFAULT_MEDIA_RECONCILE_CONFIG;
+  // Phase 14 (MADPT-01/03): the adaptive-player config-callback family (the
+  // onMediaBlocked/assetOriginPolicy family, NOT the throwing on() allowlist).
+  // playerFactory is the host-provided HLS/DASH/Shaka player seam; absent, the
+  // optional lazy hls.js path (or degrade-to-poster) handles HLS. onMediaUnavailable
+  // is the degrade-reason callback (no-manifest|no-player|mse-opaque|drm); a non-
+  // function is ignored (graceful absence). Both are contained -- a throwing host
+  // callback can never wedge the mirror.
+  var playerFactory = typeof cfg.playerFactory === 'function' ? cfg.playerFactory : null;
+  var onMediaUnavailable = typeof cfg.onMediaUnavailable === 'function' ? cfg.onMediaUnavailable : null;
+  // Per-viewer gate closure: every write site (snapshot string layer, diff
+  // ADD/ATTR, subtree) calls this so the posture is applied uniformly and
+  // fail-closed. kind defaults to 'image' (P12 image scope).
+  function gateAsset(url, kind) {
+    return gateAssetUrl(url, {
+      mediaMode: mediaMode,
+      allowAssetOrigins: allowAssetOrigins,
+      assetOriginPolicy: assetOriginPolicy,
+      kind: kind || 'image'
+    });
+  }
+
+  /**
+   * Build the renderer-owned dimensioned blocked-origin placeholder ELEMENT
+   * (the DOM-fragment twin of snapshot.js's string placeholder; renderer-owned
+   * per the project's duplicate-don't-couple style). Preserves the source
+   * element's dimensions (rr_width/rr_height or width/height) so layout stays
+   * stable; replacing an <img> 1:1 with this <div> keeps the positional nid
+   * index consistent (the renderer pairs elements by the nodeIds sidecar
+   * positionally, not by any live identity attribute -- Phase 7). No fetchable
+   * attribute is set.
+   * @param {Document} ownerDoc
+   * @param {Element} el The blocked <img>.
+   * @returns {Element}
+   */
+  function buildAssetPlaceholderEl(ownerDoc, el) {
+    var ph = ownerDoc.createElement('div');
+    ph.setAttribute('data-ps-asset-unavailable', 'blocked-origin');
+    var w = (el.getAttribute && (el.getAttribute('rr_width') || el.getAttribute('width'))) || '';
+    var h = (el.getAttribute && (el.getAttribute('rr_height') || el.getAttribute('height'))) || '';
+    if (w) ph.setAttribute('rr_width', w);
+    if (h) ph.setAttribute('rr_height', h);
+    return ph;
+  }
+
+  /**
+   * Pre-write asset gate over a PARSED, inert DOM subtree (defense-in-depth
+   * for the post-parse mirror body and the authoritative gate for diff ADD /
+   * subtree-response template content, which is inert and fires no fetch). For
+   * each <img>: apply the ASST-03 currentSrc pin (effective src =
+   * data-ps-currentsrc, neutralize srcset/sizes), then gateAsset the effective
+   * src; blocked -> replace the <img> with the dimensioned placeholder. Safe
+   * on any Document-owned root; contained per-element so one bad node never
+   * aborts the pass.
+   * @param {Node} rootNode A parsed fragment/body (template.content or mirror body).
+   */
+  function gateFragmentAssets(rootNode) {
+    if (!rootNode || typeof rootNode.querySelectorAll !== 'function') return;
+    var ownerDoc = rootNode.ownerDocument || (rootNode.nodeType === 9 ? rootNode : null);
+    if (!ownerDoc) return;
+    var imgs = rootNode.querySelectorAll('img');
+    for (var i = 0; i < imgs.length; i++) {
+      var el = imgs[i];
+      try {
+        var pinned = el.getAttribute('data-ps-currentsrc');
+        var effective = el.getAttribute('src');
+        if (pinned) {
+          effective = pinned;
+          el.setAttribute('src', pinned);
+          el.removeAttribute('srcset');
+          el.removeAttribute('sizes');
+          el.removeAttribute('data-ps-currentsrc');
+        }
+        if (effective && !gateAsset(effective, 'image').allow) {
+          var ph = buildAssetPlaceholderEl(ownerDoc, el);
+          if (el.parentNode) el.parentNode.replaceChild(ph, el);
+          continue;
+        }
+        // srcset gate (review WR-04): an <img srcset> with NO src (and no
+        // currentsrc pin, which removes srcset above) is otherwise imported
+        // with its blocked candidate intact, where the browser can fetch it.
+        // Gate every candidate; if any is blocked, replace with the
+        // placeholder when there is no allowed src, else strip srcset so only
+        // the allowed src can fetch.
+        var srcset = el.getAttribute('srcset');
+        if (srcset && srcsetHasBlockedCandidate(srcset, gateAsset)) {
+          if (!effective) {
+            var phSrcset = buildAssetPlaceholderEl(ownerDoc, el);
+            if (el.parentNode) el.parentNode.replaceChild(phSrcset, el);
+          } else {
+            el.removeAttribute('srcset');
+          }
+        }
+      } catch (e) {
+        logger.warn('[Renderer] asset gate pass failed for an element', {
+          error: e && e.message ? e.message : String(e)
+        });
+      }
+    }
+    gateFragmentMedia(rootNode, ownerDoc);
+  }
+
+  /**
+   * Post-parse media-asset gate (Phase 13 defense-in-depth + poster-mode
+   * source neutralization). The STRING-layer gateSnapshotAssets is the
+   * authoritative pre-parse control (the parser fetches during parse); this
+   * pass covers the diff ADD/subtree inert-fragment path and re-asserts the
+   * posture on the parsed body. For each <video>/<audio>:
+   *   - gate src + poster; a blocked URL is removed (no fetchable attribute).
+   *   - mediaMode 'poster': strip src and every child <source src> so NO media
+   *     GET issues while the gated poster is kept (13-RESEARCH Open Q3).
+   * For each standalone <source>: gate src; blocked or poster-mode -> removed.
+   * @param {Node} rootNode
+   * @param {Document} ownerDoc
+   */
+  function gateFragmentMedia(rootNode, ownerDoc) {
+    var posterOnly = (mediaMode === 'poster');
+    var media = rootNode.querySelectorAll('video, audio');
+    for (var i = 0; i < media.length; i++) {
+      var el = media[i];
+      try {
+        var src = el.getAttribute('src');
+        if (src && (posterOnly || !gateAsset(src, 'media').allow)) {
+          el.removeAttribute('src');
+        }
+        var poster = el.getAttribute('poster');
+        if (poster && !gateAsset(poster, 'poster').allow) {
+          el.removeAttribute('poster');
+        }
+        // Child <source> elements bind the playable source; in poster mode or
+        // when blocked, neutralize their src so the element selects nothing.
+        var childSources = el.querySelectorAll('source');
+        for (var j = 0; j < childSources.length; j++) {
+          var cs = childSources[j];
+          var csSrc = cs.getAttribute('src');
+          if (csSrc && (posterOnly || !gateAsset(csSrc, 'media').allow)) {
+            cs.removeAttribute('src');
+          }
+        }
+      } catch (e) {
+        logger.warn('[Renderer] media gate pass failed for an element', {
+          error: e && e.message ? e.message : String(e)
+        });
+      }
+    }
+    // Standalone <source> (not under a video/audio we already walked, e.g. a
+    // detached fragment) -- gate defensively.
+    var looseSources = rootNode.querySelectorAll('source');
+    for (var k = 0; k < looseSources.length; k++) {
+      var ls = looseSources[k];
+      try {
+        var lsSrc = ls.getAttribute('src');
+        if (lsSrc && (posterOnly || !gateAsset(lsSrc, 'media').allow)) {
+          ls.removeAttribute('src');
+        }
+      } catch (e2) { /* contained: one bad node never aborts the pass */ }
+    }
+  }
+
   // All DOM construction happens in the container's own document so the
   // viewer works in any window (host page, jsdom test, future multi-doc).
-  var doc = container.ownerDocument;
+  var doc = container.ownerDocument || cfg.document;
   var win = doc.defaultView;
 
   // --- Viewer root: fills the container, clips the scaled mirror, and
@@ -228,11 +559,21 @@ export function createViewer(options) {
       var scrubDoc = iframe.contentDocument;
       if (scrubDoc && scrubDoc.body) {
         sanitizeFragment(scrubDoc.body, sanitizeCounters, logger);
+        // DEFENSE-IN-DEPTH (MSEC-01): the authoritative snapshot gate already
+        // ran at the string layer (handleSnapshot) so the parser never saw a
+        // blocked URL; this post-parse pass re-gates the parsed mirror body to
+        // catch any asset a future write path introduces and to keep the pin
+        // consistent on the live mirror DOM.
+        gateFragmentAssets(scrubDoc.body);
         if (lastSnapshotPayload) {
           resetIdentityIndex(scrubDoc, lastSnapshotPayload.nodeIds || []);
           installStyleSources(scrubDoc, lastSnapshotPayload.styleSources || [], { kind: 'document' });
           installShadowRoots(scrubDoc, lastSnapshotPayload.shadowRoots || []);
           installFrames(scrubDoc, lastSnapshotPayload.frames || []);
+          // Phase 13 (MEDIA-02, Pitfall 7): apply the snapshot media[] baseline
+          // once now that nids are paired -- the INITIAL desired state -- then
+          // defer to the reconciler. No-op in poster/off mode (no playback).
+          applyMediaBaseline(lastSnapshotPayload.media);
         }
       }
     } catch (e) {
@@ -269,6 +610,45 @@ export function createViewer(options) {
   // built-ins through the same registry custom kinds use. ---
   var overlays = createOverlays({ document: doc, logger: logger });
   root.appendChild(overlays.layer);
+
+  // --- Phase 14 (MADPT-01/03): the parent-realm adaptive media player. Runs
+  // ENTIRELY in this (host/parent) realm; the mirror iframe stays exactly
+  // sandbox="allow-same-origin" (no allow-scripts). attach() binds an HLS/DASH
+  // manifest to the inert in-iframe <video> (native-HLS-first -> playerFactory
+  // -> optional lazy hls.js -> degrade-to-poster); the single degrade(nid,reason)
+  // sink shows the media-unavailable overlay + invokes onMediaUnavailable. The
+  // onMediaUnavailable host callback is wrapped in the same containment as
+  // onMediaBlocked (safeInvokeMediaHook) so a throwing host hook can never wedge
+  // the mirror; a throwing playerFactory is contained by the player's degrade
+  // sink. Plan 03 routes STREAM.MEDIA_HINT to attach() and calls destroyAll() on
+  // a re-snapshot (Pattern 2 -- teardown on new identity). gateAsset reuses the
+  // Phase 12 fail-closed gate so a manifest/segment URL is re-gated at the viewer
+  // (defense in depth -- a hint is attacker-influenced). win is the PARENT realm
+  // (the MSE feature-detect surface), NOT iframe.contentWindow. ---
+  var mediaPlayer = createMediaPlayer({
+    doc: doc,
+    win: win,
+    gateAsset: gateAsset,
+    logger: logger,
+    playerFactory: playerFactory,
+    onMediaUnavailable: function (nid, reason) {
+      safeInvokeMediaHook(function (n) {
+        if (onMediaUnavailable) onMediaUnavailable(n, reason);
+      }, nid);
+    },
+    showOverlay: function (kind, payload, ctx) { return overlays.show(kind, payload, ctx); },
+    resolveNidRect: resolveNidRect,
+    ensurePlaying: ensurePlaying
+  });
+  // Page-scope adaptive hints awaiting an MSE-opaque element to play (most-
+  // recent-wins per kind). An element-scope hint binds immediately; a page-scope
+  // hint sits here until handleMedia sees a source-less element start, then is
+  // consumed (14-RESEARCH "manifest->element correlation": never block on perfect
+  // correlation). Cleared on every new stream identity in handleSnapshot.
+  var pendingHints = new Map();
+  // nids that have already consumed/bound an adaptive hint this generation, so a
+  // page hint is attached at most once per element (idempotent consumption).
+  var hintBoundNids = new Set();
 
   // Auto-attach (D-01): creation yields a live, ready-to-stream mirror.
   container.appendChild(root);
@@ -310,6 +690,11 @@ export function createViewer(options) {
   var destroyed = false;
   var nidToNode = new Map();
   var nodeToNid = new WeakMap();
+  // Phase 13 (Pitfall 7): nids whose snapshot media[] baseline has been applied
+  // once. The baseline is the INITIAL desired state; after first bind control
+  // passes to the reconciler (subsequent STREAM.MEDIA), so the baseline never
+  // re-fights live drift on a re-snapshot. Reset per snapshot identity.
+  var mediaFirstBind = new Set();
   var frameLoadHandlers = new WeakMap();
   var nodeHighlightEl = null;
   var pendingSubtreeRequests = new Map();
@@ -1093,6 +1478,13 @@ export function createViewer(options) {
    */
   function handleSnapshot(payload) {
     var p = payload || {};
+    // Accept either a bare SnapshotPayload (the dispatch() path passes
+    // payload directly) or a full { type, payload } message envelope (the
+    // host-driven handleSnapshot entry point on the returned handle). Unwrap
+    // the envelope so both call shapes resolve the same payload.
+    if (typeof p.html !== 'string' && p.payload && typeof p.payload === 'object') {
+      p = p.payload;
+    }
     if (typeof p.html !== 'string') {
       logger.error('[Renderer] snapshot missing html');
       return;
@@ -1110,7 +1502,31 @@ export function createViewer(options) {
     lastScroll.y = p.scrollY || 0;
     lastSnapshotPayload = p;
     clearIdentityIndex();
-    iframe.srcdoc = buildSnapshotHtml(p);
+    mediaFirstBind.clear(); // new identity: re-bind media baseline on next load
+    // Phase 14 (Pattern 2 -- teardown on new identity / Pitfall 2 -- object-URL
+    // leak): a new stream identity tears down EVERY live adaptive player before
+    // the new mirror document replaces the prior child elements, revoking parent-
+    // realm object URLs and freeing buffers so a re-snapshot never orphans a
+    // player bound to a now-dead element. It also invalidates any stored page hint
+    // and the per-element bound set (a prior page's manifest must never bind a new
+    // page's element).
+    mediaPlayer.destroyAll();
+    pendingHints.clear();
+    hintBoundNids.clear();
+    // PRE-WRITE FETCH GATE (MSEC-01, THE timing rule -- 12-RESEARCH Pitfall 1):
+    // rewrite blocked <img> assets to the dimensioned blocked-origin
+    // placeholder and apply the ASST-03 currentSrc pin at the STRING layer,
+    // BEFORE buildSnapshotHtml assembles the srcdoc, so a real browser's
+    // parser never sees a blocked URL and never issues the GET. Operates on a
+    // shallow payload copy (the wire payload object stays intact for the
+    // post-parse scrub's nodeIds/styleSources re-read). This rewrites typed
+    // values we are emitting -- NOT a scrub-then-reparse of sanitized HTML
+    // (snapshot.js header lines 14-19 invariant preserved). The post-parse
+    // DOM gate below is defense-in-depth for diffs/robustness.
+    var gatedPayload = Object.assign({}, p, {
+      html: gateSnapshotAssets(p.html, gateAsset)
+    });
+    iframe.srcdoc = buildSnapshotHtml(gatedPayload);
     markLive('snapshot');
   }
 
@@ -1143,7 +1559,12 @@ export function createViewer(options) {
           installFrames(cd, frames || []);
         },
         applyStyleSource: applyStyleSource,
-        removeStyleSource: removeStyleSource
+        removeStyleSource: removeStyleSource,
+        // Phase 12 (MSEC-01) pre-write asset gate hooks for the diff applier:
+        // ADD template content is gated as an inert fragment; ATTR src/poster
+        // is gated per-URL before setAttribute.
+        gateFragmentAssets: gateFragmentAssets,
+        gateAssetUrl: gateAsset
       }
     });
     if (!resyncPending) markLive('mutations');
@@ -1170,6 +1591,9 @@ export function createViewer(options) {
     var tpl = targetDoc.createElement('template');
     tpl.innerHTML = p.html || '';
     sanitizeFragment(tpl.content, sanitizeCounters, logger);
+    // PRE-WRITE FETCH GATE (MSEC-01): template content is inert (no fetch), so
+    // gating here -- before importNode -- is pre-write and safe.
+    gateFragmentAssets(tpl.content);
     var newNode = tpl.content.firstElementChild;
     if (!newNode) {
       logger.warn('[Renderer] subtree response dropped: html parsed to no element', {
@@ -1239,6 +1663,405 @@ export function createViewer(options) {
     markLive('dialog');
   }
 
+  // --- Phase 13 media driver (MEDIA-01/05): the in-iframe <video>/<audio> is
+  // inert (no allow-scripts); the PARENT realm is the only tier that can drive
+  // it cross-realm. handleMedia resolves the nid, runs the pure reconciler, and
+  // applies the action by calling methods on the in-iframe element. The element
+  // is NEVER scripted; affordances live in the parent-realm overlay layer. ---
+
+  /** Invoke a host hook in containment -> logger, never rethrow (T-13-12). */
+  function safeInvokeMediaHook(fn, nid) {
+    if (typeof fn !== 'function') return;
+    try {
+      fn(nid);
+    } catch (err) {
+      logger.error('[Renderer] onMediaBlocked hook failed', err);
+    }
+  }
+
+  /**
+   * Show the blocked-play affordance over the element rect and arm its onActivate
+   * to re-issue play() (user-gesture-backed, so autoplay policy permits it). On
+   * a successful re-play the affordance hides. Never wedges the mirror.
+   * @param {Element} el
+   * @param {number|string} nid
+   */
+  function showBlockedPlayAffordance(el, nid) {
+    overlays.show('media-blocked', {
+      nid: nid,
+      onActivate: function () {
+        try {
+          var p = el.play();
+          if (p !== undefined && typeof p.then === 'function') {
+            p.then(function () { overlays.show('media-blocked', null); })
+             .catch(function () { /* still blocked: keep the affordance up */ });
+          } else {
+            overlays.show('media-blocked', null);
+          }
+        } catch (e) { /* contained: a re-play failure keeps the affordance */ }
+      }
+    }, { anchorRect: resolveNidRect(nid) });
+  }
+
+  /**
+   * Ensure the element is playing under autoplay policy. Sets muted=true before
+   * the first programmatic play (muted autoplay is always allowed), then guards
+   * play()'s return: jsdom (and very old browsers) return undefined, so the
+   * `if (p !== undefined && typeof p.catch === 'function')` guard avoids a
+   * TypeError; a NotAllowedError rejection shows the blocked-play affordance and
+   * invokes onMediaBlocked(nid). Any other rejection falls through to the
+   * Phase 12 load-error path (no affordance). (13-RESEARCH Example 4.)
+   * @param {Element} el
+   * @param {number|string} nid
+   */
+  function ensurePlaying(el, nid) {
+    if (!el.paused) return;
+    try { el.muted = true; } catch (e) { /* muted-autoplay default best-effort */ }
+    var p;
+    try {
+      p = el.play();
+    } catch (e) {
+      return; // a synchronous play() throw is contained (never wedges)
+    }
+    if (p !== undefined && typeof p.catch === 'function') {
+      p.catch(function (err) {
+        if (err && err.name === 'NotAllowedError') {
+          showBlockedPlayAffordance(el, nid);
+          safeInvokeMediaHook(onMediaBlocked, nid);
+        }
+        // Any other rejection: defer to the Phase 12 load-error placeholder.
+      });
+    }
+  }
+
+  /**
+   * Apply one reconciler action to the in-iframe element from the parent realm.
+   * Driver guards (13-RESEARCH Example 4 + Pitfalls 4/6): hold while
+   * element.seeking; only seek when readyState >= HAVE_METADATA (1); rejoin-edge
+   * reads seekable.end only when seekable.length > 0 (else holds). All element
+   * mutations are try/caught so one failure never wedges the mirror.
+   * @param {Element} el
+   * @param {{action: string, toTime?: number, rate?: number, revertRate?: number}} action
+   * @param {number|string} nid
+   */
+  function applyMediaAction(el, action, nid) {
+    if (!action || typeof action.action !== 'string') return;
+    // Pitfall 6 driver guard: never apply a new seek while a seek is in flight.
+    if (el.seeking) {
+      // Still allow pause to flow even mid-seek; a new seek is the only thing held.
+      if (action.action === 'pause') { try { el.pause(); } catch (e) {} }
+      return;
+    }
+    switch (action.action) {
+      case 'pause':
+        try { el.pause(); } catch (e) { /* contained */ }
+        break;
+      case 'seek':
+      case 'rejoin-edge': {
+        var target;
+        if (action.action === 'rejoin-edge') {
+          // Live rejoin: seekable.end only when the range is non-empty (Pitfall 4).
+          target = (el.seekable && el.seekable.length > 0)
+            ? el.seekable.end(el.seekable.length - 1)
+            : null;
+        } else {
+          target = action.toTime;
+        }
+        if (target != null && el.readyState >= 1 /* HAVE_METADATA */) {
+          try { el.currentTime = target; } catch (e) { /* contained */ }
+        }
+        ensurePlaying(el, nid);
+        break;
+      }
+      case 'nudge':
+        try { el.playbackRate = action.rate; } catch (e) { /* contained */ }
+        ensurePlaying(el, nid);
+        break;
+      case 'hold':
+        // Restore the true rate if a nudge was active and drifted the rate.
+        if (action.revertRate != null && el.playbackRate !== action.revertRate) {
+          try { el.playbackRate = action.revertRate; } catch (e) { /* contained */ }
+        }
+        ensurePlaying(el, nid);
+        break;
+      default:
+        break;
+    }
+  }
+
+  /**
+   * STREAM.MEDIA handler (MEDIA-01/05, MWIRE-01): the side-channel twin of
+   * handleScroll/handleOverlay. Streaming + identity gate, then resolve the nid,
+   * run the pure reconciler over the element's observed state, and drive the
+   * in-iframe element cross-realm. After ensurePlaying, evaluate the unmute
+   * trigger. In mediaMode 'poster'/'off' no source is bound and no driver runs
+   * (the Task 1 string/fragment gate already neutralized the source) and no
+   * affordance is surfaced. A viewer without this case (the dispatch default)
+   * silently ignores the message (backward-compat).
+   * @param {Object} payload
+   */
+  function handleMedia(payload) {
+    if (viewerState !== 'streaming') return;
+    if (!isCurrentStream(payload, active)) return;
+    // poster/off: the source is neutralized at the gate; never drive playback or
+    // surface a playback affordance (13-UI-SPEC State C: poster is a still frame).
+    if (mediaMode !== 'reference') {
+      // State C wire (13-UI-REVIEW Fix 1 -- the dead-code BLOCKER): in POSTER mode
+      // a media element whose gated `poster` did NOT survive renders as an
+      // unexplained blank, so drive the registered-but-never-shown media-poster
+      // caption: show it IFF the element has no surviving poster, else hide it
+      // (the poster image is the explanation). 'off' mode renders nothing.
+      if (mediaMode === 'poster') {
+        var posterNid = payload && payload.nid;
+        var posterEl = resolveIndexedNode(posterNid);
+        var hasPoster = !!(posterEl && posterEl.getAttribute && posterEl.getAttribute('poster'));
+        if (posterEl && !hasPoster) {
+          overlays.show('media-poster', { nid: posterNid }, { anchorRect: resolveNidRect(posterNid) });
+        } else {
+          overlays.show('media-poster', null);
+        }
+      }
+      markLive('media');
+      return;
+    }
+    var nid = payload && payload.nid;
+    var el = resolveIndexedNode(nid);
+    if (!el || typeof el.play !== 'function') return;
+
+    // Phase 14 (MADPT-02 page correlation): an MSE-opaque element (no resolvable
+    // source) that starts is the consumer for the most-recent stored page hint.
+    // Consume at most once per element per generation, then let the player +
+    // reconciler own it (the source-less element otherwise plays nothing).
+    maybeConsumePageHint(el, nid);
+
+    var localState = {
+      currentTime: el.currentTime,
+      paused: !!el.paused,
+      playbackRate: el.playbackRate,
+      seeking: !!el.seeking,
+      readyState: el.readyState
+    };
+    var action = reconcileMediaDrift(localState, payload, Date.now(), mediaReconcileConfig);
+    applyMediaAction(el, action, nid);
+    evaluateUnmuteTrigger(el, payload, nid);
+    markLive('media');
+  }
+
+  /**
+   * Is this media element MSE-opaque / source-less -- i.e. it resolves to no
+   * playable source the viewer can reference (no `src` attribute survived the
+   * gate, no current child <source src>, and an empty currentSrc)? Such an
+   * element is the candidate consumer for a page-scope adaptive hint (an
+   * adaptive manifest never appears as a plain element src). All reads are
+   * guarded so a hostile/odd element never wedges the media path.
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function mediaElementHasNoSource(el) {
+    try {
+      if (el.getAttribute && el.getAttribute('src')) return false;
+      if (el.currentSrc) return false;
+      if (typeof el.querySelector === 'function') {
+        var sourced = el.querySelector('source[src]');
+        if (sourced) return false;
+      }
+      return true;
+    } catch (e) {
+      return false; // unknowable -> do not consume (conservative)
+    }
+  }
+
+  /**
+   * Consume the most-recent stored page hint for an MSE-opaque element on play
+   * (14-RESEARCH page-level correlation). Idempotent per nid per generation: an
+   * element binds at most one page hint, and only when it is source-less. The
+   * stored hint is removed once bound so a single page hint maps to a single
+   * consumer. No-op when the element already has a source or no hint is pending.
+   * @param {Element} el
+   * @param {number|string} nid
+   */
+  function maybeConsumePageHint(el, nid) {
+    if (pendingHints.size === 0) return;
+    var key = String(nid);
+    if (hintBoundNids.has(key)) return;
+    if (!mediaElementHasNoSource(el)) return;
+    // Most-recent-wins per kind: prefer 'hls' (the optional lazy path needs no
+    // host player), else 'dash' (host playerFactory only). Either is correct;
+    // pick the most-recently stored across kinds.
+    var chosen = null;
+    pendingHints.forEach(function (hint) {
+      if (!chosen || hint.storedAt >= chosen.storedAt) chosen = hint;
+    });
+    if (!chosen) return;
+    pendingHints.delete(chosen.kind);
+    hintBoundNids.add(key);
+    bindAdaptiveHint(el, key, chosen.manifestUrl, chosen.kind, chosen.contentType);
+  }
+
+  /**
+   * Bind an adaptive manifest to an in-iframe element through the parent-realm
+   * player. The manifestUrl was already re-gated by handleMediaHint before it
+   * reached pendingHints (page scope) or before an element-scope bind; the
+   * player re-gates a third time internally (defense in depth). attach() is
+   * fire-and-forget (the native/factory/dash branches are synchronous; the lazy-
+   * hls branch returns a promise the player self-contains) and never throws.
+   * @param {Element} el
+   * @param {number|string} nid
+   * @param {string} manifestUrl
+   * @param {'hls'|'dash'} kind
+   * @param {?string} contentType
+   */
+  function bindAdaptiveHint(el, nid, manifestUrl, kind, contentType) {
+    try {
+      mediaPlayer.attach(el, manifestUrl, { nid: String(nid), kind: kind, contentType: contentType });
+    } catch (e) {
+      // attach() is contained internally, but guard the call site too so a
+      // correlation bug never wedges the media dispatch.
+      logger.warn('[Renderer] adaptive hint bind failed', { nid: String(nid) });
+    }
+  }
+
+  /**
+   * STREAM.MEDIA_HINT handler (MADPT-02 consumption): the adapter-originated
+   * adaptive-manifest discovery op (a structural twin of STREAM.MEDIA; old
+   * viewers ignore it via the dispatch default). Flow (14-RESEARCH hint-
+   * consumption spec):
+   *   1. streaming + identity gate (isCurrentStream) -- drop a stale/late hint
+   *      from a prior page so it can never bind the wrong media (T-14-11).
+   *   2. poster/off mode binds no adaptive player at all (no player surface).
+   *   3. RE-GATE manifestUrl through gateAsset(url,'media') BEFORE any use -- the
+   *      hint is attacker-influenced; a blocked origin degrades to poster and is
+   *      NEVER fetched (T-14-10 / V12 SSRF defense in depth).
+   *   4. element scope (payload.nid set, element resolves & is MSE-opaque) ->
+   *      bind immediately via the player; page scope -> store most-recent-wins
+   *      per kind for an opaque element to consume on play.
+   * @param {Object} payload MediaHintPayload
+   */
+  function handleMediaHint(payload) {
+    if (viewerState !== 'streaming') return;
+    if (!isCurrentStream(payload, active)) return;
+    // WR-03: an empty-identity hint bypasses isCurrentStream (the backward-compat
+    // clause accepts any message with no identity). Before the first identity-
+    // bearing snapshot establishes a generation (active.streamSessionId === ''),
+    // such a hint could out-race the snapshot that defines its generation and be
+    // consumed by an element it was never meant for. Do NOT accept a hint until a
+    // current stream identity exists: drop an empty-identity hint that arrives in
+    // the pre-snapshot window. Once a generation exists, isCurrentStream governs.
+    if ((!payload || !payload.streamSessionId) && !active.streamSessionId) return;
+    // Poster/off mode: no adaptive player surface (the source is neutralized at
+    // the gate and poster is a still frame -- 13-UI-SPEC State C). Drop hints.
+    if (mediaMode !== 'reference') { markLive('media'); return; }
+    var p = payload || {};
+    var manifestUrl = p.manifestUrl;
+    if (!manifestUrl || typeof manifestUrl !== 'string') { markLive('media'); return; }
+    var nid = (p.nid != null) ? p.nid : null;
+    // RE-GATE at the viewer (defense in depth): a blocked manifest origin must
+    // never be fetched -> degrade to poster instead.
+    if (!gateAsset(manifestUrl, 'media').allow) {
+      mediaPlayer.degrade(nid != null ? String(nid) : null, 'no-manifest');
+      markLive('media');
+      return;
+    }
+    var kind = (p.kind === 'hls' || p.kind === 'dash') ? p.kind : null;
+    var scope = (p.scope === 'element') ? 'element' : (p.scope === 'page' ? 'page' : (nid != null ? 'element' : 'page'));
+    if (scope === 'element' && nid != null) {
+      var el = resolveIndexedNode(nid);
+      // Element-scope: bind immediately when the element resolves and is MSE-
+      // opaque (no resolvable source). A correlated element that already has a
+      // playable source is left to the Phase 13 progressive path.
+      if (el && typeof el.play === 'function' && mediaElementHasNoSource(el)) {
+        hintBoundNids.add(String(nid));
+        bindAdaptiveHint(el, nid, manifestUrl, kind, p.contentType);
+      } else {
+        // WR-05: the named element cannot take the adaptive stream -- either the
+        // nid does not resolve (stale / wrong generation) or it resolves but is
+        // not MSE-opaque (a resolved-but-sourced element stays with the
+        // progressive path). Surface ONE concise diagnostic so a dropped hint is
+        // observable instead of indistinguishable from "successfully handled".
+        // Never throws (logger is advisory); the never-break contract holds.
+        logger.warn('[Renderer] element-scope media hint dropped (unresolved or non-opaque nid)', {
+          nid: String(nid),
+          reason: el ? 'not-opaque' : 'unresolved'
+        });
+      }
+      markLive('media');
+      return;
+    }
+    // Page scope (nid omitted): store most-recent-wins per kind; consumed when an
+    // MSE-opaque element next plays (handleMedia -> maybeConsumePageHint).
+    pendingHints.set(kind || 'hls', {
+      manifestUrl: manifestUrl,
+      kind: kind || 'hls',
+      contentType: p.contentType,
+      storedAt: Date.now()
+    });
+    markLive('media');
+  }
+
+  /**
+   * Unmute trigger (MEDIA-05, 13-UI-SPEC State B): after the muted-default play,
+   * when the in-iframe element is muted but the source reports unmuted
+   * (payload.muted === false) in mediaMode 'reference', SHOW the media-unmute
+   * affordance; activating it sets muted=false + restores volume and hides the
+   * affordance. When the source is still muted (or no muted field), hide/skip
+   * the affordance (the null-payload contract).
+   * @param {Element} el
+   * @param {Object} payload
+   * @param {number|string} nid
+   */
+  function evaluateUnmuteTrigger(el, payload, nid) {
+    var sourceUnmuted = payload && payload.muted === false;
+    if (el.muted === true && sourceUnmuted) {
+      var vol = (payload && typeof payload.volume === 'number') ? payload.volume : null;
+      overlays.show('media-unmute', {
+        nid: nid,
+        onActivate: function () {
+          try { el.muted = false; } catch (e) { /* contained */ }
+          if (vol != null) { try { el.volume = vol; } catch (e2) { /* contained */ } }
+          overlays.show('media-unmute', null); // hide after activation
+        }
+      }, { anchorRect: resolveNidRect(nid) });
+    } else {
+      // Source muted / field absent / element already unmuted -> hide.
+      overlays.show('media-unmute', null);
+    }
+  }
+
+  /**
+   * Apply the snapshot media[] baseline (Plan 02) once per element, on first
+   * bind only (Pitfall 7: the baseline is the INITIAL desired state; after this,
+   * live STREAM.MEDIA hands control to the reconciler so a re-snapshot never
+   * jumps playback back). Each entry is nid-addressed; the seek is readyState-
+   * gated (>= HAVE_METADATA) and contained. No-op in poster/off mode (the source
+   * is neutralized; nothing plays). All element mutations are best-effort.
+   * @param {Array<Object>} baseline payload.media (absent on media-free pages)
+   */
+  function applyMediaBaseline(baseline) {
+    if (mediaMode !== 'reference') return;
+    if (!Array.isArray(baseline) || baseline.length === 0) return;
+    for (var i = 0; i < baseline.length; i++) {
+      var entry = baseline[i];
+      if (!entry || entry.nid == null) continue;
+      var key = String(entry.nid);
+      if (mediaFirstBind.has(key)) continue; // already bound -> reconciler owns it
+      var el = resolveIndexedNode(key);
+      if (!el || typeof el.play !== 'function') continue;
+      mediaFirstBind.add(key);
+      try {
+        // Initial currentTime only when ready (live entries carry no duration).
+        if (typeof entry.currentTime === 'number' && el.readyState >= 1) {
+          el.currentTime = entry.currentTime;
+        }
+        if (typeof entry.playbackRate === 'number') el.playbackRate = entry.playbackRate;
+        if (entry.paused === false) {
+          ensurePlaying(el, key);
+        }
+      } catch (e) {
+        logger.warn('[Renderer] media baseline apply failed', { nid: key });
+      }
+    }
+  }
+
   /**
    * Transport message dispatch. The whole handler is containment-wrapped:
    * one malformed message routes to the logger and never kills the
@@ -1270,6 +2093,12 @@ export function createViewer(options) {
           break;
         case STREAM.DIALOG:
           handleDialog(payload);
+          break;
+        case STREAM.MEDIA:
+          handleMedia(payload);
+          break;
+        case STREAM.MEDIA_HINT:
+          handleMediaHint(payload);
           break;
         case STREAM.STATE:
           handleStreamState(payload);
@@ -1396,7 +2225,12 @@ export function createViewer(options) {
     on: on,
     registerOverlay: registerOverlay,
     requestSubtree: requestSubtree,
-    resolveNode: resolveNode
+    resolveNode: resolveNode,
+    // Host-driven snapshot entry point (Phase 12): viewers wired without a
+    // wire transport (the asset-fetch-gate path) render a snapshot by calling
+    // this directly. Identical to the dispatch() STREAM.SNAPSHOT target and
+    // accepts either a bare payload or a { type, payload } envelope.
+    handleSnapshot: handleSnapshot
   };
 }
 

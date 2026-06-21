@@ -37,7 +37,32 @@
 // injected identity hooks owned by createViewer.
 
 import { DIFF_OP } from '../protocol/messages.js';
-import { sanitizeFragment, sanitizeAttrValue } from './sanitize.js';
+import { sanitizeFragment, sanitizeAttrValue, parseSrcsetCandidates } from './sanitize.js';
+
+/**
+ * True when any candidate in a srcset value is blocked by the injected fetch
+ * gate. Reuses the shared per-candidate parser so the ATTR branch gates srcset
+ * with the same vocabulary as the snapshot/fragment gates (review WR-03).
+ * Unparseable input fails closed (treated as blocked).
+ * @param {string} srcset
+ * @param {(url: string, kind: string) => { allow: boolean }} gateAssetUrl
+ * @returns {boolean}
+ */
+function srcsetHasBlockedCandidate(srcset, gateAssetUrl) {
+  if (!srcset) return false;
+  try {
+    var candidates = parseSrcsetCandidates(srcset);
+    for (var i = 0; i < candidates.length; i++) {
+      var url = candidates[i].url;
+      if (!url) continue;
+      var verdict = gateAssetUrl(url, 'image');
+      if (!verdict || !verdict.allow) return true;
+    }
+    return false;
+  } catch (e) {
+    return true; // unparseable srcset: fail closed
+  }
+}
 
 function installShadowRootDirect(doc, host, payload, sanitizeCounters, logger, indexSubtree, removeSubtree) {
   var p = payload || {};
@@ -135,6 +160,19 @@ export function applyMutations(doc, mutations, counters, hooks) {
   var removeStyleSource = typeof identity.removeStyleSource === 'function'
     ? function (sourceId, scope) { return identity.removeStyleSource(sourceId, scope); }
     : null;
+  // Phase 12 (MSEC-01) injected pre-write asset gate. createViewer injects the
+  // posture-bound closures; omitted hooks default to no-ops so the public
+  // applyMutations signature and every existing caller stay unchanged.
+  //   gateFragmentAssets(node): pre-write gate over inert ADD template content
+  //     (currentSrc pin + blocked-origin -> placeholder), run before importNode.
+  //   gateAssetUrl(url, kind): per-URL verdict for the ATTR branch's src/poster,
+  //     run before setAttribute (live-element mutation -> must gate pre-write).
+  var gateFragmentAssets = typeof identity.gateFragmentAssets === 'function'
+    ? function (node) { identity.gateFragmentAssets(node); }
+    : function () {};
+  var gateAssetUrl = typeof identity.gateAssetUrl === 'function'
+    ? function (url, kind) { return identity.gateAssetUrl(url, kind); }
+    : null;
 
   // Shared miss path: count, warn, and escalate at the parity threshold.
   function recordStaleMiss(op, nid) {
@@ -212,6 +250,11 @@ export function applyMutations(doc, mutations, counters, hooks) {
             // before it gets anywhere near the mirror document -- DOM-
             // fragment based, never string-scrub-then-reparse (mXSS).
             sanitizeFragment(tpl.content, sanitizeCounters, logger);
+            // PRE-WRITE FETCH GATE (MSEC-01): the parsed template content is
+            // inert (fires no fetch), so gating it here -- before importNode --
+            // is pre-write. Applies the currentSrc pin and replaces blocked
+            // origins with the dimensioned placeholder.
+            gateFragmentAssets(tpl.content);
             var newNode = tpl.content.firstElementChild;
             if (!newNode) {
               // Still possible: empty/whitespace-only m.html, or html whose
@@ -317,6 +360,38 @@ export function applyMutations(doc, mutations, counters, hooks) {
             if (scrubbed.value === null) {
               target.removeAttribute(m.attr);
               break;
+            }
+            // PRE-WRITE FETCH GATE (MSEC-01): for fetchable attrs (src/poster)
+            // on a LIVE mirror element, gate before setAttribute so a blocked
+            // origin never reaches the live DOM (the browser would GET it
+            // immediately). Blocked -> drop the attribute (no fetchable src);
+            // the dimensioned placeholder is the snapshot/ADD path's job.
+            if (gateAssetUrl && (attrName === 'src' || attrName === 'poster')) {
+              var assetVerdict = gateAssetUrl(scrubbed.value, attrName === 'poster' ? 'poster' : 'image');
+              if (!assetVerdict || !assetVerdict.allow) {
+                sanitizeCounters.blockedUrls += 1;
+                logger.warn('[Renderer] attr op asset blocked by origin gate', {
+                  nid: m.nid || '', attr: m.attr || ''
+                });
+                target.removeAttribute(m.attr);
+                break;
+              }
+            }
+            // PRE-WRITE FETCH GATE (MSEC-01, review WR-03): srcset is a
+            // first-class multi-candidate fetchable attribute -- on a live
+            // <img> the browser may select and GET a candidate. Gate every
+            // candidate; if ANY is blocked, drop the whole srcset (the
+            // remaining src/placeholder path covers display) so no blocked
+            // origin reaches the live DOM.
+            if (gateAssetUrl && attrName === 'srcset') {
+              if (srcsetHasBlockedCandidate(scrubbed.value, gateAssetUrl)) {
+                sanitizeCounters.blockedUrls += 1;
+                logger.warn('[Renderer] attr op srcset candidate blocked by origin gate', {
+                  nid: m.nid || '', attr: m.attr || ''
+                });
+                target.removeAttribute(m.attr);
+                break;
+              }
             }
             target.setAttribute(m.attr, scrubbed.value);
             break;

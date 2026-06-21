@@ -13,6 +13,7 @@ import {
   DIFF_OP,
   SNAPSHOT_BUDGET_BYTES,
   RELAY_PER_MESSAGE_LIMIT_BYTES,
+  MEDIA_SYNC_THROTTLE_MS,
 } from '../src/protocol/index.js';
 
 // Minimal LZ-compatible codec for tests (reversible, not actually compressing).
@@ -98,4 +99,132 @@ test('Phase 9 protocol constants and typedefs are exported for CSSOM style sourc
   }
   assert.match(source, /styleSources/);
   assert.match(source, /styleStrategy/);
+});
+
+test('Phase 13 STREAM.MEDIA op is exported in the ext:dom-* namespace and collision-free', () => {
+  // MWIRE-01: one new op string for the throttled media side channel.
+  assert.equal(typeof STREAM.MEDIA, 'string');
+  assert.match(STREAM.MEDIA, /^ext:dom-/);
+  // Assumption A2: distinct from every other STREAM value (no FSB envelope collision).
+  const values = Object.values(STREAM);
+  const occurrences = values.filter((v) => v === STREAM.MEDIA).length;
+  assert.equal(occurrences, 1, 'STREAM.MEDIA must not collide with another STREAM op');
+});
+
+test('Phase 13 MEDIA_SYNC_THROTTLE_MS is exported and is 250', () => {
+  // MWIRE-01: heartbeat cadence constant, twin of SCROLL_THROTTLE_MS.
+  assert.equal(MEDIA_SYNC_THROTTLE_MS, 250);
+});
+
+test('Phase 13 media typedefs are present in messages.js', () => {
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/protocol/messages.js', import.meta.url)),
+    'utf8'
+  );
+  assert.match(source, /@typedef \{Object\} MediaBaselineEntry/);
+  assert.match(source, /@typedef \{Object\} MediaSyncPayload/);
+});
+
+test('Phase 13 STREAM.MEDIA round-trips raw through the envelope with no special-casing', () => {
+  // MWIRE-01: envelope/relay byte-unchanged; the new type is just more JSON.
+  const msg = {
+    type: STREAM.MEDIA,
+    payload: {
+      nid: 'n42',
+      event: 'play',
+      currentTime: 12.5,
+      paused: false,
+      muted: true,
+      volume: 1,
+      playbackRate: 1,
+      loop: false,
+      ended: false,
+      duration: 300,
+      sentAt: 1700000000000,
+      streamSessionId: 'stream_a_1',
+      snapshotId: 100,
+    },
+  };
+  // Plain (below threshold): decodes identically.
+  const plainWire = encodeEnvelope(msg, fakeLz, 1 << 20);
+  assert.equal(isCompressedEnvelope(JSON.parse(plainWire)), false);
+  const plainOut = decodeEnvelope(plainWire, fakeLz);
+  assert.equal(plainOut.ok, true);
+  assert.deepEqual(plainOut.msg, msg);
+  // Compressed (forced): decodes identically.
+  const lzWire = encodeEnvelope(msg, fakeLz);
+  assert.ok(isCompressedEnvelope(JSON.parse(lzWire)));
+  const lzOut = decodeEnvelope(lzWire, fakeLz);
+  assert.equal(lzOut.ok, true);
+  assert.deepEqual(lzOut.msg, msg);
+});
+
+test('Phase 13 a near-cap STREAM.MEDIA payload survives the envelope (1 MiB-cap contract intact)', () => {
+  // A payload just under RELAY_PER_MESSAGE_LIMIT_BYTES round-trips without truncation;
+  // the envelope does not enforce or alter the cap (relay-side concern, untouched here).
+  const big = 'x'.repeat(RELAY_PER_MESSAGE_LIMIT_BYTES - 4096);
+  const msg = {
+    type: STREAM.MEDIA,
+    payload: { nid: 'n1', event: 'timeupdate', currentTime: 1, sentAt: 1, blob: big },
+  };
+  const wire = encodeEnvelope(msg, fakeLz, 1 << 20); // plain, no compression
+  const out = decodeEnvelope(wire, fakeLz);
+  assert.equal(out.ok, true);
+  assert.equal(out.msg.payload.blob.length, RELAY_PER_MESSAGE_LIMIT_BYTES - 4096);
+  assert.deepEqual(out.msg, msg);
+});
+
+test('Phase 14 STREAM.MEDIA_HINT op is exported in the ext:dom-* namespace and collision-free', () => {
+  // MADPT-02 / Assumption A2: one new opt-in op string for adapter manifest discovery.
+  assert.equal(typeof STREAM.MEDIA_HINT, 'string');
+  assert.equal(STREAM.MEDIA_HINT, 'ext:dom-media-hint');
+  assert.match(STREAM.MEDIA_HINT, /^ext:dom-/);
+  // Assumption A2: distinct from every other STREAM value (no FSB envelope collision).
+  const values = Object.values(STREAM);
+  const occurrences = values.filter((v) => v === STREAM.MEDIA_HINT).length;
+  assert.equal(occurrences, 1, 'STREAM.MEDIA_HINT must not collide with another STREAM op');
+});
+
+test('Phase 14 STREAM.MEDIA_HINT round-trips raw through the envelope under the 1 MiB cap', () => {
+  // MADPT-02: the hint is just more JSON -- envelope/relay byte-unchanged; old viewers
+  // ignore the unknown type. A representative MediaHintPayload survives a raw round-trip
+  // and the encoded frame stays inside RELAY_PER_MESSAGE_LIMIT_BYTES.
+  const msg = {
+    type: STREAM.MEDIA_HINT,
+    payload: {
+      nid: 'n7',
+      scope: 'element',
+      manifestUrl: 'https://cdn.example.test/live/playlist.m3u8',
+      kind: 'hls',
+      contentType: 'application/vnd.apple.mpegurl',
+      streamSessionId: 'stream_a_1',
+      snapshotId: 100,
+    },
+  };
+  // Plain (below threshold): decodes identically and survives the cap.
+  const plainWire = encodeEnvelope(msg, fakeLz, 1 << 20);
+  assert.equal(isCompressedEnvelope(JSON.parse(plainWire)), false);
+  const plainOut = decodeEnvelope(plainWire, fakeLz);
+  assert.equal(plainOut.ok, true);
+  assert.equal(plainOut.msg.type, STREAM.MEDIA_HINT);
+  assert.equal(plainOut.msg.payload.manifestUrl, msg.payload.manifestUrl);
+  assert.deepEqual(plainOut.msg, msg);
+  assert.ok(
+    Buffer.byteLength(plainWire, 'utf8') < RELAY_PER_MESSAGE_LIMIT_BYTES,
+    'an encoded MEDIA_HINT frame stays under the 1 MiB relay cap'
+  );
+  // Compressed (forced): decodes identically too.
+  const lzWire = encodeEnvelope(msg, fakeLz);
+  assert.ok(isCompressedEnvelope(JSON.parse(lzWire)));
+  const lzOut = decodeEnvelope(lzWire, fakeLz);
+  assert.equal(lzOut.ok, true);
+  assert.deepEqual(lzOut.msg, msg);
+});
+
+test('Phase 14 MediaHintPayload typedef is present in messages.js', () => {
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/protocol/messages.js', import.meta.url)),
+    'utf8'
+  );
+  assert.match(source, /@typedef \{Object\} MediaHintPayload/);
 });

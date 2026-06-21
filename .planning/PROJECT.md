@@ -17,6 +17,27 @@ A live, trustworthy, low-bandwidth, *semantically addressable* mirror of a real 
 if everything else fails, capture → relay → render → remote-control must work end-to-end as a
 standalone framework.
 
+## Current Milestone: v2.0 Asset & Media Streaming
+
+**Goal:** Extend PhantomStream beyond DOM/text to mirror media **by reference** — stream asset
+and media **URLs** (plus small playback-state messages), and let the viewer fetch the bytes from
+the original CDN/source over its own network. The relay still carries only text + URLs, so the
+low-bandwidth core value is preserved. This reverses v1's "`<video>`/`<audio>` out of scope"
+decision via URL-reference (not a WebRTC media pipeline).
+
+**Target features:**
+- Static assets (images/`srcset`/`<picture>`/`background-image`/poster) mirrored by absolute URL
+- Progressive `<video>`/`<audio>` playback with drift-corrected sync over a throttled `STREAM.MEDIA` channel
+- Best-effort adaptive HLS/DASH via an optional, lazy, parent-realm player + adapter manifest discovery
+- A governed viewer-fetch security model: fail-closed origin policy, `mediaMode`, URL masking, no-referrer
+
+**Key context:** Research (`.planning/research/v2.0-media/`) found the by-reference asset pipeline
+is already ~80–90% shipped (capture absolutifies `src`/`poster`/`srcset`; media tags survive both
+sanitizers), so v2.0 concentrates on playback sync, adaptive playback, and a **new viewer-side-fetch
+security surface** (the first feature where the viewer fetches third-party bytes — SSRF/tracking/leak
+risk). The no-`allow-scripts` sandbox forces adaptive players into a parent realm, never the mirror.
+The evaluation harness and research paper are deferred to milestone v2.1.
+
 ## Requirements
 
 ### Validated
@@ -44,29 +65,29 @@ standalone framework.
 - ✓ WeakMap node identity + semantic addressing API — capture no longer writes framework identity attributes into the observed page, identity travels through `nodeIds` sidecars, renderer resolves through a private Map index, and hosts can use `getNodeId`, `resolveNode`, `highlightNode`, and `clearHighlight` — Validated in Phase 7 (CAPT-07, VIEW-03)
 - ✓ Modern web fidelity completion — open shadow DOM sidecars/reconstruction, same-origin iframe mirroring with cross-origin placeholders, live form value diffs, computed styles for late-added nodes, bounded on-demand subtree recovery, relay-cap hardening, and Playwright inject parity — Validated in Phase 8 (CAPT-05, CAPT-06, CAPT-08, CAPT-09, CAPT-11)
 - ✓ Stylesheet-centric capture mode (CSSOM) — opt-in `styleMode: 'cssom'`, scoped `styleSources[]` / `styleStrategy`, live `DIFF_OP.STYLE_SOURCE` ops, fallback diagnostics, Playwright inject support, and D25 oracle coverage — Validated in Phase 9 (CAPT-10)
+- ✓ npm package published — `@full-self-browsing/phantom-stream@0.1.0` live on the public registry with ESM-only subpath exports, JSDoc-generated `.d.ts`, `publint`/`attw` clean, tarball-install smoke as CI gates, trusted-publishing workflow, and < 5-minute quickstarts — Validated in Phase 10 (PKG-03, PKG-04)
+- ✓ FSB swap-in → 1.0 — FSB runs on the published package as its streaming layer, verified end-to-end (live preview, remote control, watchdog/eviction recovery) with wire backward compatibility preserved; verification lives in the FSB repo — Validated in Phase 11 (FSB-01)
+- ✓ Static assets by reference — `<img>`/`srcset`/`<picture>`/`<source>`/SVG `<image>`/`background-image`/`<video>` poster resolve to absolute source URLs and render in the viewer by fetching from origin (no image bytes on the relay), `currentSrc`-pinned, with a fail-closed viewer-fetch origin policy, `mediaMode` switch, precise CSP, and placeholder degradation for non-shareable (`blob:`/oversized-`data:`) refs — Validated in Phase 12 (ASST-01..05, MSEC-01, MSEC-02)
+- ✓ Progressive `<video>`/`<audio>` playback + sync — media plays in the viewer from the source URL (no media bytes on the relay), driven cross-realm from the parent over a new throttled `STREAM.MEDIA` side channel with a pure drift reconciler (hold / ±5% rate-nudge / hard-seek / live rejoin-edge), muted-autoplay default + blocked-play & unmute affordances, `media-src` CSP + poster-mode string-layer SSRF gating, envelope/relay untouched and old viewers safely ignoring the new type — Validated in Phase 13 (MEDIA-01..05, MWIRE-01, MWIRE-02); real-browser playback UAT tracked in `13-HUMAN-UAT.md`
+- ✓ Adaptive streaming + adapter discovery + fallback — best-effort HLS/DASH plays via an optional, lazy player in a renderer-owned **parent realm** that binds a `MediaSource` `blob:` object URL cross-realm to the inert in-iframe `<video>` (sandbox unchanged; hls.js is an optional `peerDependency`, dynamic-`import()`-only — the published module stays zero-runtime-dep); Playwright/CDP + extension adapters surface manifest URLs by opt-in network observation (`STREAM.MEDIA_HINT`) with graceful absence; MSE/`blob`/DRM degrade to poster with an observable reason via a single never-rethrowing `degrade()` sink; live streams reuse the reconciler live-edge branch — the mirror never breaks — Validated in Phase 14 (MADPT-01..04); real-browser MSE/live/DRM UAT tracked in `14-HUMAN-UAT.md`
+- ✓ Media security contract completed — asset/media URL **masking** vocabulary (`maskMediaSelector` omits the URL + emits no `STREAM.MEDIA` → placeholder; `maskAssetUrls` strips a documented token/PII query-param denylist, off-by-default + byte-identical so the differential oracle is untouched; `maskAssetUrlFn` fail-closed) via the capture `sanitizeForWire` chokepoint; a document-level `referrerpolicy="no-referrer"` + omit-credentials viewer fetch; the **parent-realm object-URL blast-radius threat model** + media security tests; `docs/SECURITY.md`/`docs/ARCHITECTURE.md` updated (limitation #6 — `<video>`/`<audio>` now mirrored by reference) — Validated in Phase 15 (MSEC-03, MSEC-04); real-browser security UAT tracked in `15-HUMAN-UAT.md`
 
 ### Active
 
-<!-- Current scope. Building toward these. -->
+<!-- Milestone v2.0 — Asset & Media Streaming — is functionally COMPLETE (all 15 phases verified; real-browser media/security UAT deferred per environment limits and tracked in 13/14/15-HUMAN-UAT.md). -->
+<!-- Next milestone v2.1 (Evaluation & Research Paper, provisional Phases 16–17): EVAL-* evaluation corpus/harness, PAPR-* system-track paper. Opened when v2.0 is archived. -->
 
-**Plug-and-play surface:**
-- [ ] npm package published as `@full-self-browsing/phantom-stream` with JSDoc-generated `.d.ts`
-
-**FSB integration:**
-- [ ] FSB swap-in verified from this repo — FSB consumes the published package as its streaming layer
-
-**Research paper:**
-- [ ] Evaluation harness: bandwidth/latency/fidelity vs. WebRTC screen capture, CDP screencast, rrweb across a frozen site corpus
-- [ ] Style-capture strategy ablation (full enumeration vs. curated inlining vs. stylesheet-centric)
-- [ ] Full system-track paper draft ready for submission (WWW / UIST / CHI tier)
+_No active in-scope requirements — v2.0 complete; v2.1 not yet opened._
 
 ### Out of Scope
 
-- Multi-viewer fan-out beyond what the relay already does — future work, not needed for v1 or the paper
+- Multi-viewer fan-out beyond what the relay already does — future work, not needed for the framework or the paper
 - CRDT/multi-writer collaboration — single-writer mirror by design; the paper argues why this isn't needed
-- Cross-origin iframe content mirroring — browser security boundary; documented limitation, not solvable in v1
-- `<video>`/`<audio>` content mirroring — out of v1; poster/placeholder treatment documented instead
-- Mobile browsers / non-Chromium-first support — v1 targets Chromium contexts (extension MV3, CDP); portability later
+- Cross-origin iframe content mirroring — browser security boundary; documented limitation
+- WebRTC/pixel media relay and re-encoding/transcoding — destroys the low-bandwidth core value; v2.0 mirrors media by URL reference instead
+- `<canvas>`/WebGL pixel-frame streaming and Web Audio / `getUserMedia` capture — out of scope; conflicts with the bandwidth and security posture
+- DRM/EME content and MSE/`blob:` media with no discoverable manifest — unshareable by design; degrade to poster/placeholder with a documented reason
+- Mobile browsers / non-Chromium-first support — targets Chromium contexts (extension MV3, CDP); portability later
 - Building FSB features in this repo — FSB only consumes the package; its dashboard/agent code stays in the FSB repo
 
 ## Context
@@ -111,12 +132,16 @@ standalone framework.
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Framework-first sequencing (extract → demo → FSB swap-in → paper) | A clean standalone framework is the prerequisite for both other deliverables | — Pending |
-| Plain JS ESM + JSDoc types, generated `.d.ts` (not TypeScript migration) | Sources must inject build-free into page contexts; consumers still get full types; `tsc --checkJs` enforces in CI | — Pending |
+| Framework-first sequencing (extract → demo → FSB swap-in → paper) | A clean standalone framework is the prerequisite for both other deliverables | Framework + FSB swap-in shipped (v1.0, Phases 1–11); paper deferred to v2.1 |
+| Plain JS ESM + JSDoc types, generated `.d.ts` (not TypeScript migration) | Sources must inject build-free into page contexts; consumers still get full types; `tsc --checkJs` enforces in CI | Validated in Phase 10 |
 | All six inherited limitations are v1 must-fix, not deferred | Published framework can't ship known security/fidelity gaps; CSSOM mode doubles as paper ablation | Validated in Phase 9 |
-| FSB integration verified from this repo via published npm package | Keeps "SDK that plugs back into FSB" an observable success criterion here, while FSB code stays in its own repo | — Pending |
-| Full system-track paper (WWW/UIST/CHI tier), no fixed deadline | Deep evaluation valued over fast turnaround; arXiv/workshop versions can derive from the full draft | — Pending |
-| Both demos: two-tab + Playwright-driven | Two-tab proves plug-and-play; Playwright proves the agent-observability story the paper leads with | — Pending |
+| FSB integration verified from this repo via published npm package | Keeps "SDK that plugs back into FSB" an observable success criterion here, while FSB code stays in its own repo | Validated in Phase 11 |
+| Full system-track paper (WWW/UIST/CHI tier), no fixed deadline | Deep evaluation valued over fast turnaround; arXiv/workshop versions can derive from the full draft | Deferred to milestone v2.1 |
+| Both demos: two-tab + Playwright-driven | Two-tab proves plug-and-play; Playwright proves the agent-observability story the paper leads with | Validated in Phases 4–5 |
+| Media is mirrored by URL reference, not by value | Streaming pixels/bytes destroys the low-bandwidth core value; rrweb proves URL-reference is the industry default; reverses v1's video/audio exclusion | — Pending (v2.0) |
+| Adaptive players (hls.js/dash.js) run in a parent-realm script surface, never inside the no-`allow-scripts` mirror sandbox | Weakening the sandbox to "make video work" is a catastrophic XSS regression; native progressive media plays in-sandbox driven cross-realm, MSE players bind from the parent; only hls.js added (optional, lazy) | — Pending (v2.0) |
+| Viewer-side asset/media fetch is governed (fail-closed origin policy + `mediaMode` + URL masking + no-referrer) | v2.0 is the first feature where the viewer fetches third-party bytes on its own network — a new SSRF/tracking/leakage surface that scheme-sanitization doesn't cover | — Pending (v2.0) |
+| Evaluation harness + research paper deferred to milestone v2.1 | Media streaming prioritized as the immediate next chapter; the paper should evaluate it, so it follows media rather than preceding it | — Pending (v2.1) |
 | Security pipeline is enforced before relay/publishing work | Anything embeddable or published must be safe to render and must not leak masked content | Validated in Phase 3 |
 | Relay stays raw; compression and decode are endpoint-owned | Keeps routing transport-agnostic, preserves byte-cap diagnostics, and maintains FSB `_lz` compatibility without a relay-side payload dependency | Validated in Phase 4 |
 | Consent-gated remote control belongs in host/adapter boundaries, not renderer/relay | Renderer exposes geometry only and relay stays raw; the adapter owns authorization and driver-native replay | Validated in Phase 5 |
@@ -141,4 +166,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-16 after Phase 9 completion (CSSOM capture mode validated and Phase 10 packaging next)*
+*Last updated: 2026-06-21 — milestone v2.0 (Asset & Media Streaming) FUNCTIONALLY COMPLETE: all 15 phases verified — static assets by reference (12), progressive `<video>`/`<audio>` + `STREAM.MEDIA` sync (13), adaptive HLS/DASH + adapter discovery + fallback (14), and the media security/masking/threat-model/docs completion (15). Real-browser media/MSE/security UAT deferred (jsdom has no MSE; the FSB automation browser runs tabs hidden) and tracked in 13/14/15-HUMAN-UAT.md. Next: milestone audit → complete → cleanup, then v2.1 (Evaluation & Research Paper). Eval harness + paper deferred to v2.1.*

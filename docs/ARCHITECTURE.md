@@ -266,8 +266,17 @@ explicit browser/security boundaries or intentional default-mode tradeoffs:
    object/embed/script-like subtrees, and hostile CSS before mirrored content is
    transported or inserted. This is still a framework-maintained blocklist, so the
    viewer iframe remains sandboxed without `allow-scripts` as defense in depth.
-6. **Open shadow DOM and same-origin iframes resolved in standalone Phase 8.**
-   Remaining limits are closed shadow roots, cross-origin iframe content,
-   and `<video>`/`<audio>` media pixels/streams. Closed shadow roots and
-   cross-origin iframe content are browser security boundaries; the framework
+6. **Open shadow DOM and same-origin iframes resolved in standalone Phase 8;
+   `<video>`/`<audio>` mirrored by reference across the v2.0 milestone.** Media
+   is no longer a blanket non-captured boundary: `<video>`/`<audio>` are now
+   mirrored **by reference** -- playback state from the snapshot baseline,
+   progressive (direct) playback, and best-effort adaptive (HLS/DASH) playback
+   driven from a parent-realm surface -- and the media bytes never cross the
+   relay. The residual media limits narrow to three cases: DRM/EME-protected
+   content, which is unshareable by design and degrades to a poster;
+   MSE/`blob:` media with no discoverable manifest, whose origin-local object
+   URL is dead at the viewer and degrades to a poster; and raw media
+   pixels/frames, which are out of scope because PhantomStream mirrors media
+   by reference, not by pixel. Closed shadow roots and cross-origin iframe
+   content remain the standing browser security boundaries; the framework
    documents them as non-captured content rather than faking or bypassing them.

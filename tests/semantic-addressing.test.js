@@ -177,13 +177,14 @@ test('viewer resolves and locally highlights nodes by opaque nid', () => {
         'destroy',
         'detach',
         'getViewportMapping',
+        'handleSnapshot',
         'highlightNode',
         'on',
         'registerOverlay',
         'requestSubtree',
         'resolveNode',
       ],
-      'viewer exposes semantic addressing methods on the public handle'
+      'viewer exposes semantic addressing methods on the public handle (plus the Phase 12 host-driven handleSnapshot)'
     );
 
     const payload = semanticSnapshotPayload();
@@ -234,19 +235,53 @@ test('viewer resolves and locally highlights nodes by opaque nid', () => {
 });
 
 test('semantic addressing does not expand renderer remote-control dispatch behavior', () => {
+  const overlaysSource = readFileSync(new URL('../src/renderer/overlays.js', import.meta.url), 'utf8');
   const rendererSource = [
     readFileSync(new URL('../src/renderer/index.js', import.meta.url), 'utf8'),
-    readFileSync(new URL('../src/renderer/overlays.js', import.meta.url), 'utf8'),
+    overlaysSource,
   ].join('\n');
 
   for (const forbidden of ['REMOTE_CONTROL', 'Request control', 'Authorization hook']) {
     assert.equal(rendererSource.includes(forbidden), false, 'source must not contain ' + forbidden);
   }
-  for (const eventName of ['click', 'type', 'scroll']) {
+  // The reverse remote-control surface forwards user INPUT from the viewer to
+  // the captured tab. The guard forbids new input-FORWARDING listeners. Phase
+  // 13's media affordances add LOCAL-only activation listeners (click + keydown
+  // on the in-host overlay play/unmute controls) that drive the in-iframe
+  // element directly and NEVER call transport.send/safeSend -- they are not a
+  // remote-control expansion, so 'click' is no longer blanket-banned here. The
+  // input-capture event names that WOULD represent forwarding stay forbidden.
+  for (const eventName of ['type', 'scroll', 'pointermove', 'pointerdown', 'mousemove']) {
     assert.equal(
       new RegExp("addEventListener\\(\\s*['\\\"]" + eventName + "['\\\"]").test(rendererSource),
       false,
-      'renderer must not add a new ' + eventName + ' dispatch listener'
+      'renderer must not add a new ' + eventName + ' input-forwarding listener'
     );
   }
+  // WR-04 (PRIMARY, structural): the affordance click/keydown listeners live in
+  // overlays.js (wireActivation), and that module is wired to the renderer ONLY
+  // through a local onActivate callback -- it holds NO transport reference by
+  // design. Pin that invariant directly: overlays.js must contain no wire-send
+  // token whatsoever (`transport`, `safeSend`, or a `.send(` call). This is a
+  // far stronger guarantee than a textual-distance heuristic -- if any future
+  // edit threads the wire into the overlay module, a DOM listener there COULD
+  // forward input, and this assertion fails immediately. (index.js legitimately
+  // owns transport.send/safeSend -- it is the renderer that drives the wire --
+  // so the structural ban is scoped to the overlay module alone.)
+  for (const wireToken of ['transport', 'safeSend', '.send(']) {
+    assert.equal(
+      overlaysSource.includes(wireToken),
+      false,
+      'overlays.js must not reach the wire (found "' + wireToken + '"): affordance listeners are local-only'
+    );
+  }
+  // SECONDARY (kept as defense-in-depth): no addEventListener callback in the
+  // combined renderer source sits within a short lexical window of a wire send.
+  // The structural ban above is the authoritative check; this catches a
+  // hypothetical regression where a listener and a send land in the same module.
+  assert.equal(
+    /addEventListener\([^)]*\)[\s\S]{0,400}?(?:transport\.send|safeSend)\s*\(/.test(rendererSource),
+    false,
+    'no renderer DOM listener may forward input over the wire (affordances are local-only)'
+  );
 });

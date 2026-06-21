@@ -44,10 +44,12 @@ import {
   SNAPSHOT_BUDGET_BYTES,
   TRUNCATION_VIEWPORT_MULTIPLIER,
   SCROLL_THROTTLE_MS,
+  MEDIA_SYNC_THROTTLE_MS,
   OVERLAY_THROTTLE_MS,
   MUTATION_STALE_THRESHOLD_MS,
   WATCHDOG_TICK_MS,
   INLINE_STYLE_MAX_BYTES,
+  ASSET_DATA_URI_MAX_BYTES,
 } from '../protocol/constants.js';
 import { STREAM, CONTROL, DIFF_OP, createStreamSessionId } from '../protocol/messages.js';
 
@@ -184,6 +186,88 @@ function hasDangerousScheme(value) {
   return compact.indexOf('javascript:') === 0
     || compact.indexOf('vbscript:') === 0
     || compact.indexOf('data:text/html') === 0;
+}
+
+/**
+ * Count UTF-8 bytes of a string (module-scope twin of the createCapture-inner
+ * utf8ByteLength; both exist because classifyAssetRef is a pure module-level
+ * export and the inner degrade hooks reuse it). Surrogate pairs count as 4
+ * bytes; lone surrogates as 3.
+ * @param {string} text
+ * @returns {number}
+ */
+function assetUtf8ByteLength(text) {
+  var str = String(text == null ? '' : text);
+  var bytes = 0;
+  for (var i = 0; i < str.length; i++) {
+    var code = str.charCodeAt(i);
+    if (code < 0x80) {
+      bytes += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (code >= 0xD800 && code <= 0xDBFF && i + 1 < str.length) {
+      var next = str.charCodeAt(i + 1);
+      if (next >= 0xDC00 && next <= 0xDFFF) {
+        bytes += 4;
+        i++;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
+
+/**
+ * Classify an asset URL by FETCHABILITY (Phase 12 ASST-04). This is a control
+ * distinct from hasDangerousScheme (injection): a URL can be injection-safe yet
+ * non-shareable as a mirrored reference. Two non-shareable classes degrade to a
+ * dimensioned placeholder at capture so a dead/blob reference never reaches the
+ * wire and one giant inline image cannot blow the per-message cap:
+ *   - `blob:`/origin-local object URLs (always non-shareable -- they are
+ *     origin-local and dead at the cross-origin viewer);
+ *   - `data:` URIs whose UTF-8 byte length exceeds `capBytes`.
+ * Everything else (http/https, small inline `data:`, relative URLs that
+ * absolutify) is shareable and passes through untouched -- benign small `data:`
+ * icons stay byte-identical (Pitfall 5: no over-degrade).
+ * @param {string} url            the (resolved or raw) asset reference
+ * @param {number} capBytes       byte cap for inline `data:` (ASSET_DATA_URI_MAX_BYTES)
+ * @returns {{ok: true}|{ok: false, reason: 'blob'|'oversized-data'}}
+ */
+export function classifyAssetRef(url, capBytes) {
+  if (!url || typeof url !== 'string') return { ok: true };
+  // Match the whitespace-obfuscation discipline of hasDangerousScheme: a
+  // "blo\tb:" or " data:" form normalizes at parse time, so strip <= 0x20
+  // before scheme-matching.
+  var compact = stripLowChars(url).toLowerCase();
+  if (compact.indexOf('blob:') === 0) {
+    return { ok: false, reason: 'blob' };
+  }
+  if (compact.indexOf('data:') === 0) {
+    var cap = capBytes || 0;
+    if (assetUtf8ByteLength(url) > cap) {
+      return { ok: false, reason: 'oversized-data' };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * Pure predicate (Phase 12 ASST-03): true only when a resolved `currentSrc`
+ * is present AND differs from the resolved plain `src`, i.e. a responsive
+ * `srcset`/`<picture>` actually negotiated a non-default variant worth pinning.
+ * Empty `currentSrc` (jsdom returns "") never enriches; an equal value never
+ * enriches (plain `<img src>` stays byte-identical on the wire).
+ * @param {string} resolvedCurrentSrc  absolutified currentSrc
+ * @param {string} resolvedSrc         absolutified src
+ * @returns {boolean}
+ */
+export function currentSrcDiffers(resolvedCurrentSrc, resolvedSrc) {
+  if (!resolvedCurrentSrc || typeof resolvedCurrentSrc !== 'string') return false;
+  if (resolvedCurrentSrc === '') return false;
+  return resolvedCurrentSrc !== (resolvedSrc || '');
 }
 
 /**
@@ -424,6 +508,31 @@ function defaultMaskText(text) {
  * @property {(text: string, element: Element) => string} [maskInputFn]
  *   Optional (SEC-03). Custom input-value mask (rrweb signature). Same
  *   fail-closed containment as maskTextFn.
+ * @property {string} [maskMediaSelector]
+ *   Optional (MSEC-03). CSS selector: matching <video>/<audio>/asset elements
+ *   omit their URL from the wire and degrade to the dimension-only block
+ *   placeholder (the blockSelector placeholder path), AND emit NO STREAM.MEDIA
+ *   state (the media-tracker skip predicates also gate on this selector). The
+ *   privacy control for "mirror nothing about this media -- not its URL, not
+ *   its playback timeline." Invalid selectors THROW Error('invalid-mask-
+ *   selector') at factory time, exactly like blockSelector/maskTextSelector.
+ * @property {boolean} [maskAssetUrls]
+ *   Optional (MSEC-03), default false. When true, strip a documented token/PII
+ *   query-param denylist (AWS SigV4/SigV2, GCP signed-URL, Azure SAS, and a
+ *   generic token/secret/auth set -- case-insensitive, exact-name OR denied
+ *   prefix) from asset/media URLs before the wire. Functional params (w, h, q,
+ *   format, v, id, t, ...) survive. A URL with no denylisted param is emitted
+ *   BYTE-IDENTICAL (the original string, never URL.toString() normalization),
+ *   so off-by-default keeps the wire byte-identical (the differential oracle is
+ *   unaffected). See TOKEN_PARAM_DENYLIST + docs/SECURITY.md for the exact list.
+ * @property {(url: string, ctx: {attr: string, tag: string, nid: string, kind: ('image'|'media')}) => (string|null)} [maskAssetUrlFn]
+ *   Optional (MSEC-03). Custom asset/media URL redactor; takes precedence over
+ *   maskAssetUrls. A returned string replaces the URL on the wire; null BLOCKS
+ *   the URL (the attribute is removed -> the viewer never fetches it); a THROW
+ *   FAILS CLOSED -> block (logged, treated as null -- never raised, never the
+ *   raw URL). Stricter than maskTextFn: a thrown text mask falls back to the
+ *   asterisk default, but a thrown URL redactor blocks (a half-redacted URL
+ *   that the viewer then fetches is worse than no URL).
  */
 
 /**
@@ -488,6 +597,16 @@ export function createCapture(config) {
   var maskInputFn = (typeof cfg.maskInputFn === 'function') ? cfg.maskInputFn : null;
   var blockSelector = compileMaskSelector(cfg.blockSelector);
   var maskTextSelector = compileMaskSelector(cfg.maskTextSelector);
+  // MSEC-03 asset/media URL masking (plan 15-01). Same off-by-default + one-
+  // allowed-throw-site discipline as the SEC-03 family above: maskMediaSelector
+  // is compiled (validated) here so an invalid selector fails closed and LOUD;
+  // maskAssetUrls/maskAssetUrlFn default OFF so the wire stays byte-identical
+  // (the differential oracle is unaffected). maskAssetUrlFn fails closed at
+  // RUNTIME to BLOCK (see maskAssetUrlForWire), the safeMaskText precedent
+  // adapted for URLs (a half-redacted URL the viewer fetches is worse than none).
+  var maskMediaSelector = compileMaskSelector(cfg.maskMediaSelector);
+  var maskAssetUrls = cfg.maskAssetUrls === true;
+  var maskAssetUrlFn = (typeof cfg.maskAssetUrlFn === 'function') ? cfg.maskAssetUrlFn : null;
 
   /**
    * Ancestor-inclusive form of the skipElement seam (reference parity:
@@ -605,6 +724,14 @@ export function createCapture(config) {
   var valueCaptureActive = false;
   var valueListenerRoots = new WeakSet();
   var valueListenerRecords = [];
+  // Media tracker bookkeeping (STREAM.MEDIA). Mirrors the value-tracker's
+  // root-set/records pair (above): media events do NOT bubble, so listeners
+  // are PER-ELEMENT and must be explicitly torn down. mediaTracked maps a live
+  // <video>/<audio> to its bound listener handlers + per-element lastMediaSend
+  // throttle stamp; mediaTrackedRecords is the iteration order for teardown.
+  var mediaTrackingActive = false;
+  var mediaTracked = new Map();
+  var mediaTrackedRecords = [];
   var nativeAttachShadow = null;
   var attachShadowProto = null;
   var pendingStyleSourceChanges = new Map();
@@ -626,7 +753,8 @@ export function createCapture(config) {
     blockedSubtrees: 0,   // object/embed subtrees dropped + srcdoc attrs dropped
     cssScrubs: 0,         // CSS values rewritten by scrubCssText
     maskedTextNodes: 0,   // (plan 03-03) maskTextSelector-matched text masked
-    maskedInputs: 0       // (plan 03-03) masked input values
+    maskedInputs: 0,      // (plan 03-03) masked input values
+    maskedAssetUrls: 0    // (plan 15-01) asset/media URLs stripped/redacted/blocked
   };
 
   function beginStreamSession() {
@@ -645,6 +773,7 @@ export function createCapture(config) {
     sanitizeCounters.cssScrubs = 0;
     sanitizeCounters.maskedTextNodes = 0;
     sanitizeCounters.maskedInputs = 0;
+    sanitizeCounters.maskedAssetUrls = 0;
     pendingStyleSourceChanges.clear();
     styleSourceRegistry.clear();
     styleScopeRoots.clear();
@@ -1442,6 +1571,7 @@ export function createCapture(config) {
     var cloneDescendants = bodyClone.querySelectorAll('*');
     var toRemove = [];
     var blockedPairs = [];
+    var assetUnavailablePairs = [];
 
     for (var i = 0; i < liveDescendants.length; i++) {
       var live = liveDescendants[i];
@@ -1484,6 +1614,21 @@ export function createCapture(config) {
       }
       var srcsetVal = clone.getAttribute('srcset');
       if (srcsetVal) clone.setAttribute('srcset', absolutifySrcset(srcsetVal, frameDoc));
+
+      // ASST-04 degrade + ASST-03 currentSrc pin (same treatment as the main
+      // snapshot pair walk), clone-only -- the live frame node is never touched.
+      var frameDegradeReason = assetDegradeReason(clone);
+      if (frameDegradeReason) {
+        assetUnavailablePairs.push({ orig: live, clone: clone, reason: frameDegradeReason });
+      } else if (tag === 'img') {
+        var frameResolvedCurrent = absolutifyUrl(live.currentSrc || '', frameDoc);
+        var frameResolvedSrc = clone.getAttribute('src') || '';
+        if (currentSrcDiffers(frameResolvedCurrent, frameResolvedSrc)
+            && !hasDangerousScheme(frameResolvedCurrent)) {
+          clone.setAttribute('data-ps-currentsrc', frameResolvedCurrent);
+        }
+      }
+
       if (styleMode !== 'cssom') captureComputedStyles(live, clone);
       sanitizeForWire('element', { orig: live, clone: clone });
     }
@@ -1496,6 +1641,15 @@ export function createCapture(config) {
         blockedPairs[b].orig,
         blockedPairs[b].clone,
         readBlockRect(blockedPairs[b].orig),
+        cloneToNid
+      );
+    }
+    for (var aub = 0; aub < assetUnavailablePairs.length; aub++) {
+      replaceWithAssetUnavailablePlaceholder(
+        assetUnavailablePairs[aub].orig,
+        assetUnavailablePairs[aub].clone,
+        readBlockRect(assetUnavailablePairs[aub].orig),
+        assetUnavailablePairs[aub].reason,
         cloneToNid
       );
     }
@@ -2130,6 +2284,49 @@ export function createCapture(config) {
   }
 
   /**
+   * True when the element itself matches maskMediaSelector (MSEC-03). The
+   * blockMatches twin keyed off maskMediaSelector: used by the snapshot/subtree
+   * placeholder path so a masked media/asset element degrades to the
+   * dimension-only block placeholder. Runtime selector errors are contained
+   * (logged, treated as not-matched) so capture never wedges after factory-time
+   * validation. Returns false immediately when maskMediaSelector is null, so the
+   * no-config path is wire-identical (no closest() walk).
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function maskMediaMatches(el) {
+    if (!maskMediaSelector) return false;
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    try {
+      return !!(el.matches && el.matches(maskMediaSelector));
+    } catch (err) {
+      logger.error('[DOM Stream] maskMediaSelector match failed', err);
+      return false;
+    }
+  }
+
+  /**
+   * Ancestor-inclusive maskMediaSelector predicate (MSEC-03), the
+   * blockedWithAncestors twin. ORed into the media-tracker skip guards
+   * (collectTrackedMediaElements + attachMediaListeners) so a masked
+   * <video>/<audio> -- or media inside a masked subtree -- emits NO STREAM.MEDIA
+   * baseline entry and NO STREAM.MEDIA events. Returns false immediately when
+   * maskMediaSelector is null (no-config path wire-identical, no walk).
+   * @param {Element} el
+   * @returns {boolean}
+   */
+  function maskMediaWithAncestors(el) {
+    if (!maskMediaSelector) return false;
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return false;
+    try {
+      return !!(el.closest && el.closest(maskMediaSelector));
+    } catch (err) {
+      logger.error('[DOM Stream] maskMediaSelector match failed', err);
+      return false;
+    }
+  }
+
+  /**
    * Elements intentionally absent from the wire must also be absent from the
    * live tracking graph. Otherwise descendants can receive nids before the
    * clone subtree is removed, then later leak mutations for content the
@@ -2367,6 +2564,98 @@ export function createCapture(config) {
     return placeholder;
   }
 
+  /**
+   * Build the placeholder for a non-shareable asset (ASST-04). Mirrors
+   * createBlockPlaceholder (dimension-only <div>, identity in the nodeIds
+   * sidecar) plus a machine-readable reason attribute so the renderer/viewer
+   * can show a neutral, dimensioned gap instead of a broken/dead reference.
+   * @param {Document} doc
+   * @param {{width: number, height: number}} rect
+   * @param {'blob'|'oversized-data'} reason
+   * @returns {Element}
+   */
+  function createAssetUnavailablePlaceholder(doc, rect, reason) {
+    var placeholder = doc.createElement('div');
+    placeholder.setAttribute('rr_width', String(rect.width || 0) + 'px');
+    placeholder.setAttribute('rr_height', String(rect.height || 0) + 'px');
+    placeholder.setAttribute('data-ps-asset-unavailable', reason);
+    return placeholder;
+  }
+
+  /**
+   * Replace a detached clone element with its asset-unavailable placeholder,
+   * transferring the nid in cloneToNid exactly like replaceWithBlockPlaceholder.
+   * The LIVE element is never touched (clone-only; Phase 7 no-mutation
+   * invariant -- Pitfall 4).
+   * @param {Element} liveEl
+   * @param {Element} cloneEl
+   * @param {{width: number, height: number}} rect
+   * @param {'blob'|'oversized-data'} reason
+   * @param {Map<Element, string>} [cloneToNid]
+   * @returns {Element|null}
+   */
+  function replaceWithAssetUnavailablePlaceholder(liveEl, cloneEl, rect, reason, cloneToNid) {
+    if (!cloneEl || !cloneEl.parentNode) return null;
+    var nid = cloneToNid && cloneToNid.get(cloneEl);
+    if (!nid) nid = getTrackedNodeId(liveEl) || '';
+    var placeholder = createAssetUnavailablePlaceholder(cloneEl.ownerDocument, rect, reason);
+    cloneEl.parentNode.replaceChild(placeholder, cloneEl);
+    if (cloneToNid) {
+      cloneToNid.delete(cloneEl);
+      if (nid) cloneToNid.set(placeholder, nid);
+    }
+    sanitizeCounters.blockedSubtrees++;
+    return placeholder;
+  }
+
+  /**
+   * Decide whether a clone's URL-bearing attributes make it a non-shareable
+   * asset that must degrade to a placeholder (ASST-04). Inspects the wire
+   * clone's already-absolutified `src`/`poster`/`srcset` and returns the
+   * degrade reason, or '' when the asset is shareable. Pure read of the clone;
+   * never mutates anything.
+   * @param {Element} cloneEl  the detached wire clone (post-absolutify)
+   * @returns {'blob'|'oversized-data'|''}
+   */
+  function assetDegradeReason(cloneEl) {
+    if (!cloneEl || !cloneEl.getAttribute) return '';
+    // Scalar src/poster: classify the value directly.
+    var scalarAttrs = ['src', 'poster'];
+    for (var s = 0; s < scalarAttrs.length; s++) {
+      var v = cloneEl.getAttribute(scalarAttrs[s]);
+      if (v) {
+        var c = classifyAssetRef(v, ASSET_DATA_URI_MAX_BYTES);
+        if (!c.ok) return c.reason;
+      }
+    }
+    // srcset: classify each candidate; a single non-shareable candidate
+    // degrades the element (the whole responsive set is unusable as a
+    // reference when one variant is blob:/oversized-data).
+    var srcset = cloneEl.getAttribute('srcset');
+    if (srcset) {
+      var reason = assetDegradeReasonForSrcset(srcset);
+      if (reason) return reason;
+    }
+    return '';
+  }
+
+  /**
+   * Classify a raw srcset string by fetchability: returns the degrade reason of
+   * the first non-shareable candidate, or '' when every candidate is shareable.
+   * Used by the mutation attr branch (which has the raw value, not a clone).
+   * @param {string} srcset
+   * @returns {'blob'|'oversized-data'|''}
+   */
+  function assetDegradeReasonForSrcset(srcset) {
+    if (!srcset) return '';
+    var candidates = parseSrcsetCandidates(srcset);
+    for (var k = 0; k < candidates.length; k++) {
+      var rc = classifyAssetRef(candidates[k].url, ASSET_DATA_URI_MAX_BYTES);
+      if (!rc.ok) return rc.reason;
+    }
+    return '';
+  }
+
   function createTruncatedPlaceholder(doc) {
     var placeholder = doc.createElement('div');
     placeholder.setAttribute('data-phantomstream-truncated', 'true');
@@ -2559,6 +2848,13 @@ export function createCapture(config) {
       next.styleSources = next.styleSources.slice();
     }
 
+    // media[] (MEDIA-02) addresses nodes by nid; truncation can drop those nodes
+    // from the clone. Copy the array so the prune below never mutates the
+    // caller's baseline. Only present when the page had <video>/<audio>.
+    if (Array.isArray(next.media)) {
+      next.media = next.media.slice();
+    }
+
     while (wireByteLength(next) > SNAPSHOT_BUDGET_BYTES && next.inlineStyles.length) {
       next.inlineStyles.pop();
       markSnapshotPayloadTruncated(next);
@@ -2608,6 +2904,12 @@ export function createCapture(config) {
           next.nodeIds = buildNodeIdSidecar(clone, cloneToNid, false);
           next.shadowRoots = collectShadowRootPayloads(document.body, next.nodeIds, truncatedNodeIds);
           next.frames = collectFramePayloads(document.body, cloneToNid, truncatedNodeIds);
+          // WR-02: a dropped <video>/<audio> subtree leaves a media[] baseline
+          // entry that addresses a nid no longer in nodeIds. Re-derive media[]
+          // against the freshly rebuilt sidecar so the baseline can never
+          // reference a truncated node (and dead entries stop counting toward
+          // the cap).
+          pruneMediaToNodeIds(next);
           next.missingDescendants = (next.missingDescendants || 0) + 1;
           markSnapshotPayloadTruncated(next);
         }
@@ -2628,11 +2930,190 @@ export function createCapture(config) {
       next.bodyStyle = '';
       next.title = '';
       next.url = '';
+      // WR-02: the hard reset empties every nid-addressed field; media[] must go
+      // with them or an emptied snapshot would still ship a baseline that
+      // addresses nodes nodeIds (now []) no longer contains. pruneMediaToNodeIds
+      // filters against the now-empty sidecar, so media[] becomes [] (or stays
+      // absent when the page had no media).
+      pruneMediaToNodeIds(next);
       next.missingDescendants = (next.missingDescendants || 0) + 1;
       markSnapshotPayloadTruncated(next);
     }
 
     return next;
+  }
+
+  /**
+   * Prune a budget-fitted snapshot payload's media[] baseline to entries whose
+   * nid is still present in the payload's nodeIds sidecar (WR-02). Truncation
+   * (clone-subtree drop or the over-cap hard reset) re-derives nodeIds but the
+   * media[] array is independent, so without this an entry can address a node
+   * the snapshot no longer carries. No-op when media[] is absent (the common
+   * media-free page -- the field stays unset, preserving wire byte-identity).
+   * Compares String(nid) because ensureNodeId stamps string nids and nodeIds
+   * holds those same strings (renderer applyMediaBaseline also keys on String).
+   * @param {Object} payload The mutable budget-fitted payload (next).
+   */
+  function pruneMediaToNodeIds(payload) {
+    if (!payload || !Array.isArray(payload.media)) return;
+    var ids = Array.isArray(payload.nodeIds) ? payload.nodeIds : [];
+    var live = new Set();
+    for (var i = 0; i < ids.length; i++) live.add(String(ids[i]));
+    payload.media = payload.media.filter(function (m) {
+      return m && live.has(String(m.nid));
+    });
+  }
+
+  // =========================================================================
+  // 0.45 MSEC-03 asset/media URL masking (plan 15-01)
+  // =========================================================================
+
+  // Token/PII query-param denylist (documented in docs/SECURITY.md §4). When
+  // maskAssetUrls is on, these param NAMES are stripped from asset/media URLs
+  // before the wire -- credential/signature/expiry params only; functional
+  // params (w, h, q, format, v, id, t, ...) survive. Matching is CASE-
+  // INSENSITIVE and exact-name OR denied-prefix (TOKEN_PARAM_PREFIXES). The set
+  // is lowercased so isTokenParamName can do a single lowercased membership
+  // test. Provider param names are CITED from each signing scheme (AWS SigV4/
+  // SigV2, GCP signed-URL V4, Azure SAS); the generic set is a reasoned default.
+  var TOKEN_PARAM_DENYLIST = {
+    // AWS S3 / CloudFront presigned (SigV4) -- the x-amz- prefix subsumes these
+    // but they are kept explicit for documentation/audit clarity.
+    'x-amz-signature': 1, 'x-amz-credential': 1, 'x-amz-security-token': 1,
+    'x-amz-algorithm': 1, 'x-amz-date': 1, 'x-amz-expires': 1, 'x-amz-signedheaders': 1,
+    // AWS S3 / CloudFront presigned (SigV2 / canned policy)
+    'awsaccesskeyid': 1, 'key-pair-id': 1, 'policy': 1,
+    // Google Cloud Storage signed URL (V4) -- x-goog- prefix subsumes these.
+    'x-goog-signature': 1, 'x-goog-credential': 1, 'x-goog-algorithm': 1,
+    'x-goog-date': 1, 'x-goog-expires': 1, 'x-goog-signedheaders': 1, 'googleaccessid': 1,
+    // Azure Blob SAS
+    'sig': 1, 'se': 1, 'sp': 1, 'sv': 1, 'sr': 1, 'st': 1, 'skoid': 1, 'sktid': 1,
+    'skt': 1, 'ske': 1, 'sks': 1, 'skv': 1, 'spr': 1, 'sip': 1, 'ss': 1, 'srt': 1,
+    // Generic token/secret/auth/expiry
+    'token': 1, 'access_token': 1, 'auth': 1, 'authorization': 1, 'apikey': 1,
+    'api_key': 1, 'key': 1, 'signature': 1, 'sign': 1, 'hash': 1, 'hmac': 1,
+    'jwt': 1, 'password': 1, 'passwd': 1, 'pwd': 1, 'secret': 1, 'session': 1,
+    'sessionid': 1, 'sid': 1, 'expires': 1, 'expiry': 1
+  };
+  // Denied-name prefixes: any param whose lowercased name starts with one of
+  // these is a token param (the AWS/GCP signed-URL families add provider-
+  // specific x-amz-*/x-goog-* params beyond the explicit names above).
+  var TOKEN_PARAM_PREFIXES = ['x-amz-', 'x-goog-'];
+
+  /**
+   * True when a query-param name is a token/PII param to strip: lowercased
+   * exact-set membership OR starts-with a denied prefix. Case-insensitive.
+   * @param {string} name
+   * @returns {boolean}
+   */
+  function isTokenParamName(name) {
+    if (!name || typeof name !== 'string') return false;
+    var lower = name.toLowerCase();
+    if (TOKEN_PARAM_DENYLIST[lower] === 1) return true;
+    for (var i = 0; i < TOKEN_PARAM_PREFIXES.length; i++) {
+      if (lower.indexOf(TOKEN_PARAM_PREFIXES[i]) === 0) return true;
+    }
+    return false;
+  }
+
+  /**
+   * True when a URL fragment (the part after '#') carries a denied token param
+   * (review WR-04). OAuth implicit flow returns tokens in the fragment
+   * (#access_token=...); the fragment is never sent in the asset GET, but the
+   * URL STRING crosses the relay to a possibly-cross-origin viewer, so a token
+   * there is still a disclosure. We parse the fragment as a URLSearchParams and
+   * report whether any name is denylisted. Empty / token-free fragments report
+   * false so the no-strip byte-identity path is preserved (a plain `#section-2`
+   * anchor never triggers a rewrite).
+   * @param {string} hash - u.hash, including the leading '#' (or '')
+   * @returns {boolean}
+   */
+  function fragmentHasTokenParam(hash) {
+    if (!hash || hash.length < 2) return false;   // '' or bare '#' -> no token
+    var body = hash.charAt(0) === '#' ? hash.slice(1) : hash;
+    if (body.indexOf('=') === -1) return false;   // plain anchor, not key=value
+    var fragParams;
+    try { fragParams = new URLSearchParams(body); }
+    catch (e) { return false; }                   // unparseable -> not a token map
+    var found = false;
+    fragParams.forEach(function (_v, k) { if (isTokenParamName(k)) found = true; });
+    return found;
+  }
+
+  /**
+   * Strip the TOKEN_PARAM_DENYLIST params from a URL (the maskAssetUrls path).
+   * PURE: parses with new URL() in try/catch (a non-absolute/opaque URL --
+   * data:/blob:/relative -- throws and is returned UNCHANGED). Returns the
+   * original `url` string when nothing was stripped (Pitfall 1: new URL()
+   * .toString() normalizes host case / default port / trailing slash / percent-
+   * encoding, which would diverge the wire even with masking effectively off for
+   * this URL). Only emits u.toString() when a query param was deleted OR a
+   * token-bearing fragment was dropped.
+   *
+   * Fragment handling (review WR-04): a token in the fragment
+   * (#access_token=...) is not part of u.search, so the query strip never sees
+   * it, yet the full URL string -- fragment included -- crosses the relay to a
+   * possibly-cross-origin viewer. When the fragment carries a denylisted param
+   * name we drop the WHOLE fragment (it is never needed for an asset/media
+   * fetch); a benign anchor fragment (no '=', or no denied name) is left intact
+   * so byte-identity holds on the no-strip path.
+   * @param {string} url
+   * @returns {string}
+   */
+  function stripTokenParams(url) {
+    var u;
+    try { u = new URL(url); }
+    catch (e) { return url; }            // non-absolute / opaque -> leave as-is
+    var dropFragment = fragmentHasTokenParam(u.hash);
+    // No query AND no token fragment -> unchanged (byte-identity). A token-only
+    // fragment URL has no u.search, so the old `if (!u.search) return url` fast
+    // path would have leaked it; gate the early return on the fragment too.
+    if (!u.search && !dropFragment) return url;
+    var changed = dropFragment;
+    // Snapshot the keys first: URLSearchParams is live, deleting while iterating
+    // skips entries. URLSearchParams preserves order and repeated keys.
+    var keys = [];
+    u.searchParams.forEach(function (_v, k) { keys.push(k); });
+    for (var i = 0; i < keys.length; i++) {
+      if (isTokenParamName(keys[i])) { u.searchParams.delete(keys[i]); changed = true; }
+    }
+    if (dropFragment) u.hash = '';        // redact the token-bearing fragment
+    return changed ? u.toString() : url;  // original string identity when untouched
+  }
+
+  /**
+   * PURE asset/media URL masking helper (MSEC-03). Decides the wire value for a
+   * single URL attribute value: a custom redactor (maskAssetUrlFn) first, then
+   * the boolean token-param strip (maskAssetUrls), else the URL UNCHANGED
+   * (off-by-default -> byte-identical wire). NEVER reads the DOM or mutates a
+   * clone -- the caller owns the clone mutation / placeholder swap.
+   *
+   * Fail-closed direction (Pitfall 3): maskAssetUrlFn mirrors safeMaskText's
+   * try/catch but the catch returns null (BLOCK), not the asterisk default --
+   * a thrown URL redactor is an undecided-unsafe URL, which must NOT be fetched.
+   * @param {string} url
+   * @param {{attr: string, tag: string, nid: string, kind: ('image'|'media')}} [ctx]
+   * @returns {string|null} replacement URL, the unchanged URL, or null (block)
+   */
+  function maskAssetUrlForWire(url, ctx) {
+    if (!url || typeof url !== 'string') return url;
+    // 1. Custom redactor first -- full host control, FAIL CLOSED on throw.
+    if (maskAssetUrlFn) {
+      try {
+        var out = maskAssetUrlFn(url, ctx || {});
+        if (out === null) return null;     // explicit block -> placeholder/remove
+        return String(out);                // redacted replacement
+      } catch (err) {
+        logger.error('[DOM Stream] maskAssetUrlFn failed; URL blocked (fail-closed)', err);
+        return null;                       // THROW -> block (never raise, never pass raw)
+      }
+    }
+    // 2. Boolean token/PII strip.
+    if (maskAssetUrls) {
+      return stripTokenParams(url);
+    }
+    // 3. Default OFF -> unchanged (byte-identical wire).
+    return url;
   }
 
   // =========================================================================
@@ -2651,7 +3132,8 @@ export function createCapture(config) {
       blockedSubtrees: sanitizeCounters.blockedSubtrees,
       cssScrubs: sanitizeCounters.cssScrubs,
       maskedTextNodes: sanitizeCounters.maskedTextNodes,
-      maskedInputs: sanitizeCounters.maskedInputs
+      maskedInputs: sanitizeCounters.maskedInputs,
+      maskedAssetUrls: sanitizeCounters.maskedAssetUrls
     };
   }
 
@@ -2793,6 +3275,32 @@ export function createCapture(config) {
           sanitizeCounters.blockedUrlSchemes++;
         }
       }
+      // MSEC-03 asset/media URL masking (plan 15-01): route each SURVIVING
+      // URL-attr value through the dedicated 'asset-url'/'media-url' dispatch
+      // AFTER the scheme scrub (a hostile scheme is already gone, so it never
+      // reaches maskAssetUrlForWire). Gated on the masking config so the
+      // off-by-default path is wire-identical (no per-attr work, no string
+      // churn). A null result BLOCKS -> remove the attribute (the viewer never
+      // fetches it); a changed value replaces it. The live element is never
+      // touched (clone-only, Phase 7 invariant).
+      if (maskAssetUrls || maskAssetUrlFn) {
+        var elNid = getTrackedNodeId(payload.orig) || '';
+        for (var um = 0; um < URL_ATTRS.length; um++) {
+          var maskAttr = URL_ATTRS[um];
+          var maskVal = clone.getAttribute(maskAttr);
+          if (!maskVal) continue;
+          var maskKind = assetUrlKindForTag(tag);
+          var maskRes = sanitizeForWire(maskKind === 'media' ? 'media-url' : 'asset-url', {
+            value: maskVal,
+            ctx: { attr: maskAttr, tag: tag, nid: elNid, kind: maskKind }
+          });
+          if (maskRes.value === null) {
+            clone.removeAttribute(maskAttr);
+          } else if (maskRes.value !== maskVal) {
+            clone.setAttribute(maskAttr, maskRes.value);
+          }
+        }
+      }
       var formactionVal = clone.getAttribute('formaction');
       if (formactionVal && hasDangerousScheme(formactionVal)) {
         clone.removeAttribute('formaction');
@@ -2884,7 +3392,10 @@ export function createCapture(config) {
         if (!root.contains(desc)) continue;
         if (liveDesc && wireDroppedWithAncestors(liveDesc.parentElement)) continue;
         if (liveDesc && blockedWithAncestors(liveDesc.parentElement)) continue;
-        if (liveDesc && blockMatches(liveDesc)) {
+        if (liveDesc && maskMediaWithAncestors(liveDesc.parentElement)) continue;
+        // blockSelector OR maskMediaSelector (MSEC-03): degrade the matched
+        // element to the same dimension-only block placeholder.
+        if (liveDesc && (blockMatches(liveDesc) || maskMediaMatches(liveDesc))) {
           replaceWithBlockPlaceholder(liveDesc, desc, readBlockRect(liveDesc), payload.cloneToNid);
           continue;
         }
@@ -2934,6 +3445,25 @@ export function createCapture(config) {
           && payload.value && hasDangerousScheme(payload.value)) {
         sanitizeCounters.blockedUrlSchemes++;
         return { value: null };
+      }
+      // MSEC-03 asset/media URL masking (plan 15-01): the mutation 'attr' path's
+      // URL values flow through the SAME dedicated dispatch after the scheme
+      // scrub above. A null result becomes the inert ATTR-op shape ({ value:
+      // null } -> diff.js removeAttribute), matching the dangerous-scheme branch.
+      // Gated on config so off-by-default attr ops are byte-identical.
+      if ((maskAssetUrls || maskAssetUrlFn)
+          && URL_ATTRS.indexOf(attrName) !== -1 && payload.value) {
+        var attrTag = (payload.target && payload.target.tagName)
+          ? String(payload.target.tagName).toLowerCase() : '';
+        var attrMaskKind = assetUrlKindForTag(attrTag);
+        var attrMaskRes = sanitizeForWire(attrMaskKind === 'media' ? 'media-url' : 'asset-url', {
+          value: payload.value,
+          ctx: {
+            attr: attrName, tag: attrTag,
+            nid: getTrackedNodeId(payload.target) || '', kind: attrMaskKind
+          }
+        });
+        return { value: attrMaskRes.value };
       }
       if (attrName === 'value' && (shouldMaskInput(payload.target) || isOptionUnderMaskedSelect(payload.target))) {
         var maskedAttrValue = safeMaskInput(payload.value == null ? '' : payload.value, payload.target);
@@ -2989,7 +3519,38 @@ export function createCapture(config) {
       return { css: scrubbedCss };
     }
 
+    // MSEC-03 asset/media URL masking (plan 15-01). The single dedicated seam
+    // for redacting/stripping/blocking a URL attribute value -- a thin wrapper
+    // around the PURE maskAssetUrlForWire helper so URL masking lives in ONE
+    // testable place rather than overloading the 'attr' path. 'asset-url' and
+    // 'media-url' share one branch (the behavior is identical); the asset-vs-
+    // media distinction travels in payload.ctx.kind ('image'|'media'). The
+    // 'element' and 'attr' paths route their surviving URL-attr values through
+    // this branch AFTER the hasDangerousScheme scrub (a hostile scheme is gone
+    // before masking runs). Returns the same { value } discriminated shape as
+    // 'attr'; value === null signals block -> the caller removes the attribute /
+    // emits a placeholder.
+    if (kind === 'asset-url' || kind === 'media-url') {
+      var maskedUrl = maskAssetUrlForWire(payload.value, payload.ctx);
+      if (maskedUrl !== payload.value) {
+        sanitizeCounters.maskedAssetUrls++;
+      }
+      return { value: maskedUrl };
+    }
+
     return {};
+  }
+
+  /**
+   * Map a tag name to the maskAssetUrlFn ctx.kind ('media' for the media
+   * elements that carry a fetchable URL, 'image' for everything else -- <img>,
+   * SVG <image>, <link>, <a>, ...). Used to build the ctx for the 'asset-url'/
+   * 'media-url' dispatch so a host redactor can branch on asset-vs-media.
+   * @param {string} tag lowercased tag name
+   * @returns {('image'|'media')}
+   */
+  function assetUrlKindForTag(tag) {
+    return (tag === 'video' || tag === 'audio' || tag === 'source') ? 'media' : 'image';
   }
 
   // =========================================================================
@@ -3164,6 +3725,11 @@ export function createCapture(config) {
     // Elements to remove from clone (scripts, noscript, host-flagged elements)
     var toRemove = [];
     var blockedPairs = [];
+    // ASST-04: clones whose absolutified asset refs are non-shareable
+    // (blob:/oversized-data:). Collected during the walk, their live rects
+    // read together below (single-pass layout discipline), then swapped for a
+    // dimensioned placeholder after the walk -- exactly like blockedPairs.
+    var assetUnavailablePairs = [];
 
     for (var i = 0; i < pairs.length; i++) {
       var orig = pairs[i].orig;
@@ -3205,14 +3771,19 @@ export function createCapture(config) {
         continue;
       }
 
-      // blockSelector: descendants of a blocked root get no nid assignment
-      // (the root swap discards the whole cloned subtree). The blocked root
-      // itself is still tracked, then replaced after this walk by a
-      // dimension-preserving placeholder whose identity travels in nodeIds.
-      if (blockedWithAncestors(orig.parentElement)) {
+      // blockSelector / maskMediaSelector: descendants of a blocked OR masked
+      // root get no nid assignment (the root swap discards the whole cloned
+      // subtree). The root itself is still tracked, then replaced after this
+      // walk by a dimension-preserving placeholder whose identity travels in
+      // nodeIds. maskMediaSelector (MSEC-03) reuses the blockSelector placeholder
+      // path verbatim so a masked <video>/<audio> degrades to the same identity-
+      // only dimensioned <div> (A3: no distinct reason attr -- "masked" and
+      // "blocked" are visually identical and the masked element legitimately
+      // carries no identity-leaking attribute).
+      if (blockedWithAncestors(orig.parentElement) || maskMediaWithAncestors(orig.parentElement)) {
         continue;
       }
-      if (blockMatches(orig)) {
+      if (blockMatches(orig) || maskMediaMatches(orig)) {
         assignNodeId(orig, cl, cloneToNid);
         blockedPairs.push({ orig: orig, clone: cl });
         continue;
@@ -3269,6 +3840,29 @@ export function createCapture(config) {
         cl.setAttribute('srcset', absolutifySrcset(srcsetVal));
       }
 
+      // ASST-04: detect non-shareable asset refs (blob:/oversized-data:) on the
+      // already-absolutified clone. If the element degrades, record it for the
+      // post-walk placeholder swap and skip the currentSrc enrich (the clone is
+      // about to be replaced wholesale). The live element is never touched.
+      var degradeReason = assetDegradeReason(cl);
+      if (degradeReason) {
+        assetUnavailablePairs.push({ orig: orig, clone: cl, reason: degradeReason });
+      } else if (tag === 'img') {
+        // ASST-03: clone-only data-ps-currentsrc variant pin. Enrich ONLY when
+        // the live element's currentSrc is present AND differs from the
+        // resolved src (a responsive srcset/<picture> negotiated a non-default
+        // variant). currentSrc is set on the CLONE, never the live page
+        // (Pitfall 4: preserves the Phase 7 no-mutation invariant). jsdom
+        // returns currentSrc === "" so this never fires under unit/oracle tests
+        // unless the scenario injects a divergent currentSrc.
+        var resolvedCurrent = absolutifyUrl(orig.currentSrc || '');
+        var resolvedSrc = cl.getAttribute('src') || '';
+        if (currentSrcDiffers(resolvedCurrent, resolvedSrc)
+            && !hasDangerousScheme(resolvedCurrent)) {
+          cl.setAttribute('data-ps-currentsrc', resolvedCurrent);
+        }
+      }
+
       // Capture generated computed styles only in the default compatibility mode.
       if (styleMode !== 'cssom') captureComputedStyles(orig, cl);
 
@@ -3287,6 +3881,12 @@ export function createCapture(config) {
     for (var bp = 0; bp < blockedPairs.length; bp++) {
       blockedRects.push(readBlockRect(blockedPairs[bp].orig));
     }
+    // ASST-04: read non-shareable asset rects in the same single-pass region
+    // (dimensions from the ORIG live element, never the detached clone).
+    var assetUnavailableRects = [];
+    for (var ap = 0; ap < assetUnavailablePairs.length; ap++) {
+      assetUnavailableRects.push(readBlockRect(assetUnavailablePairs[ap].orig));
+    }
 
     // Remove marked elements
     for (var r = 0; r < toRemove.length; r++) {
@@ -3297,6 +3897,17 @@ export function createCapture(config) {
 
     for (var br = 0; br < blockedPairs.length; br++) {
       replaceWithBlockPlaceholder(blockedPairs[br].orig, blockedPairs[br].clone, blockedRects[br], cloneToNid);
+    }
+    // ASST-04: swap each non-shareable asset clone for its dimensioned
+    // placeholder, transferring the nid (clone-only; live page untouched).
+    for (var aur = 0; aur < assetUnavailablePairs.length; aur++) {
+      replaceWithAssetUnavailablePlaceholder(
+        assetUnavailablePairs[aur].orig,
+        assetUnavailablePairs[aur].clone,
+        assetUnavailableRects[aur],
+        assetUnavailablePairs[aur].reason,
+        cloneToNid
+      );
     }
 
     // Collect stylesheet URLs from document.head
@@ -3465,7 +4076,31 @@ export function createCapture(config) {
       snapshotPayload.styleSources = documentCssom.sources;
       snapshotPayload.styleStrategy = documentCssom.strategy;
     }
-    return fitSnapshotPayloadForBudget(snapshotPayload, clone, cloneToNid, truncatedNodeIds);
+    // MEDIA-02 / MEDIA-04: append a media[] playback-state baseline keyed by
+    // nid -- one entry per tracked <video>/<audio> in document order, read from
+    // the LIVE DOM. This mirrors the DIFF_OP.VALUE side-channel precedent
+    // (live property state travels keyed by nid, never baked into the clone),
+    // so payload.html stays byte-identical (differential-oracle invariant) and
+    // the live page is never mutated (Phase 7 capture-no-mutation invariant).
+    // The media[] key is added ONLY when at least one <video>/<audio> exists.
+    // A media-free page emits NO media key at all, so existing fixtures stay
+    // byte-identical to the FSB reference and the differential oracle needs no
+    // new ledger entry yet (RESEARCH A4 / Pitfall 7 -- the ledger entry + media
+    // fixture land with Plan 13-04, once a fixture instantiates media).
+    var trackedMedia = collectTrackedMediaElements();
+    if (trackedMedia.length > 0) {
+      snapshotPayload.media = trackedMedia.map(buildMediaBaselineEntry);
+    }
+    var fitted = fitSnapshotPayloadForBudget(snapshotPayload, clone, cloneToNid, truncatedNodeIds);
+    // WR-02: media[] is read from the LIVE DOM, so it carries an entry for a
+    // <video>/<audio> even when its clone subtree was dropped by ANY truncation
+    // pass -- the serializeDOM below-fold/over-cap pre-pass (above), the sidecar
+    // prune, the budget loop, or the over-cap hard reset. Reconcile media[]
+    // against the FINAL nodeIds here (the single point every pass funnels
+    // through) so the emitted baseline can never address a node nodeIds no
+    // longer contains. No-op for a media-free page (media stays absent).
+    pruneMediaToNodeIds(fitted);
+    return fitted;
   }
 
   // =========================================================================
@@ -3560,6 +4195,50 @@ export function createCapture(config) {
         appendStyleDeclaration(cloneDescendants[c], descStyleText);
       }
     }
+
+    // ASST-03/04 on the added-node path. CRITICAL (Pitfall 4): the live node
+    // was mutated above for URL absolutify (reference parity), but the
+    // currentSrc enrich and the asset-unavailable degrade land on the
+    // wireClone ONLY -- never the live node, so the framework attributes never
+    // leak to the observed page. Descendants first (parent-replacement is safe
+    // on the detached clone), then the root.
+    for (var ce = 0; ce < liveDescendants.length; ce++) {
+      var liveDesc2 = liveDescendants[ce];
+      var cloneDesc2 = cloneDescendants[ce];
+      if (!cloneDesc2) continue;
+      var descReason = assetDegradeReason(cloneDesc2);
+      if (descReason) {
+        replaceWithAssetUnavailablePlaceholder(
+          liveDesc2, cloneDesc2, readBlockRect(liveDesc2), descReason, cloneToNid
+        );
+      } else if (cloneDesc2.tagName && String(cloneDesc2.tagName).toLowerCase() === 'img') {
+        var descCurrent = absolutifyUrl(liveDesc2.currentSrc || '', liveDesc2.ownerDocument || baseDoc);
+        var descSrc = cloneDesc2.getAttribute('src') || '';
+        if (currentSrcDiffers(descCurrent, descSrc) && !hasDangerousScheme(descCurrent)) {
+          cloneDesc2.setAttribute('data-ps-currentsrc', descCurrent);
+        }
+      }
+    }
+    // Root: the detached wireClone has no parent, so a degrade swaps the
+    // reference held by `wireClone` (preserving rootNid in cloneToNid) rather
+    // than calling replaceWithAssetUnavailablePlaceholder.
+    var rootReason = assetDegradeReason(wireClone);
+    if (rootReason) {
+      var rootPlaceholder = createAssetUnavailablePlaceholder(
+        wireClone.ownerDocument || document, readBlockRect(el), rootReason
+      );
+      cloneToNid.delete(wireClone);
+      if (rootNid) cloneToNid.set(rootPlaceholder, rootNid);
+      sanitizeCounters.blockedSubtrees++;
+      wireClone = rootPlaceholder;
+    } else if (rootTag === 'img') {
+      var rootCurrent = absolutifyUrl(el.currentSrc || '', baseDoc);
+      var rootSrc = wireClone.getAttribute('src') || '';
+      if (currentSrcDiffers(rootCurrent, rootSrc) && !hasDangerousScheme(rootCurrent)) {
+        wireClone.setAttribute('data-ps-currentsrc', rootCurrent);
+      }
+    }
+
     prepareIframeWireShellsForClone(el, wireClone);
     var subtreeResult = sanitizeForWire('subtree', {
       root: wireClone,
@@ -3767,6 +4446,10 @@ export function createCapture(config) {
               frames: addedPayload.frames || []
             }, frameRecord);
             diffs.push(boundMutationDiffForBudget(addDiff));
+            // STREAM.MEDIA: a mutation-added <video>/<audio> (or a subtree
+            // containing one) must receive listeners -- media events do not
+            // bubble, so they are not caught by any delegated handler.
+            attachMediaListenersUnder(added);
           } else if (added.nodeType === Node.TEXT_NODE || added.nodeType === Node.CDATA_SECTION_NODE) {
             sawBareTextNode = true;
           }
@@ -3776,6 +4459,10 @@ export function createCapture(config) {
         for (var r = 0; r < m.removedNodes.length; r++) {
           var removed = m.removedNodes[r];
           if (removed.nodeType === Node.ELEMENT_NODE) {
+            // STREAM.MEDIA: release listeners for a removed <video>/<audio>
+            // subtree before any wire-drop short-circuit, so a tracked media
+            // element can never emit after it leaves the live DOM.
+            detachMediaListenersUnder(removed);
             if (wireDroppedWithAncestors(removed)) continue;
             var nid = getTrackedNodeId(removed);
             if (!nid) continue; // Not tracked
@@ -3847,6 +4534,28 @@ export function createCapture(config) {
         }
         if (m.attributeName === 'srcset' && attrVal) {
           attrVal = absolutifySrcset(attrVal, m.target.ownerDocument);
+        }
+
+        // ASST-04: a mutation that sets src/poster/srcset to a non-shareable
+        // ref (blob:/oversized-data:) must NOT ship the dead reference. Drop
+        // the offending URL from the wire (empty value) and emit a sibling
+        // data-ps-asset-unavailable op so the viewer shows the dimensioned
+        // placeholder instead of fetching a dead ref. The live element is
+        // unchanged (we only shape the wire diff).
+        var attrIsAssetUrl = (attrNameLower === 'src' || attrNameLower === 'poster' || attrNameLower === 'srcset');
+        if (attrIsAssetUrl && attrVal) {
+          var mutClass = (attrNameLower === 'srcset')
+            ? assetDegradeReasonForSrcset(attrVal)
+            : (function () { var c = classifyAssetRef(attrVal, ASSET_DATA_URI_MAX_BYTES); return c.ok ? '' : c.reason; })();
+          if (mutClass) {
+            diffs.push(scopeFrameDiff({
+              op: 'attr',
+              nid: targetNid,
+              attr: 'data-ps-asset-unavailable',
+              val: mutClass
+            }, frameRecord));
+            attrVal = '';
+          }
         }
 
         // SEC-01: route through the chokepoint AFTER absolutification so
@@ -4244,6 +4953,231 @@ export function createCapture(config) {
   }
 
   // =========================================================================
+  // 3.5 Media Tracker (STREAM.MEDIA -- scroll-twin side channel)
+  // =========================================================================
+
+  /**
+   * Every <video>/<audio> currently in the live document, in document order.
+   * Read from the LIVE DOM only (never the clone) so the media[] baseline and
+   * tracker walk the same real elements capture sees.
+   * @returns {HTMLMediaElement[]}
+   */
+  function collectTrackedMediaElements() {
+    var out = [];
+    if (!document || typeof document.querySelectorAll !== 'function') return out;
+    var nodes = document.querySelectorAll('video, audio');
+    for (var i = 0; i < nodes.length; i++) {
+      // WR-01: a <video>/<audio> the host excludes (skipElement / a blocked or
+      // wire-dropped ancestor -- e.g. the host's own viewer UI in a same-page
+      // loopback mirror) must NOT be media-tracked. The value tracker already
+      // gates on these predicates (buildValueDiff); the media baseline now
+      // matches so a deliberately-excluded element emits no media[] entry.
+      if (skipElementWithAncestors(nodes[i])
+        || blockedWithAncestors(nodes[i])
+        || wireDroppedWithAncestors(nodes[i])
+        || maskMediaWithAncestors(nodes[i])) {
+        continue;
+      }
+      out.push(nodes[i]);
+    }
+    return out;
+  }
+
+  /**
+   * Build one MediaBaselineEntry (MEDIA-02/MEDIA-04) from a LIVE media element.
+   * Reads playback-state properties only; assigns/reuses the element nid via
+   * ensureNodeId so the renderer can address it. NEVER writes an attribute on
+   * the element (Phase 7 no-mutation invariant) and NEVER touches the clone.
+   *
+   * duration|live are mutually exclusive: a finite duration is sent as-is; a
+   * non-finite duration (live stream / unloaded element) sets live:true and
+   * omits duration, closing the JSON Infinity->null trap (13-RESEARCH Pitfall
+   * 2) so the reconciler branches on live before any duration arithmetic.
+   * @param {HTMLMediaElement} el
+   * @returns {import('../protocol/messages.js').MediaBaselineEntry}
+   */
+  function buildMediaBaselineEntry(el) {
+    var entry = {
+      nid: ensureNodeId(el),
+      currentTime: el.currentTime,
+      paused: !!el.paused,
+      muted: !!el.muted,
+      volume: el.volume,
+      playbackRate: el.playbackRate,
+      loop: !!el.loop,
+      ended: !!el.ended
+    };
+    if (isFinite(el.duration)) entry.duration = el.duration;
+    else entry.live = true;
+    return entry;
+  }
+
+  /**
+   * Build a MediaSyncPayload from a LIVE media element and emit it on the wire
+   * (MWIRE-01). The payload is the baseline entry enriched with the triggering
+   * event name, a capture-side sentAt latency stamp, and the stream identity
+   * stamps so the renderer's isCurrentStream guard rejects stale cross-
+   * generation frames. nid reuses the tracked id (or assigns one). No media
+   * BYTES are ever sent -- only nid-addressed playback state (T-13-05).
+   * @param {HTMLMediaElement} el
+   * @param {string} eventName
+   */
+  function sendMediaState(el, eventName) {
+    var payload = {
+      nid: getTrackedNodeId(el) || ensureNodeId(el),
+      event: eventName,
+      currentTime: el.currentTime,
+      paused: !!el.paused,
+      muted: !!el.muted,
+      volume: el.volume,
+      playbackRate: el.playbackRate,
+      loop: !!el.loop,
+      ended: !!el.ended,
+      sentAt: Date.now(),
+      streamSessionId: streamSessionId || '',
+      snapshotId: currentSnapshotId || 0
+    };
+    if (isFinite(el.duration)) payload.duration = el.duration;
+    else payload.live = true;
+    safeSend(STREAM.MEDIA, payload);
+  }
+
+  /**
+   * Attach per-element media listeners to one <video>/<audio>. Discrete
+   * transition events flush a STREAM.MEDIA immediately; timeupdate is the
+   * throttled drift heartbeat -- it returns early while paused (heartbeat is
+   * playing-only) then applies a per-element MEDIA_SYNC_THROTTLE_MS gate
+   * (mirrors the scroll tracker's now-lastSend timestamp check), bounding the
+   * 1 MiB-capped relay against timeupdate flooding (T-13-06). Idempotent:
+   * re-attaching a tracked element is a no-op (added-node + startMediaTracker
+   * can both reach the same element).
+   * @param {Element} el
+   */
+  function attachMediaListeners(el) {
+    if (!mediaTrackingActive || !el || el.nodeType !== Node.ELEMENT_NODE) return;
+    if (typeof el.addEventListener !== 'function') return;
+    var tag = el.tagName ? String(el.tagName).toLowerCase() : '';
+    if (tag !== 'video' && tag !== 'audio') return;
+    // WR-01 / MSEC-03: never track a host-excluded OR masked media element. This
+    // is the chokepoint every attach path funnels through (startMediaTracker, the
+    // added-node path, attachMediaListenersUnder), so gating here guarantees a
+    // skipped/blocked/wire-dropped/masked <video>/<audio> emits no STREAM.MEDIA
+    // frames -- matching the value tracker's exclusion (buildValueDiff) so the
+    // wire never leaks the play/pause/seek timeline of deliberately-excluded
+    // host-UI media or maskMediaSelector-redacted private media.
+    if (skipElementWithAncestors(el) || blockedWithAncestors(el)
+      || wireDroppedWithAncestors(el) || maskMediaWithAncestors(el)) return;
+    if (mediaTracked.has(el)) return;
+
+    var record = { lastMediaSend: 0, handlers: {} };
+
+    // Discrete transition events: emit immediately (coalesced by the browser's
+    // own one-event-per-transition delivery).
+    var discrete = ['play', 'pause', 'seeked', 'ratechange', 'ended', 'volumechange', 'loadedmetadata'];
+    for (var i = 0; i < discrete.length; i++) {
+      (function (name) {
+        var handler = function () {
+          if (!mediaTrackingActive) return;
+          sendMediaState(el, name);
+        };
+        record.handlers[name] = handler;
+        el.addEventListener(name, handler);
+      })(discrete[i]);
+    }
+
+    // timeupdate: throttled drift heartbeat, only while playing.
+    var timeupdateHandler = function () {
+      if (!mediaTrackingActive) return;
+      if (el.paused) return; // heartbeat is playing-only
+      var now = Date.now();
+      if (now - record.lastMediaSend < MEDIA_SYNC_THROTTLE_MS) return;
+      record.lastMediaSend = now;
+      sendMediaState(el, 'timeupdate');
+    };
+    record.handlers.timeupdate = timeupdateHandler;
+    el.addEventListener('timeupdate', timeupdateHandler);
+
+    mediaTracked.set(el, record);
+    mediaTrackedRecords.push(el);
+  }
+
+  /**
+   * Detach the media listeners from one element and forget it. Safe on an
+   * untracked element (no-op). Called on element removal and on teardown.
+   * @param {Element} el
+   */
+  function detachMediaListeners(el) {
+    var record = mediaTracked.get(el);
+    if (!record) return;
+    if (typeof el.removeEventListener === 'function') {
+      for (var name in record.handlers) {
+        if (Object.prototype.hasOwnProperty.call(record.handlers, name)) {
+          el.removeEventListener(name, record.handlers[name]);
+        }
+      }
+    }
+    mediaTracked.delete(el);
+    var idx = mediaTrackedRecords.indexOf(el);
+    if (idx !== -1) mediaTrackedRecords.splice(idx, 1);
+  }
+
+  /**
+   * Attach media listeners to a root (if it is a media element) and to every
+   * <video>/<audio> descendant. Used by the added-node mutation path so a
+   * mutation-inserted media element (or a subtree containing one) is tracked.
+   * @param {Element} root
+   */
+  function attachMediaListenersUnder(root) {
+    if (!mediaTrackingActive || !root || root.nodeType !== Node.ELEMENT_NODE) return;
+    var tag = root.tagName ? String(root.tagName).toLowerCase() : '';
+    if (tag === 'video' || tag === 'audio') attachMediaListeners(root);
+    if (typeof root.querySelectorAll !== 'function') return;
+    var nested = root.querySelectorAll('video, audio');
+    for (var i = 0; i < nested.length; i++) attachMediaListeners(nested[i]);
+  }
+
+  /**
+   * Detach media listeners from a removed root and any tracked <video>/<audio>
+   * descendant. Used by the removed-node mutation path so a detached subtree's
+   * media listeners are released (no leak, no post-removal emissions).
+   * @param {Element} root
+   */
+  function detachMediaListenersUnder(root) {
+    if (!root || root.nodeType !== Node.ELEMENT_NODE) return;
+    detachMediaListeners(root);
+    if (typeof root.querySelectorAll !== 'function') return;
+    var nested = root.querySelectorAll('video, audio');
+    for (var i = 0; i < nested.length; i++) detachMediaListeners(nested[i]);
+  }
+
+  /**
+   * Start the media tracker: walk every current <video>/<audio> and attach
+   * per-element listeners (scroll-twin lifecycle; armed in start()/resume()).
+   * Idempotent -- re-arming first tears down any prior listeners so a restart
+   * cannot double-bind.
+   */
+  function startMediaTracker() {
+    stopMediaTracker();
+    mediaTrackingActive = true;
+    var els = collectTrackedMediaElements();
+    for (var i = 0; i < els.length; i++) attachMediaListeners(els[i]);
+    logger.info('[DOM Stream] Media tracker started');
+  }
+
+  /**
+   * Stop the media tracker: detach every per-element listener and clear the
+   * bookkeeping (torn down in start() re-arm, stop(), and pause()).
+   */
+  function stopMediaTracker() {
+    mediaTrackingActive = false;
+    var els = mediaTrackedRecords.slice();
+    for (var i = 0; i < els.length; i++) detachMediaListeners(els[i]);
+    mediaTracked = new Map();
+    mediaTrackedRecords = [];
+    logger.info('[DOM Stream] Media tracker stopped');
+  }
+
+  // =========================================================================
   // 4. Overlay Event Broadcaster
   // =========================================================================
 
@@ -4320,6 +5254,7 @@ export function createCapture(config) {
     if (streaming) {
       stopMutationStream();
       stopScrollTracker();
+      stopMediaTracker();
     }
     beginStreamSession();
     clearNodeMirror();
@@ -4329,6 +5264,7 @@ export function createCapture(config) {
     startMutationStream();
     startValueCapture();
     startScrollTracker();
+    startMediaTracker();
     streaming = true;
     broadcastOverlayState(true);
   }
@@ -4341,6 +5277,7 @@ export function createCapture(config) {
     logger.info('[DOM Stream] Stop requested');
     stopMutationStream();
     stopScrollTracker();
+    stopMediaTracker();
     streaming = false;
     clearNodeMirror();
     safeFlush();
@@ -4354,6 +5291,7 @@ export function createCapture(config) {
     logger.info('[DOM Stream] Pause requested');
     stopMutationStream();
     stopScrollTracker();
+    stopMediaTracker();
     // Keep streaming = true (paused state, not stopped)
   }
 
@@ -4371,6 +5309,7 @@ export function createCapture(config) {
     startMutationStream();
     startValueCapture();
     startScrollTracker();
+    startMediaTracker();
     streaming = true;
   }
 
@@ -4412,6 +5351,71 @@ export function createCapture(config) {
     resume: resume,
     handleControl: handleControl,
     getNodeId: getNodeId,
-    getObservedFrameDocuments: getObservedFrameDocuments
+    getObservedFrameDocuments: getObservedFrameDocuments,
+    // One-shot snapshot serializer over the ambient document. Exposed for the
+    // serializeSnapshot() top-level helper (capture-asset-degrade unit tests)
+    // and any host that wants a single payload without arming observers.
+    serializeSnapshot: serializeDOM
   };
+}
+
+// Ambient globals the snapshot serializer dereferences (audited from the
+// reference source, mirrors the differential harness AMBIENT_GLOBALS). The
+// serializeSnapshot() helper swaps these from the passed document's window for
+// the duration of one serialization, then restores them unconditionally.
+var SNAPSHOT_AMBIENT_GLOBALS = [
+  'window', 'document', 'Node', 'NodeFilter', 'MutationObserver',
+  'requestAnimationFrame', 'cancelAnimationFrame', 'CustomEvent',
+  'ShadowRoot', 'location', 'getComputedStyle', 'URL'
+];
+
+/**
+ * Serialize ONE snapshot of the given document and return the snapshot payload
+ * (`{ html, nodeIds, ... }`). A convenience top-level entry that swaps the
+ * ambient globals from `doc.defaultView` for the lifetime of one serialization
+ * (mirroring the differential harness's createExtractedSide), runs a fresh
+ * capture's serializer against it, and restores the globals unconditionally.
+ *
+ * This is the no-observer path used by the capture-asset-degrade unit tests to
+ * prove the clone-only currentSrc enrichment and the blob:/oversized-data:
+ * placeholder degrade WITHOUT mutating the live document.
+ *
+ * @param {Document} doc  the document to snapshot (must have a defaultView)
+ * @returns {{html: string, nodeIds: string[]}} the snapshot payload
+ */
+export function serializeSnapshot(doc) {
+  var win = doc && doc.defaultView;
+  if (!win) throw new Error('serializeSnapshot-requires-document-with-defaultView');
+
+  var saved = SNAPSHOT_AMBIENT_GLOBALS.map(function (name) {
+    return {
+      name: name,
+      had: Object.prototype.hasOwnProperty.call(globalThis, name),
+      value: globalThis[name]
+    };
+  });
+  function restore() {
+    for (var i = 0; i < saved.length; i++) {
+      if (saved[i].had) {
+        globalThis[saved[i].name] = saved[i].value;
+      } else {
+        delete globalThis[saved[i].name];
+      }
+    }
+  }
+
+  for (var g = 0; g < SNAPSHOT_AMBIENT_GLOBALS.length; g++) {
+    var n = SNAPSHOT_AMBIENT_GLOBALS[g];
+    globalThis[n] = n === 'window' ? win : win[n];
+  }
+
+  try {
+    var capture = createCapture({
+      transport: { send: function () {} },
+      logger: { info: function () {}, warn: function () {}, error: function () {} }
+    });
+    return capture.serializeSnapshot();
+  } finally {
+    restore();
+  }
 }

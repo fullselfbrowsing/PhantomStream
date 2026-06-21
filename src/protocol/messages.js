@@ -21,6 +21,10 @@ export const STREAM = {
   MUTATIONS: 'ext:dom-mutations',
   /** Scroll position. Payload: { scrollX, scrollY, streamSessionId, snapshotId } */
   SCROLL: 'ext:dom-scroll',
+  /** Media playback state. Payload: MediaSyncPayload */
+  MEDIA: 'ext:dom-media',
+  /** Adaptive-manifest discovery hint (opt-in, adapter-originated). Payload: MediaHintPayload */
+  MEDIA_HINT: 'ext:dom-media-hint',
   /** Automation overlay state. Payload: { glow, progress, streamSessionId, snapshotId } */
   OVERLAY: 'ext:dom-overlay',
   /** Native dialog mirroring. Payload: { dialog: DialogPayload } */
@@ -176,6 +180,82 @@ export const NID_ATTR = 'data-fsb-nid';
  */
 
 /**
+ * Captured live playback state of a single <video>/<audio> element, keyed by
+ * nid. Models the DIFF_OP.VALUE side-channel-property-state precedent: live
+ * media properties travel as side-channel data, never serialized into the HTML
+ * clone (preserves the Phase 7 no-mutation invariant + HTML byte-identity).
+ *
+ * Live/Infinity-duration encoding: `duration` is present ONLY when finite;
+ * non-finite (streaming) durations are encoded as `live: true` instead, never
+ * both. This sidesteps the JSON Infinity -> null trap (JSON.stringify(Infinity)
+ * === "null") so the reconciler can branch on `live` before any duration math
+ * and never compute NaN.
+ *
+ * @typedef {Object} MediaBaselineEntry
+ * @property {string} nid                 Element nid the playback state addresses
+ * @property {number} currentTime         Playback position in seconds
+ * @property {boolean} paused             Whether the element is paused
+ * @property {boolean} muted              Whether audio output is muted
+ * @property {number} volume              Audio volume in [0, 1]
+ * @property {number} playbackRate        Effective playback rate (1 = normal)
+ * @property {boolean} loop               Whether the element loops
+ * @property {boolean} ended              Whether playback reached the end
+ * @property {number} [duration]          Media duration in seconds; present ONLY when finite
+ * @property {boolean} [live]             true when duration is non-finite (stream); mutually exclusive with duration
+ */
+
+/**
+ * One STREAM.MEDIA wire message: a MediaBaselineEntry enriched with the event
+ * that triggered emission, a capture-side monotonic timestamp for latency
+ * compensation, and the stream identity stamps every side channel carries.
+ *
+ * The reconciler predicts the expected position from `currentTime`,
+ * `playbackRate`, and `(now - sentAt)`; `streamSessionId`/`snapshotId` let the
+ * renderer reject stale cross-generation frames via isCurrentStream (Plan 03).
+ * One message is emitted per media element per tick (scroll-like granularity).
+ *
+ * @typedef {Object} MediaSyncPayload
+ * @property {string} nid                 Element nid the playback state addresses
+ * @property {'play'|'pause'|'seeked'|'ratechange'|'ended'|'volumechange'|'loadedmetadata'|'timeupdate'} event Triggering media event
+ * @property {number} currentTime         Playback position in seconds at capture
+ * @property {boolean} paused             Whether the element is paused
+ * @property {boolean} muted              Whether audio output is muted
+ * @property {number} volume              Audio volume in [0, 1]
+ * @property {number} playbackRate        Effective playback rate (1 = normal)
+ * @property {boolean} loop               Whether the element loops
+ * @property {boolean} ended              Whether playback reached the end
+ * @property {number} [duration]          Media duration in seconds; present ONLY when finite
+ * @property {boolean} [live]             true when duration is non-finite (stream); mutually exclusive with duration
+ * @property {number} sentAt              Capture-side monotonic ms stamp for latency compensation
+ * @property {string} streamSessionId     Identity: minted per stream session
+ * @property {number} snapshotId          Identity: minted per snapshot
+ */
+
+/**
+ * One adaptive-manifest discovery hint surfaced by an adapter's opt-in network
+ * observation (Playwright `page.on('response')` / extension `chrome.webRequest`).
+ * The hint originates in the ADAPTER, never the capture core, so it adds no
+ * capture-wire divergence (no differential-oracle entry); it rides the existing
+ * raw relay + 1 MiB cap with the envelope byte-unchanged, and old viewers ignore
+ * the unknown STREAM.MEDIA_HINT type via the renderer dispatch default.
+ *
+ * Addressing is nid-scoped when manifest->element correlation is confident, else
+ * page-scoped (nid omitted, scope 'page'); a page hint is matched to an
+ * MSE-opaque media element on play by the viewer. Identity-stamped like every
+ * side channel; the viewer re-gates `manifestUrl` through the same fail-closed
+ * origin policy before any use.
+ *
+ * @typedef {Object} MediaHintPayload
+ * @property {string} [nid]               Element nid when correlation is confident; omitted for page-level
+ * @property {'page'|'element'} scope     'element' (nid set) or 'page' (viewer matches on play)
+ * @property {string} manifestUrl         Absolute manifest URL (https; viewer re-gates before use)
+ * @property {'hls'|'dash'} kind          Derived from URL extension and/or content-type
+ * @property {string} [contentType]       Observed response content-type (diagnostic)
+ * @property {string} streamSessionId     Identity: minted per stream session
+ * @property {number} snapshotId          Identity: minted per snapshot
+ */
+
+/**
  * @typedef {Object} SubtreeRequestPayload
  * @property {string} requestId
  * @property {string} nid
@@ -266,4 +346,66 @@ export function isCurrentStream(msg, active) {
     return false;
   }
   return true;
+}
+
+// HLS content-type tokens (lowercased, charset-stripped before compare). DASH
+// is the single application/dash+xml token below. CDNs frequently serve
+// extensionless or signed manifest URLs, so the content-type is the more
+// robust of the two signals.
+const HLS_CONTENT_TYPES = {
+  'application/vnd.apple.mpegurl': true,
+  'application/x-mpegurl': true,
+  'audio/mpegurl': true,
+  'audio/x-mpegurl': true,
+};
+const DASH_CONTENT_TYPE = 'application/dash+xml';
+
+/**
+ * Extract a lowercased URL path, ignoring query/hash, defensively. A malformed
+ * url never throws: a `new URL()` failure falls back to a regex strip of the
+ * first `?`/`#` (mirrors the isHlsManifest defensiveness in 14-RESEARCH). A
+ * non-string url yields an empty path.
+ * @param {*} url
+ * @returns {string} lowercased path (or '' on failure)
+ */
+function manifestPathOf(url) {
+  if (typeof url !== 'string' || url === '') return '';
+  try {
+    return new URL(url).pathname.toLowerCase();
+  } catch (e) {
+    // Not an absolute/parseable URL: strip query + hash, then lowercase.
+    return String(url).split('#')[0].split('?')[0].toLowerCase();
+  }
+}
+
+/**
+ * Pure manifest classifier: is an observed response an adaptive-streaming
+ * manifest, and of which kind? Returns `'hls'` for an `.m3u8` path OR an HLS
+ * content-type; `'dash'` for an `.mpd` path OR `application/dash+xml`; `null`
+ * otherwise. URL-OR-content-type: either signal is independently sufficient.
+ *
+ * Never throws (T-14-03): a malformed/hostile url string is a guarded `null`
+ * (or a regex-fallback classification when the extension is still discernible),
+ * so it can never wedge the adapter. Project convention: a pure helper returns
+ * a primitive, not the `{ok,...}` fallible shape.
+ *
+ * @param {{url?: string, contentType?: string}} [input]
+ * @returns {'hls'|'dash'|null}
+ */
+export function classifyManifest(input) {
+  if (!input) return null;
+  // Content-type first (the more robust signal): lowercase, drop the ;charset.
+  const ct = (typeof input.contentType === 'string' ? input.contentType : '')
+    .split(';')[0].trim().toLowerCase();
+  if (ct) {
+    if (HLS_CONTENT_TYPES[ct]) return 'hls';
+    if (ct === DASH_CONTENT_TYPE) return 'dash';
+  }
+  // URL path extension (query/hash ignored; malformed url -> guarded).
+  const path = manifestPathOf(input.url);
+  if (path) {
+    if (/\.m3u8$/.test(path)) return 'hls';
+    if (/\.mpd$/.test(path)) return 'dash';
+  }
+  return null;
 }

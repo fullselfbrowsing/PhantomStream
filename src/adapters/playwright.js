@@ -13,6 +13,7 @@ import {
   REMOTE_CONTROL,
   REMOTE_CONTROL_STATE,
   STREAM,
+  classifyManifest,
   createRemoteControlStateEvent,
   isRemoteControlType,
   validateRemoteControlMessage,
@@ -86,6 +87,19 @@ export function createPlaywrightAdapter(options) {
     warn: function () {},
     error: function () {}
   };
+
+  // Opt-in, off-by-default adaptive-manifest discovery (MADPT-02). When false/
+  // absent: register NO response listener and emit NO hints (graceful absence —
+  // the progressive path is untouched). The correlation hook is best-effort: it
+  // returns the nid of a single active opaque media element, or null/undefined
+  // for the always-safe page-scope default.
+  var discoverManifests = cfg.discoverManifests === true;
+  var resolveActiveMediaNid = typeof cfg.resolveActiveMediaNid === 'function'
+    ? cfg.resolveActiveMediaNid
+    : function () { return null; };
+  // The hint is stamped with the same stream identity the adapter already
+  // forwards on STREAM messages, snooped from the bridge payloads it relays.
+  var currentIdentity = { streamSessionId: '', snapshotId: 0 };
 
   var installed = false;
   var disposed = false;
@@ -198,12 +212,145 @@ export function createPlaywrightAdapter(options) {
       return { ok: false, error: 'bridge-type-invalid' };
     }
     try {
+      observeStreamIdentity(msg.payload);
       transport.send(msg.type, msg.payload || {});
       emit('bridge', { type: msg.type });
       return { ok: true };
     } catch (err) {
       safeLog('error', '[PlaywrightAdapter] bridge forward failed', { reason: 'bridge-forward-failed' });
       return { ok: false, error: 'bridge-forward-failed' };
+    }
+  }
+
+  // Snoop the stream identity off the side-channel payloads the adapter relays,
+  // so an emitted media hint carries the same identity as the messages around
+  // it. Missing fields are ignored (the viewer's isCurrentStream accepts a hint
+  // with empty identity until a real stream identity has been observed).
+  function observeStreamIdentity(payload) {
+    if (!payload || Object(payload) !== payload) return;
+    if (typeof payload.streamSessionId === 'string' && payload.streamSessionId) {
+      currentIdentity.streamSessionId = payload.streamSessionId;
+    }
+    if (typeof payload.snapshotId === 'number' && Number.isFinite(payload.snapshotId)) {
+      currentIdentity.snapshotId = payload.snapshotId;
+    }
+  }
+
+  // Resolve the initiating frame of a Playwright Response, tolerant of API
+  // shape. Modern Playwright exposes response.frame() directly; older builds
+  // and the minimal test mock expose it via response.request().frame(). Returns
+  // null when no frame info is available so the caller degrades to "accept"
+  // (parity with isMainFrame(null) === true).
+  function responseFrame(response) {
+    try {
+      if (response && typeof response.frame === 'function') {
+        return response.frame() || null;
+      }
+    } catch (e) { /* fall through to the request() path */ }
+    try {
+      if (response && typeof response.request === 'function') {
+        var req = response.request();
+        if (req && typeof req.frame === 'function') return req.frame() || null;
+      }
+    } catch (e) { /* frame info unavailable */ }
+    return null;
+  }
+
+  // Best-effort manifest observation. Reads the response url + content-type,
+  // classifies via the pure classifyManifest filter, and on a non-null kind
+  // emits STREAM.MEDIA_HINT through the same transport.send path the bridge
+  // uses. Fully contained: a hostile/odd response can never wedge the observer.
+  function handleManifestResponse(response) {
+    if (disposed || !discoverManifests) return;
+    try {
+      if (!response || typeof response.url !== 'function') return;
+      // Main-frame-only, parity with bindingCallback's isMainFrame check: a
+      // cross-origin sub-frame must not steer the top page's player. When frame
+      // info is unavailable, isMainFrame(null) === true (degrade to accept).
+      var frame = responseFrame(response);
+      if (frame && !isMainFrame(frame)) return;
+      var url = response.url();
+      var contentType = '';
+      if (typeof response.headers === 'function') {
+        var headers = response.headers() || {};
+        // Playwright lowercases header names; be tolerant of either casing.
+        contentType = headers['content-type'] || headers['Content-Type'] || '';
+      }
+      var kind = classifyManifest({ url: url, contentType: contentType });
+      if (!kind) return;
+      emitMediaHint(url, kind, contentType);
+    } catch (err) {
+      safeLog('warn', '[PlaywrightAdapter] manifest observe failed', { reason: 'manifest-observe-failed' });
+    }
+  }
+
+  // The main frame's CDP frameId, learned opportunistically from
+  // Page.frameNavigated (the top-level frame has no parentId). Until known, the
+  // CDP manifest path degrades to "accept" (parity with the Playwright path when
+  // frame info is unavailable). Once known, a responseReceived carrying a
+  // different frameId is a sub-frame fetch and is ignored.
+  var mainCdpFrameId = null;
+
+  function observeCDPFrameNavigated(event) {
+    try {
+      var frame = event && event.frame;
+      if (!frame || typeof frame.id !== 'string') return;
+      // The top-level frame is the one without a parentId.
+      if (!frame.parentId) mainCdpFrameId = frame.id;
+    } catch (e) { /* contained -- frame tracking is best-effort */ }
+  }
+
+  // CDP Network.responseReceived secondary path: { frameId, response: { url,
+  // headers, mimeType, frameId? } }. Same opt-in, same classifier, same
+  // emission as the page hook, with the analogous main-frame scope: drop a
+  // response whose CDP frameId is a known non-main frame.
+  function handleCDPResponseReceived(event) {
+    if (disposed || !discoverManifests) return;
+    try {
+      var resp = event && event.response;
+      if (!resp || typeof resp.url !== 'string') return;
+      // Main-frame-only when both ids are known. The frameId rides the event
+      // (and sometimes the response); accept when either is unknown.
+      if (mainCdpFrameId) {
+        var frameId = (event && typeof event.frameId === 'string') ? event.frameId
+          : (typeof resp.frameId === 'string' ? resp.frameId : null);
+        if (frameId && frameId !== mainCdpFrameId) return;
+      }
+      var headers = resp.headers || {};
+      var contentType = headers['content-type'] || headers['Content-Type']
+        || (typeof resp.mimeType === 'string' ? resp.mimeType : '');
+      var kind = classifyManifest({ url: resp.url, contentType: contentType });
+      if (!kind) return;
+      emitMediaHint(resp.url, kind, contentType);
+    } catch (err) {
+      safeLog('warn', '[PlaywrightAdapter] cdp manifest observe failed', { reason: 'manifest-observe-failed' });
+    }
+  }
+
+  function emitMediaHint(manifestUrl, kind, contentType) {
+    var payload = {
+      scope: 'page',
+      manifestUrl: manifestUrl,
+      kind: kind,
+      streamSessionId: currentIdentity.streamSessionId,
+      snapshotId: currentIdentity.snapshotId
+    };
+    if (contentType) payload.contentType = contentType;
+    var nid = null;
+    try {
+      nid = resolveActiveMediaNid();
+    } catch (err) {
+      nid = null; // correlation is best-effort; failure -> page scope
+    }
+    if (typeof nid === 'string' && nid) {
+      payload.scope = 'element';
+      payload.nid = nid;
+    }
+    try {
+      transport.send(STREAM.MEDIA_HINT, payload);
+      emit('mediahint', { kind: kind, scope: payload.scope });
+    } catch (err) {
+      safeLog('error', '[PlaywrightAdapter] media hint send failed', { reason: 'media-hint-send-failed' });
     }
   }
 
@@ -304,6 +451,18 @@ export function createPlaywrightAdapter(options) {
       addPageListener('framenavigated', handleNavigation);
       addPageListener('domcontentloaded', function () { handleNavigation(null); });
       addPageListener('load', function () { handleNavigation(null); });
+
+      // Opt-in manifest observation: only when discovery is enabled do we attach
+      // the 'response' listener (off by default -> no listener, graceful absence).
+      if (discoverManifests) {
+        addPageListener('response', handleManifestResponse);
+        if (session && typeof session.on === 'function') {
+          // CDP secondary path (same opt-in, same filter + emission). Track the
+          // main frame's CDP id so the response path can scope to it.
+          session.on('Page.frameNavigated', observeCDPFrameNavigated);
+          session.on('Network.responseReceived', handleCDPResponseReceived);
+        }
+      }
 
       if (transport && typeof transport.onMessage === 'function') {
         unsubscribeTransport = transport.onMessage(function (type, payload) {

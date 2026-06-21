@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: in_progress
-stopped_at: Phase 10 complete — @full-self-browsing/phantom-stream@0.1.0 published to npm (public); ready for Phase 11 (FSB swap-in)
-last_updated: "2026-06-16T15:26:18Z"
-last_activity: 2026-06-16 -- Published @full-self-browsing/phantom-stream@0.1.0 to npm (public); Phase 10 publish gate resolved
+milestone: v2.0
+milestone_name: Asset & Media Streaming
+status: milestone_complete
+stopped_at: "v2.0 complete + audited + live-validated; tagged v2.0 (local). Light close done; formal milestones/ archival + REQUIREMENTS reset deferred to /gsd:new-milestone for v2.1."
+last_updated: 2026-06-21T20:01:05.052Z
+last_activity: "2026-06-21 -- v2.0 shipped: all 15 phases complete (704/704); milestone audit tech_debt (residual adaptive-MSE UAT); foregrounded FSB pass validated Phase 13 media playback live; tagged v2.0"
 progress:
-  total_phases: 13
-  completed_phases: 10
-  total_plans: 57
-  completed_plans: 57
+  total_phases: 15
+  completed_phases: 15
+  total_plans: 73
+  completed_plans: 73
   percent: 100
 ---
 
@@ -18,29 +18,34 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-06-16)
+See: .planning/PROJECT.md (updated 2026-06-19)
 
 **Core value:** A live, trustworthy, low-bandwidth, semantically addressable mirror of a real browser tab — capture → relay → render → remote-control must work end-to-end as a standalone framework.
-**Current focus:** Phase 11 — FSB swap-in (Phase 10 complete; `@full-self-browsing/phantom-stream@0.1.0` published to npm)
+**Current focus:** Milestone complete
 
 ## Current Position
 
-Phase: 10 complete → Phase 11 next
-Plan: —
-Status: Phase 10 complete — package published to npm (public); publish gate resolved
-Last activity: 2026-06-16 -- Published @full-self-browsing/phantom-stream@0.1.0 to npm (public)
+Phase: 15
+Plan: Not started
+Status: Milestone complete
+Last activity: 2026-06-21
 
-Progress: [██████████] Phase 10 complete; `@full-self-browsing/phantom-stream@0.1.0` live on npm
+**v2.0 phase order:** 12 → 13 → 14 → 15
+
+- Phase 12: Static Assets by Reference (ASST-01..05, MSEC-01, MSEC-02)
+- Phase 13: Video/Audio URL + Playback Sync (MEDIA-01..05, MWIRE-01, MWIRE-02)
+- Phase 14: Adaptive Streaming + Adapter Discovery + Fallback (MADPT-01..04) — research-phase likely
+- Phase 15: Media Security, Masking, Threat Model & Docs (MSEC-03, MSEC-04) — research-phase likely
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 57
+- Total plans completed: 70 (across v1.0 Phases 1–10; Phase 11 verified in FSB repo)
 - Average duration: -
 - Total execution time: 0 hours
 
-**By Phase:**
+**By Phase (v1.0):**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
@@ -53,6 +58,9 @@ Progress: [██████████] Phase 10 complete; `@full-self-browsi
 | 08 | 9 | - | - |
 | 09 | 8 | - | - |
 | 10 | 5 | - | - |
+| 13 | 4 | - | - |
+| 14 | 5 | - | - |
+| 15 | 4 | - | - |
 
 **Recent Trend:**
 
@@ -88,67 +96,70 @@ Progress: [██████████] Phase 10 complete; `@full-self-browsi
 | Phase 10 P03 | 20min | 2 tasks | 4 files |
 | Phase 10 P04 | 18min | 2 tasks | 6 files |
 | Phase 10 P05 | 20min | 2 tasks | 4 files |
+| Phase 12 P12-01 | 14min | 2 tasks | 6 files |
+| Phase 12 P12-02 | 38min | 2 tasks tasks | 5 files files |
+| Phase 12 P12-03 | 42min | 3 tasks | 8 files |
+| Phase 13 P01 | 9min | 2 tasks | 6 files |
+| Phase 13 P02 | 11min | 2 tasks | 2 files |
+| Phase 13 P03 | 38min | 3 tasks | 8 files |
+| Phase 13 P04 | 9min | 2 tasks | 4 files |
+| Phase 14 P01 | 18min | 3 tasks | 4 files |
+| Phase 14 P02 | 14min | 3 tasks | 6 files |
+| Phase 14 P04 | 11min | 2 tasks | 4 files |
+| Phase 14 P03 | 6min | 3 tasks | 3 files |
+| Phase 14 P05 | 4min | 2 tasks | 3 files |
+| Phase 15 P01 | 33min | 3 tasks | 3 files |
+| Phase 15 P02 | 6min | 1 task | 3 files |
+| Phase 15 P03 | 5min | 2 tasks | 1 files |
+| Phase 15 P04 | 4min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
-Recent decisions affecting current work:
+Recent decisions affecting current (v2.0) work:
 
-- [Roadmap]: Differential oracle (CAPT-04) is Phase 1's first deliverable — it must exist before the serializer is extracted or behavior drift is undetectable
-- [Roadmap]: Security pipeline (Phase 3) gates anything embeddable or published; masking designed jointly with sanitization (shared serialization chokepoints)
-- [Roadmap]: Identity rework (Phase 7) precedes shadow DOM (Phase 8); shadow protocol extension designed jointly with the WeakMap Mirror
-- [Roadmap]: Publication ordering enforced as phases: demos (4–5) → 0.x publish (10) → FSB swap-in (11) → 1.0
-- [Roadmap]: Eval corpus frozen (EVAL-01) before any reported number; harness (Phase 12) feeds the paper (Phase 13) and doubles as the regression suite
-- [Phase 03]: Masking stays capture-side only; createViewer remains untouched. — SEC-03 requires masked content to be transformed before transport; renderer-side masking would be too late.
-- [Phase 03]: Blocked elements serialize as rr_width/rr_height/data-fsb-nid placeholders only. — This preserves layout/addressability without sending blocked attributes, children, or text.
-- [Phase 03]: D7-capture-sanitization is one scenario-pinned, same-index mismatch entry covering snapshot and mutation sanitization/masking.
-- [Phase 04]: Relay fan-out remains raw and transport-agnostic; payload transform/compression stays at endpoints. — Maintains D-08/D-09 and keeps future WebSocket transport responsible for endpoint compression.
-- [Phase 04]: The ws backend validates path, room, and role before room attachment and disables permessage-deflate. — Satisfies RELY-01/T-04-01/T-04-09 while preserving independently decodable PhantomStream frames.
-- [Phase 04]: Oversize and backpressure failures stay in bounded in-memory diagnostics for this phase. — Matches D-11/D-12/D-13 and keeps relay observability testable without adding an admin surface.
-- [Phase 04]: Native endpoint compression uses { _ps: 'deflate-raw', d }, while legacy { _lz, d } remains decode-only through an injected LZ codec. — Keeps relay fan-out raw and preserves FSB backward compatibility without adding a browser LZ dependency.
-- [Phase 04]: WebSocket transport send and receive paths both serialize async codec work through per-connection promise queues. — Prevents CompressionStream or injected codec latency from reordering capture/viewer frames.
-- [Phase 04]: Transport health/status telemetry exposes counters, timestamps, drops, and error codes only; mirrored payload content is omitted. — Satisfies T-04-07 while giving 04-03 enough telemetry for viewer lifecycle events.
-- [Phase 04]: Viewer lifecycle and health events stay library events only; visible UI chrome remains host/demo-owned. — The viewer should expose observable state for hosts and demos without imposing product UI.
-- [Phase 04]: Health snapshots whitelist counters, timestamps, sanitizer counters, and transport diagnostics instead of copying payload or status objects wholesale. — VIEW-02 telemetry must be useful for hosts while preserving the privacy boundary around mirrored page content.
-- [Phase 04]: The demo binds only to 127.0.0.1, prints generated room URLs, and keeps the relay raw/stateless. — PKG-01 must remain safe to run locally without introducing a remote service surface.
-- [Phase 04]: Demo static assets use no-store headers and module query versions. — Browser checkpoints should exercise current code during iterative local verification, not a cached module graph.
-- [Phase 04]: Browser relay-stop validation can record viewer state event timestamps. — Tool latency can miss a short visual stale interval, so event timestamps are the durable proof of live -> stale -> disconnected.
-- [Phase 05]: REMOTE_CONTROL_STATE is exported as a named alias so the static REMOTE_CONTROL grep returns exactly one declaration while preserving the public named export.
-- [Phase 05]: Remote-control state reasons are constrained to lowercase hyphenated identifiers to avoid accidental user-content leakage in telemetry.
-- [Phase 05]: The Playwright/CDP adapter prefers CDP replay when a CDPSession is supplied, otherwise it uses Playwright mouse and keyboard APIs. — Keeps one adapter surface for Playwright-first hosts while allowing CDP-native replay and new-document injection where available.
-- [Phase 05]: The Playwright inject artifact is checked in as a classic script with protocol constants and createCapture inlined. — Preserves the no-build path for Playwright addInitScript and CDP Page.addScriptToEvaluateOnNewDocument consumers.
-- [Phase 05]: getViewportMapping returns fresh scale, viewport, and container objects on every call so host mutations cannot alter viewer state.
-- [Phase 05]: The renderer exports coordinate helpers and mapping state only; authorization UI, control overlays, and remote-control protocol handling remain host/demo-owned.
-- [Phase 05]: The Playwright demo exposes role-specific WebSocket URLs because the Phase 04 relay backend rejects connections without role=source or role=viewer.
-- [Phase 05]: The CLI keeps phantom-stream demo behavior intact and adds phantom-stream playwright-demo as a separate command.
-- [Phase 05]: 05-04 serves minimal no-store fallback content for /playwright/viewer, /playwright/fixture, and /playwright/demo.css; full UI assets remain the scope of 05-05.
-- [Phase 05]: The Playwright demo uses existing static server paths for viewer.js and fixture.js while preserving no-store /playwright routes.
-- [Phase 05]: The exact demo title appears once as the visible H1 so the single-match acceptance grep remains meaningful.
-- [Phase 05]: The viewer marks requesting locally, but active and denied states come only from adapter REMOTE_CONTROL.STATE frames.
-- [Phase 07]: nodeIds sidecars preserve snapshot/add identity while existing diff fields remain nid-addressed.
-- [Phase 07]: Renderer bridge stamps mirror DOM from sidecars until 07-02 replaces selector lookup with a Map index.
-- [Phase 07]: Capture identity is WeakMap-backed and page-owned data-fsb-nid remains ordinary page data.
-- [Phase 07]: Renderer identity is owned by createViewer and rebuilt from nodeIds after post-parse sanitization. — Ensures only sanitized mirror nodes are addressable and keeps identity state inside the viewer lifecycle.
-- [Phase 07]: applyMutations has no nid selector fallback; callers must inject identity hooks for nid-addressed ops. — Prevents reintroducing per-op querySelector identity resolution and keeps diff.js document-parameterized.
-- [Phase 07]: Viewer tests now inspect normal page ids or sidecar metadata instead of mirror data-fsb-nid attributes. — The mirror DOM no longer carries framework identity attributes after the renderer index migration.
-- [Phase 07]: Viewer semantic resolution returns geometry and identity only. — Prevents the public semantic API from exposing mirrored HTML, text, attrs, payloads, URLs, titles, or DOM references.
-- [Phase 07]: highlightNode is local renderer overlay behavior. — Node highlighting uses the existing host overlay layer and never sends STREAM.OVERLAY or expands remote-control dispatch.
-- [Phase 07]: Capture getNodeId is live-public while internal removed-node identity remains available. — Public hosts get null for detached or inactive nodes, but capture internals can still emit correct removal diffs during mutation batching.
-- [Phase 07]: Checked-in browser inject artifacts carry the same WeakMap/nodeIds identity behavior as the ESM capture core while remaining classic scripts with bridge globals.
-- [Phase 07]: Documentation now treats data-fsb-nid stamping as the former FSB reference design; standalone identity is WeakMap capture state plus nodeIds sidecars and a renderer Map index.
-- [Phase 09]: CSSOM mode is opt-in through `styleMode: 'cssom'`; default computed mode omits `styleSources[]` and `styleStrategy` to preserve existing oracle compatibility.
-- [Phase 09]: CSSOM source capture uses explicit fallback reasons (`cssRules-blocked`, `href-relinked`, `adapter-fetch`, `computed-fallback`) and never performs hidden network fetches; `fetchStylesheet({ href, scope, ownerKind })` is host-owned.
-- [Phase 09]: Dynamic stylesheet edits stream as `DIFF_OP.STYLE_SOURCE` with `action: 'upsert' | 'replace' | 'remove'`; hook/scope failures surface as `cssom-hook-unavailable`, `cssom-style-source-stale`, or `stale-style-scope`.
-- [Phase 09]: D25 is scenario-pinned to `cssom-capture-mode`; default computed-mode oracle rows still require zero CSSOM ledger consultation.
-- [Phase 10]: Package remains source-first ESM; TypeScript is used only to generate `.d.ts` from JSDoc.
-- [Phase 10]: Real `npm publish` is an authentication/user-approval gate. Autonomous work may prepare/dry-run trusted publishing, tarball validation, and docs, but must not publish without explicit approval.
-- [Phase 10]: Trusted publishing/provenance should use GitHub-hosted Actions with OIDC (`id-token: write`) and no long-lived `NPM_TOKEN` by default.
-- [Phase 10]: Type declarations are generated for importable `src/**/*.js` modules only; CLI/bin declarations are out of scope for the export map.
-- [Phase 10]: Package validation uses `publint`, ATTW's `esm-only` profile, dry-run pack, and a tarball install smoke against every public export.
-- [Phase 10]: Package quickstarts cover embedded loopback, WebSocket demo, Playwright/CDP, MV3 extension, bookmarklet, CSSOM mode, and security checks without Phase 12 performance claims.
-- [Phase 10]: Real npm publish was not run; the package is dry-run clean and waiting for trusted publisher configuration or authenticated user approval.
+- [Roadmap v2.0]: v2.0 is a strict capability chain A→B→C→D (Phases 12→13→14→15); media rides the existing pipeline — the relay and envelope are NEVER touched (STREAM.MEDIA is one new type string + typedef + constant; old viewers ignore the unknown type by construction).
+- [Roadmap v2.0]: Media is mirrored by URL reference, not by value — the wire carries URLs + small playback state; the viewer fetches bytes from the source/CDN. Never stream media bytes over the relay (detonates the 1 MiB cap and the low-bandwidth core value).
+- [Roadmap v2.0]: Player code never lives in the no-`allow-scripts` srcdoc iframe. Native progressive playback uses the inert in-iframe element driven cross-realm from the parent; adaptive players (hls.js/dash.js) run in the PARENT realm and bind MSE to the in-iframe element. Adding `allow-scripts` would be a catastrophic XSS regression.
+- [Roadmap v2.0]: Security is THREADED, not trailing. The viewer-fetch threat model, CSP scope, fail-closed origin policy hook, and `mediaMode` are DECIDED in Phases 12–13 (static images are already a viewer-fetch surface) and COMPLETED/threat-modeled/tested in Phase 15 — Phase 15 does not begin security work.
+- [Roadmap v2.0]: hls.js is the only justified runtime add — optional `peerDependency`, lazy-imported viewer-side only (native HLS via `canPlayType` first). Do NOT bundle dash.js/shaka (host-provided-player seam only); no URL library; no media-byte inlining.
+- [Roadmap v2.0]: The drift reconciler is a pure, configurable, jsdom-unit-testable function (jsdom has no real media timeline). True playback / native-HLS / CDP manifest discovery / signed-URL/CORS/mixed-content outcomes / bandwidth are exercised in the real-Chrome/Playwright UAT.
+- [Roadmap v2.0]: Adapters own manifest discovery (CDP `Network`, extension `webRequest`) and push hints in opt-in via the `fetchStylesheet` precedent; the capture core never sniffs the network and degrades gracefully when no adapter supplies hints.
+- [Roadmap v2.0]: Phases 14 and 15 likely need `/gsd:plan-phase --research-phase` (cross-realm MSE binding feasibility / whether the child needs `connect-src` / manifest→element correlation for 14; parent-realm object-URL blast radius + default origin/private-IP denylist for 15). Phases 12–13 use established patterns.
+- [Roadmap v2.0]: Evaluation harness (EVAL-*) and research paper (PAPR-*) deferred to milestone v2.1 (provisional Phases 16–17); the old v1.0 "Phase 12 Evaluation / Phase 13 Research Paper" entries are relocated there, superseded by the v2.0 media phases.
+
+- [Phase 12-01]: RED Wave-0 scaffolds use dynamic `import()` inside test bodies so missing exports/modules fail as named per-test failures (not link/load/syntax errors), satisfying both the parse-check verify and the plan's "failing tests, not a syntax error" contract. Full suite excluding the 3 scaffolds is green (416/416); the 3 scaffolds are intentionally RED (30 tests) until Plans 12-02/12-03 land.
+- [Phase 12-01]: SC#1 (no image bytes traverse the relay) and ASST-05 (confirm-only CSP — img-src present, default-src 'none', NO script-src, NO media-src) are pinned by automated tests from the first commit; `CSP_META` in `src/renderer/snapshot.js` left byte-unchanged (string assertion; real CSP enforcement is Playwright UAT, may be deferred).
+
+Earlier v1.0 decisions are retained in PROJECT.md Key Decisions and the prior phase summaries.
+
+- [Phase 12-02]: D26 only, no D27: the static-assets fixture surfaces ONE same-index SNAPSHOT mismatch (clone-only data-ps-currentsrc pin + blob-degrade + oversized-degrade all in the html field); compareStreams compares the whole message and ledgerCovers returns the first match, so a second D27 entry could never fire and would fail stale-entry detection. D26's predicate recognizes the combined extracted-only divergence (data-ps-currentsrc OR data-ps-asset-unavailable present in ext, absent in ref).
+- [Phase 12-02]: ASST-03 (clone-only data-ps-currentsrc variant pin) and ASST-04 (blob:/oversized-data: -> dimensioned data-ps-asset-unavailable placeholder; small data: byte-identical, ASSET_DATA_URI_MAX_BYTES=256 KiB) are capture-complete at all 4 serialization sites; the live page is never mutated (clone-only; the added-node wireClone is the trap). Capture-degrade suite + differential oracle (firing D26) GREEN; renderer fetch-gate/mediaMode/CSP remain Plan 12-03.
+- [Phase 12-03]: Viewer-side-fetch security model is GREEN. classifyAssetOrigin (src/renderer/asset-policy.js) is a PURE fail-closed https-only + private-range classifier (denies localhost/127/10/172.16.0.0-12 incl. /12 boundary/192.168/169.254/::1/fc00::-7/.local/unqualified; parse-error blocks), exported for Phase-15 reuse. gateAssetUrl(url, ctx) precedence: mediaMode 'off' blocks all -> allowAssetOrigins host widen -> classifier deny authoritative -> assetOriginPolicy hook fail-closed (throw OR non-true blocks) -> posture allow. mediaMode default 'reference' (off|poster|reference; invalid throws at factory time). Gate runs PRE-write at all 4 sites: snapshot at the STRING layer (Pitfall 1 -- parser fetches during parse, before post-parse scrub) + diff ADD/ATTR + subtree; blocked -> data-ps-asset-unavailable="blocked-origin" placeholder. ASST-03 currentSrc pin (effective src = data-ps-currentsrc, srcset/sizes neutralized) viewer-side. Sandbox token + CSP_META byte-unchanged (no script-src, no media-src -- media-src is Phase 13); no allow-scripts literal.
+- [Phase 12-03]: VERIFIED jsdom/URL realities baked into the implementation: Node's WHATWG URL does NOT strip IPv6 brackets (new URL('https://[::1]/').hostname === '[::1]') -- isPrivateOrLocalHost strips them before its IPv6 checks; .local routes to 'unqualified-host' not 'private-host'. createViewer gained a host-driven API (mount alias + optional no-op transport + handleSnapshot on the handle, envelope-or-bare-payload tolerant) while the wire-driven cfg.container path keeps transport REQUIRED. Placeholders carry NO live identity attr (positional nid pairing preserved -- Phase 7). Playwright asset UAT DEFERRED (jsdom never parses srcdoc/enforces CSP/fetches) per the project UAT-deferral precedent.
+- [Phase ?]: [Phase 13-01]: STREAM.MEDIA='ext:dom-media' (scroll-twin op) + MEDIA_SYNC_THROTTLE_MS=250 + MediaBaselineEntry/MediaSyncPayload typedefs (duration|live mutually exclusive, Infinity->null fix); envelope+relay byte-unchanged, STREAM.MEDIA round-trips raw under the 1 MiB cap.
+- [Phase ?]: [Phase 13-01]: reconcileMediaDrift is a pure zero-import fn in src/protocol/media-reconcile.js (hold|pause|nudge|seek|rejoin-edge); 0.25s hold band, +/-5%-capped sign-correct nudge, hard-seek clamps to [0,duration], explicit-seeked short-circuit, live branch before duration math; no field ever NaN (6561-case hostile sweep). No D27 ledger entry yet (lands with 13-02 capture fixture).
+- [Phase ?]: [Phase 13-02]: serializeDOM appends a nid-keyed media[] playback baseline ONLY when >=1 <video>/<audio> exists (media-free fixtures stay byte-identical to the FSB reference; differential-ledger entry deferred to 13-04); duration sent only when finite, live:true otherwise (Infinity->null trap).
+- [Phase ?]: [Phase 13-02]: startMediaTracker is a scroll-twin armed/torn at the startScrollTracker sites; media events do not bubble so listeners are PER-ELEMENT (Map+records), with added-node attach + removed-node detach; STREAM.MEDIA discrete events emit immediately, timeupdate throttled at MEDIA_SYNC_THROTTLE_MS and playing-only; every payload nid-addressed + identity-stamped + sentAt-stamped; no media bytes on the wire.
+- [Phase 13-03]: media-src http: https: data: added to CSP_META (twin of img-src, NO blob: -- Phase 14; default-src 'none'/no script-src retained). gateSnapshotAssets generalized (findImgTagEnd->findTagEnd, a unified <img>/<video>/<source> pre-parse scan via nextAssetOpener) so <video src>/<video poster>/<source src> to a blocked origin are neutralized to the dimensioned placeholder at the STRING layer before the parser prefetches (Pitfall 5 SSRF fix); gateFragmentMedia is post-parse defense-in-depth + poster-mode source strip.
+- [Phase 13-03]: handleMedia (case STREAM.MEDIA; default already ignores it for old viewers) staleness-guards via isCurrentStream, resolves the nid, runs reconcileMediaDrift, and drives the inert in-iframe element cross-realm from the PARENT realm via applyMediaAction (seeking-hold, readyState>=1 seek gate, seekable.length rejoin guard). ensurePlaying: muted=true before first play; if (p !== undefined && typeof p.catch === 'function') jsdom guard; NotAllowedError -> media-blocked affordance + onMediaBlocked(nid) CONFIG callback (assetOriginPolicy-hook family, contained-not-rethrown), never wedges. Unmute trigger: el.muted && payload.muted===false in reference -> show media-unmute (onActivate sets muted=false+volume then hides). poster/off: no driver, no affordance (source already gate-neutralized). Snapshot media[] baseline applied once per nid on first bind (readyState-gated) then reconciler owns it (Pitfall 7). Sandbox stays EXACTLY allow-same-origin. No D27 ledger entry (renderer-only slice; the media-playback-sync fixture + D27 land in 13-04). Full suite 577/577.
+- [Phase 13-04]: D27-media-playback-sync ledger entry + a deterministically-firing media-playback-sync fixture/scenario keep the differential oracle green (48/48, was 45) now that capture emits media[] + STREAM.MEDIA; full suite 580/580 (was 577). ONE appliesTo predicate covers BOTH Shape A (extracted-only trailing STREAM.MEDIA; refMsg undefined, extMsg.type === STREAM.MEDIA) and Shape B (same-index SNAPSHOT where only the extracted payload.media is non-empty) per the D26 single-predicate discipline -- compareStreams returns the first match, so a second same-index entry would be stale-flagged. Cites MEDIA-02/MWIRE-01, NOT MEDIA-03 (the renderer-side reconciler emits no wire message; it is covered by Plan 01's pure unit tests). normalize.js unchanged -- normalizeExtracted passes payload.media through, so the SNAPSHOT diverges on the new top-level media key naturally (D26 needed no normalizer change either, but because its markers lived in payload.html). The beforeStart paused=false defineProperty stub on BOTH sides is load-bearing (the extracted tracker's timeupdate heartbeat returns early while el.paused, and jsdom reports an unloaded element as paused); the finite-duration stub drives the VOD baseline (not live:true). Task 1 proved the divergence by the oracle hard-failing UNDECLARED DIVERGENCE; Task 2 landed D27 and restored green with D27 firing and not stale (the stale-entry detector passes). Envelope/relay untouched.
+
+- [Phase 14-01]: STREAM.MEDIA_HINT='ext:dom-media-hint' (twin of STREAM.MEDIA) + MediaHintPayload typedef (nid?/scope/manifestUrl/kind/contentType?/identity-stamped) added to src/protocol/messages.js; collision-free in Object.values(STREAM) (A2) + raw-round-trips under the 1 MiB cap; constants.js untouched (op needs none); index.js barrel already re-exports it. Both adapters' Object.keys(STREAM) allow-sets (playwright.js:78, extension.js:21) auto-include it, so MEDIA_HINT is relayable with NO adapter edit -- only Plan 02 emission code is new. Old viewers ignore the unknown type (renderer dispatch default); envelope/relay byte-unchanged.
+- [Phase 14-01]: classifyManifest({url, contentType}) is a pure exported 'hls'|'dash'|null classifier (content-type-first -- the robust signal for extensionless/signed CDN URLs -- then .m3u8/.mpd path extension; URL-OR-content-type, either independently sufficient). HLS token set: application/vnd.apple.mpegurl + x-mpegurl + audio[-x]/mpegurl; DASH: application/dash+xml. manifestPathOf wraps new URL() in try/catch with a regex query/hash strip so a malformed/hostile url never throws (T-14-03). Two Wave-0 scaffolds created green: tests/media-hint-filter.test.js (9 filter tests) + tests/renderer-media-player.test.js (1 harness placeholder, installStubMediaSource + stubVideoEl, NO media-player.js import until Plan 02). Full suite 601/601 (was 588); differential oracle 48/48 UNCHANGED -- no D-ledger entry (the hint originates in the adapter, not src/capture/; A4 confirmed). dependencies stays { ws: 8.21.0 }.
+- [Phase ?]: [Phase 14-02]: createMediaPlayer attach() runs native-HLS-first -> host playerFactory -> optional lazy import('hls.js') -> degrade-to-poster, all try/catch-contained to a single degrade(nid,reason) sink; attach() never rethrows. hls.js referenced ONLY via a guarded dynamic import (no top-level import) so the renderer stays importable with hls.js absent (package:smoke exit 0; dependencies stays { ws }). Wired the internal lazy-hls adapter now (graceful-absence proven by degrade('no-player')-when-null).
+- [Phase ?]: [Phase 14-02]: media-unavailable overlay is a passive textContent-only clone of renderMediaPoster (reason via data-ps-reason setAttribute, never markup -> innerHTML allowlist unchanged at 4). CSP media-src gains blob: ONLY (default-src 'none'/no script-src/no connect-src retained; sandbox allow-same-origin unchanged). DRM (encrypted event + hls.js KEY_SYSTEM_ERROR) -> degrade('drm'); emeEnabled never true. Full suite 624/624; differential oracle 48/48; live cross-realm MSE proof is the documented deferred UAT (poster is the never-break net).
+- [Phase ?]: [Phase 14-04]: Both adapters surface manifest URLs by opt-in network observation (Playwright page.on('response')+CDP Network.responseReceived; extension chrome.webRequest.onCompleted), off by default; classifyManifest filters .m3u8/.mpd by URL-OR-content-type; correlation best-effort via an injectable resolveActiveMediaNid hook (single-active -> element scope, ambiguous -> page scope); identity snooped off forwarded STREAM frames; emitted via transport.send(STREAM.MEDIA_HINT) with NO allowlist edit; validateChrome requires chrome.webRequest ONLY when opted in and degrades gracefully when absent. dependencies stays { ws }; differential oracle 48/48; full suite 640/640.
+- [Phase ?]: [Phase 14-03]: STREAM.MEDIA_HINT wired into the renderer dispatch -> handleMediaHint re-gates manifestUrl through the SAME fail-closed gateAsset BEFORE binding (V12/SSRF defense in depth; blocked origin -> degrade('no-manifest'), never fetched); element-scope binds immediately, page-scope stores most-recent-wins-per-kind in pendingHints consumed by an MSE-opaque (source-less) element on play (best-effort correlation, idempotent per generation); old viewers ignore the unknown op via the dispatch default.
+- [Phase ?]: [Phase 14-03]: createMediaPlayer constructed in createViewer (parent realm; sandbox stays exactly allow-same-origin); playerFactory + onMediaUnavailable are the config-callback family (function-or-ignored), onMediaUnavailable double-contained (safeInvokeMediaHook + the player degrade sink). mediaPlayer.destroyAll() on a new-identity snapshot (Pattern 2) tears down every parent-realm player before the document swap (no orphaned players / object-URL leak).
+- [Phase ?]: [Phase 14-03]: Live handling is ASSERTED reuse, not new code (MADPT-04) -- media-reconcile pins live:true -> rejoin-edge with NO absolute toTime, and applyMediaAction seeks seekable.end (live edge) ONLY under seekable.length>0, never to the payload absolute time. Closed the Phase-13 UI-review Fix 1 BLOCKER: the registered-but-dead State-C media-poster caption is now driven from handleMedia poster-mode (shown IFF no surviving poster). Full suite 659/659, oracle 48/48, package:smoke exit 0 with hls.js absent, dependencies stays { ws }.
+- [Phase ?]: [Phase 14-05]: hls.js declared ONLY as an OPTIONAL peerDependency ({ hls.js: >=1.5.0 } + peerDependenciesMeta.optional:true) -- npm neither auto-installs nor warns when absent; dependencies stays exactly { ws: 8.21.0 }, hls.js never a hard/dev dep, node_modules/hls.js absent. Zero-hard-dep PROVEN by package:smoke importing ./renderer in an hls.js-absent sandbox (resolves only because the hls.js import is dynamic-only, Plan 02); a named zero-hard-dep-violation smoke assertion (before the broad subpath loop) + a package-publish deps-shape guard catch any future top-level-import/hard-dep leak (T-14-17/T-14-18). publint 'All good!', attw exit 0, full suite 660/660, oracle 48/48. MADPT-01 fully closed; Phase 14 complete.
+- [Phase ?]: [Phase 15-01]: MSEC-03 capture masking spine shipped -- 3 host options (maskMediaSelector factory-validated, maskAssetUrls token/PII strip, maskAssetUrlFn fail-closed-to-BLOCK redactor) routed through ONE new 'asset-url'/'media-url' sanitizeForWire dispatch wrapping a PURE maskAssetUrlForWire helper + documented TOKEN_PARAM_DENYLIST (AWS SigV4/SigV2, GCP, Azure SAS, generic; case-insensitive exact-name OR x-amz-/x-goog- prefix). Off-by-default returns the ORIGINAL url string when nothing stripped (Pitfall 1: never URL.toString()) so the wire stays byte-identical (oracle 48/48, NO new ledger entry). maskMediaWithAncestors ORed into BOTH media-tracker skip guards + the blockSelector placeholder path -> masked <video>/<audio> emits no STREAM.MEDIA and degrades to the dimension-only placeholder (A3: plain block placeholder, no 'masked' reason). Zero new deps; full suite 689/689.
+- [Phase 15-02]: MSEC-04 viewer-fetch leakage control shipped -- ONE document-level <meta name="referrer" content="no-referrer"> injected IMMEDIATELY after CSP_META (before charset/viewport/first stylesheet link/payload <img>) at BOTH src/renderer/snapshot.js return sites (buildSnapshotHtml :673 + container-less buildFramePlaceholderHtml :690), so the mirrored page URL (token-bearing) never leaks in a Referer header to third-party CDNs on any parser- or CSS-initiated fetch (img/video/source/poster/background-image/font). One document meta beats per-element referrerpolicy (covers CSS-initiated fetches none could reach). NO crossorigin added -- allow-same-origin sandbox + no crossorigin already omits credentials; forcing anonymous would break non-CORS assets (locked); the test asserts indexOf('crossorigin')===-1 on the srcdoc (the 3 source hits are comment-only). CSP_META BYTE-UNCHANGED (default-src 'none', media-src ... blob:, img-src no-blob, no script-src, no connect-src). renderer-media-csp.test.js +6 pins (present/exactly-one/ordered-after-CSP-and-before-charset+first-link+first-img/no-crossorigin/container-less); renderer-snapshot.test.js CSP-first verbatim pin updated to <head>+CSP+referrer+charset (Rule 1: the meta displaced a sibling adjacency assertion -- intent preserved). Live referrer/credential suppression is the deferred real-browser UAT (A2); string contract unit-pinned. Renderer-only edit -> NO wire impact, oracle 48/48 unchanged, NO new ledger entry; zero new deps; full suite 696/696.
+- [Phase 15-03]: Named media-security traceability suite (tests/security-media.test.js, MSEC-04) pins 4 invariants backing the Plan-04 object-URL threat model -- media-player.js zero allow-scripts outside comments (purity glob untouched, Pitfall 6), deps byte-unchanged ({ws}+optional hls.js peer), late cross-session STREAM.MEDIA rejected by isCurrentStream (cites renderer-media.test.js:411), parent-realm object-URL revoke-on-destroy (cites renderer-media-player.test.js + focused self-contained case); kept independent of the purity test (Plan 04 owns markers). Phase-15 Wave-2 gate: full suite 700/700, oracle 48/48 no new ledger entry, package-publish 6/6.
+- [Phase ?]: [Phase 15-04]: MSEC-04 security-contract docs landed -- docs/SECURITY.md gains §4 masking vocabulary (maskMediaSelector/maskAssetUrls/maskAssetUrlFn) + the token/PII query-param denylist table, a §6 Referrer and credentials subsection (document-level <meta name=referrer content=no-referrer> after CSP + no-crossorigin omit-credentials, marked COMPLETED; line-214 forward-reference now past tense), and a structured Parent-Realm Object-URL Threat Model subsection (5 STRIDE rows + plain-language worst case: the child plays but cannot script/read/exfiltrate the parent-origin blob). docs/ARCHITECTURE.md limitation #6 rewritten -- <video>/<audio> mirrored BY REFERENCE (state+progressive+adaptive), residual narrowed to DRM/EME, MSE-without-manifest, raw pixels. Doc-marker discipline: doc edit + purity-test requiredMarkers edit in the SAME commit -- 12 existing markers kept verbatim + 6 new (maskMediaSelector/maskAssetUrls/maskAssetUrlFn/referrer/no-referrer/Parent-Realm Object-URL); rendererModules() glob + element/subtree/attr/text/css dispatch list UNTOUCHED (Open Question 1). Pure docs+test-marker change: no prod code, no envelope/relay, no new deps; suite 700/700, oracle unchanged. v2.0 Phase 15 (final phase) complete.
 
 ### Pending Todos
 
@@ -156,21 +167,26 @@ None yet.
 
 ### Blockers/Concerns
 
-- [Phase 12]: Baseline-fairness protocol details and the semantic-fidelity metric definition need a dedicated research pass before harness implementation
-- [Requirements]: REQUIREMENTS.md previously stated "32 total" v1 requirements; actual count is 39 — corrected during roadmap creation
-- [Phase 10]: RESOLVED 2026-06-16 — `@full-self-browsing/phantom-stream@0.1.0` published to npm (public) and confirmed installable; Phase 11 (FSB swap-in) is unblocked. Published under the existing `@full-self-browsing` npm org (the declared `@fullselfbrowsing` scope was unregistered).
+- [Phase 14]: Cross-realm MSE binding feasibility is the milestone's only genuinely uncertain area — creating `MediaSource` in the parent and binding its object URL to an in-iframe `<video>`, with hls.js running in the parent and `attachMedia`-ing the iframe element, is sound in principle but unproven across browsers. Spike in Playwright early in Phase 14; if blocked, the fallback is poster + "media not mirrorable" (already the graceful-absence path), so the milestone is not at risk — only the adaptive differentiator is.
+- [Phase 14]: Whether the child iframe needs `connect-src` (vs the parent doing all segment fetches) must be verified empirically; keep `default-src 'none'`/no `script-src` regardless.
+- [Phase 13]: Drift-tolerance thresholds (~0.25–0.5s hold band, large-drift hard-seek) are practice-based starting points — design the reconciler as a pure function so the numbers are configurable and table-tested, not baked in; tune later against the v2.1 evaluation harness.
+- [Phase 15]: The conservative default origin policy (https-only, block `localhost`/link-local/private ranges) needs a concrete denylist and host-override surface settled during Phase 15 planning.
+- [Milestone v2.1]: Baseline-fairness protocol details and the semantic-fidelity metric definition need a dedicated research pass before harness implementation (carried forward from v1.0).
+- [Phase 11]: RESOLVED 2026-06-16 — FSB swap-in verified in the FSB repo against `@full-self-browsing/phantom-stream@0.1.0`; API frozen at 1.0. No in-repo plans (FSB code stays in the FSB repo).
+- [Phase 10]: RESOLVED 2026-06-16 — `@full-self-browsing/phantom-stream@0.1.0` published to npm (public) under the existing `@full-self-browsing` org and confirmed installable.
 
 ## Deferred Items
 
-Items acknowledged and carried forward from previous milestone close:
+Items acknowledged and carried forward:
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
+| Milestone v2.1 | Evaluation corpus/harness (EVAL-01..06) + system-track paper (PAPR-01,02) | Deferred to v2.1 (provisional Phases 16–17) | 2026-06-19 |
 | Phase 06 UAT | Real MV3 watchdog service-worker eviction/recovery browser evidence | Deferred by user | 2026-06-15 |
 | Phase 06 UAT | Real bookmarklet policy/CSP blocked-injection browser evidence | Deferred by user | 2026-06-15 |
 
 ## Session Continuity
 
-Last session: 2026-06-16T15:26:18Z
-Stopped at: Phase 10 complete — @full-self-browsing/phantom-stream@0.1.0 published to npm (public); Phase 11 next
-Resume file: .planning/phases/10-npm-packaging-0-x-publish/10-05-SUMMARY.md
+Last session: 2026-06-21T19:28:46.427Z
+Stopped at: Completed 15-04-PLAN.md
+Resume file: None

@@ -37,6 +37,8 @@ import * as textChildlist from './scenarios/text-childlist.js';
 import * as sanitizeDivergence from './scenarios/sanitize-divergence.js';
 import * as phase8ProtocolExtensions from './scenarios/phase8-protocol-extensions.js';
 import * as cssomCaptureMode from './scenarios/cssom-capture-mode.js';
+import * as staticAssets from './scenarios/static-assets.js';
+import * as mediaPlaybackSync from './scenarios/media-playback-sync.js';
 
 /**
  * The full fixture x scenario matrix. Every reliability defense from the
@@ -60,6 +62,8 @@ const MATRIX = [
   { fixture: 'dialog.html', scenario: dialog, config: { runScripts: 'dangerously' } },
   { fixture: 'phase8-fidelity.html', scenario: phase8ProtocolExtensions, config: {} },
   { fixture: 'cssom-mode.html', scenario: cssomCaptureMode, config: { styleMode: 'cssom' } },
+  { fixture: 'static-assets.html', scenario: staticAssets, config: {} },
+  { fixture: 'media-playback-sync.html', scenario: mediaPlaybackSync, config: {} },
 ];
 
 function loadFixture(fixtureFile) {
@@ -436,6 +440,127 @@ for (const entry of MATRIX) {
         styleOps.some((op) => op.action === 'replace' && /40,\s*50,\s*60/.test(op.source.cssText)),
         'extracted CSSOM stream carries live stylesheet replacement'
       );
+    } else if (entry.scenario.name === 'static-assets') {
+      // D26 territory (Phase 12): the extracted snapshot carries the clone-only
+      // data-ps-currentsrc variant pin (ASST-03) and degrades blob:/oversized-
+      // data: <img>s to dimensioned data-ps-asset-unavailable placeholders
+      // (ASST-04). The reference has neither, so the single SNAPSHOT diverges.
+      assert.ok(
+        matched.has('D26-currentsrc-variant-pin'),
+        'static-assets exercises ledger entry D26'
+      );
+      assert.equal(
+        matched.size,
+        1,
+        `only D26 consulted in static-assets (matched: ${[...matched].join(', ')})`
+      );
+
+      const refSnap = refStream.find((msg) => msg.type === STREAM.SNAPSHOT);
+      const extSnap = extStream.find((msg) => msg.type === STREAM.SNAPSHOT);
+      assert.ok(refSnap && extSnap, 'both sides emit a snapshot');
+
+      // ASST-03: clone-only currentSrc pin present in extracted, absent in
+      // reference (the injected divergent currentSrc drove the enrichment).
+      assert.match(
+        extSnap.payload.html,
+        /data-ps-currentsrc="https:\/\/cdn\.fixture\.test\/img\/photo-1600\.png"/,
+        'extracted snapshot pins the negotiated currentSrc variant on the clone'
+      );
+      assert.doesNotMatch(
+        refSnap.payload.html,
+        /data-ps-currentsrc/,
+        'reference snapshot carries no currentSrc pin'
+      );
+
+      // ASST-04: blob:/oversized-data: degrade to a placeholder in extracted;
+      // the reference ships the raw (dead) reference instead.
+      assert.match(
+        extSnap.payload.html,
+        /data-ps-asset-unavailable="blob"/,
+        'extracted snapshot degrades the blob: <img> to a placeholder'
+      );
+      assert.match(
+        extSnap.payload.html,
+        /data-ps-asset-unavailable="oversized-data"/,
+        'extracted snapshot degrades the oversized data: <img> to a placeholder'
+      );
+      assert.doesNotMatch(
+        extSnap.payload.html,
+        /blob:https:\/\/fixture\.test/,
+        'a blob: reference never reaches the extracted wire'
+      );
+      assert.match(
+        refSnap.payload.html,
+        /blob:https:\/\/fixture\.test/,
+        'the reference ships the dead blob: reference (the gap this closes)'
+      );
+
+      // Pitfall 5: the SMALL inline data: image stays byte-identical (NOT
+      // degraded) on BOTH sides -- no over-degrade churn.
+      assert.match(
+        extSnap.payload.html,
+        /src="data:image\/png;base64,iVBORw0KGgo/,
+        'extracted snapshot keeps the small inline data: image byte-identical'
+      );
+    } else if (entry.scenario.name === 'media-playback-sync') {
+      // D27 territory (Phase 13): the extracted core enriches the SNAPSHOT with
+      // a nid-keyed media[] baseline (MEDIA-02) and emits STREAM.MEDIA side-
+      // channel messages on play/timeupdate (MWIRE-01). The reference tracks no
+      // media, so the SNAPSHOT diverges on media[] and the extracted stream
+      // carries extra trailing STREAM.MEDIA messages -- one scenario-pinned
+      // entry covers both shapes.
+      assert.ok(
+        matched.has('D27-media-playback-sync'),
+        'media-playback-sync exercises ledger entry D27'
+      );
+      assert.equal(
+        matched.size,
+        1,
+        `only D27 consulted in media-playback-sync (matched: ${[...matched].join(', ')})`
+      );
+
+      // Belt-and-braces, Shape B (media[]-only SNAPSHOT): the extracted snapshot
+      // carries a non-empty media[] baseline; the reference carries none -- the
+      // divergence direction is an extracted-only enrichment, not a reference
+      // behavior change the predicate happens to excuse.
+      const refSnap = refStream.find((msg) => msg.type === STREAM.SNAPSHOT);
+      const extSnap = extStream.find((msg) => msg.type === STREAM.SNAPSHOT);
+      assert.ok(refSnap && extSnap, 'both sides emit a snapshot');
+      assert.ok(
+        Array.isArray(extSnap.payload.media) && extSnap.payload.media.length >= 2,
+        'extracted snapshot carries a media[] baseline for the <video> and <audio>'
+      );
+      assert.ok(
+        !Array.isArray(refSnap.payload.media),
+        'reference snapshot carries no media[] field'
+      );
+      // The injected finite duration drives the VOD baseline shape (not live:true).
+      assert.ok(
+        extSnap.payload.media.every((m) => m.duration === 30 && m.paused === false && m.currentTime === 5),
+        'media[] entries carry the injected deterministic VOD playback state'
+      );
+
+      // Belt-and-braces, Shape A (extracted-only trailing STREAM.MEDIA): the
+      // reference emits zero media messages; the extracted side emits at least
+      // the discrete play plus the throttled timeupdate heartbeat.
+      assert.equal(
+        refStream.filter((msg) => msg.type === STREAM.MEDIA).length,
+        0,
+        'reference emits no STREAM.MEDIA messages'
+      );
+      const extMedia = extStream.filter((msg) => msg.type === STREAM.MEDIA);
+      assert.ok(
+        extMedia.length >= 2,
+        `extracted stream carries STREAM.MEDIA messages (got ${extMedia.length})`
+      );
+      assert.ok(
+        extMedia.some((msg) => msg.payload.event === 'play'),
+        'extracted stream carries the discrete play event'
+      );
+      assert.ok(
+        extMedia.some((msg) => msg.payload.event === 'timeupdate'),
+        'extracted stream carries the throttled timeupdate heartbeat'
+      );
     } else {
       // D1/D6/D7/D24 (and any future mismatch entry) must stay scoped:
       // every scenario other than the named divergence scenarios compares
@@ -556,6 +681,34 @@ test('basic-mutations with an EMPTY ledger throws UNDECLARED DIVERGENCE -- add-o
   const entry = MATRIX.find((p) => p.scenario === basicMutations);
   const { refStream, extStream } = await captureFlippedPair(entry);
 
+  assert.throws(
+    () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
+    /UNDECLARED DIVERGENCE/
+  );
+});
+
+test('static-assets with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D26 currentSrc pin / asset degrade is load-bearing', async () => {
+  const entry = MATRIX.find((p) => p.scenario === staticAssets);
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
+  // The divergence is REAL: without D26, the same stream pair that passes
+  // above must fail loudly -- proving the clone-only data-ps-currentsrc pin and
+  // the blob:/oversized-data: placeholder degrade are the thing permitting it,
+  // not a comparison blind spot.
+  assert.throws(
+    () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
+    /UNDECLARED DIVERGENCE/
+  );
+});
+
+test('media-playback-sync with an EMPTY ledger throws UNDECLARED DIVERGENCE -- D27 media[]/STREAM.MEDIA is load-bearing', async () => {
+  const entry = MATRIX.find((p) => p.scenario === mediaPlaybackSync);
+  const { refStream, extStream } = await captureFlippedPair(entry);
+
+  // The divergence is REAL: without D27, the same stream pair that passes above
+  // must fail loudly -- proving the extracted-only media[] baseline and the
+  // STREAM.MEDIA side channel are the thing permitting it, not a comparison
+  // blind spot.
   assert.throws(
     () => compareStreams(refStream, extStream, entry.fixture, entry.scenario.name, []),
     /UNDECLARED DIVERGENCE/
