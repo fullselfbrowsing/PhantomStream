@@ -3,7 +3,7 @@
 // This module is intentionally framework-free so it can run in a service
 // worker bundle or be unit-tested with a fake Chrome API.
 
-import { CONTROL, STREAM } from '../protocol/messages.js';
+import { CONTROL, STREAM, classifyManifest } from '../protocol/messages.js';
 
 export const PHANTOMSTREAM_WATCHDOG_ALARM = 'phantomstream-watchdog';
 export const PHANTOMSTREAM_SESSION_KEY = 'phantomstream:mv3-session';
@@ -35,7 +35,15 @@ function hasRemoveListener(event) {
   return event && typeof event.removeListener === 'function';
 }
 
-function validateChrome(chrome) {
+function hasWebRequestOnCompleted(chrome) {
+  return !!(chrome && chrome.webRequest && hasAddListener(chrome.webRequest.onCompleted));
+}
+
+// The core MV3 surface is always hard-required. The powerful chrome.webRequest
+// permission is required ONLY when manifest discovery is opted in, and even then
+// its absence DEGRADES GRACEFULLY (no throw, no listener, emit nothing) rather
+// than failing the adapter — the discovery returns a capability flag instead.
+function validateChrome(chrome, discoverManifests) {
   if (!chrome || Object(chrome) !== chrome) throw new Error('extension-chrome-required');
   if (!chrome.runtime || !hasAddListener(chrome.runtime.onMessage)) {
     throw new Error('extension-runtime-required');
@@ -49,6 +57,9 @@ function validateChrome(chrome) {
       || typeof chrome.alarms.create !== 'function') {
     throw new Error('extension-alarms-required');
   }
+  // When opted in, report whether the discovery permission is available; never
+  // throw on its absence (graceful degradation is the contract).
+  return { manifestDiscoveryAvailable: discoverManifests ? hasWebRequestOnCompleted(chrome) : false };
 }
 
 function cleanString(value) {
@@ -137,7 +148,18 @@ function invokeTransportSend(transport, type, payload) {
 export function createExtensionAdapter(options) {
   var opts = options || {};
   var chrome = opts.chrome;
-  validateChrome(chrome);
+
+  // Opt-in, off-by-default adaptive-manifest discovery (MADPT-02). chrome.webRequest
+  // is required ONLY when opted in, and its absence degrades gracefully.
+  var discoverManifests = opts.discoverManifests === true;
+  var validation = validateChrome(chrome, discoverManifests);
+  var manifestDiscoveryAvailable = !!(validation && validation.manifestDiscoveryAvailable);
+  var resolveActiveMediaNid = typeof opts.resolveActiveMediaNid === 'function'
+    ? opts.resolveActiveMediaNid
+    : function () { return null; };
+  // The hint is stamped with the same stream identity the adapter already
+  // forwards on the STREAM frames it relays, snooped from those payloads.
+  var currentIdentity = { streamSessionId: '', snapshotId: 0 };
 
   var transport = opts.transport || null;
   var alarmName = typeof opts.alarmName === 'string' && opts.alarmName
@@ -246,6 +268,7 @@ export function createExtensionAdapter(options) {
     var bridge = normalizeBridgeMessage(message);
     if (!bridge || typeof bridge.type !== 'string') return undefined;
     if (STREAM_TYPES[bridge.type]) {
+      observeStreamIdentity(bridge.payload);
       invokeTransportSend(transport, bridge.type, bridge.payload || {});
       return { ok: true };
     }
@@ -276,6 +299,110 @@ export function createExtensionAdapter(options) {
     return dispatchTransportControl(bridge.type, bridge.payload || {});
   }
 
+  // Snoop the stream identity off the side-channel STREAM payloads the adapter
+  // relays so an emitted hint carries the same identity. Missing fields are
+  // ignored (the viewer's isCurrentStream accepts an empty-identity hint until a
+  // real identity has been observed).
+  function observeStreamIdentity(payload) {
+    if (!payload || Object(payload) !== payload) return;
+    if (typeof payload.streamSessionId === 'string' && payload.streamSessionId) {
+      currentIdentity.streamSessionId = payload.streamSessionId;
+    }
+    if (typeof payload.snapshotId === 'number' && Number.isFinite(payload.snapshotId)) {
+      currentIdentity.snapshotId = payload.snapshotId;
+    }
+  }
+
+  // Read the content-type from the Chromium responseHeaders array (an array of
+  // { name, value }; the header name may be any casing).
+  function contentTypeOf(responseHeaders) {
+    if (!Array.isArray(responseHeaders)) return '';
+    for (var i = 0; i < responseHeaders.length; i += 1) {
+      var header = responseHeaders[i];
+      if (header && typeof header.name === 'string'
+          && header.name.toLowerCase() === 'content-type') {
+        return typeof header.value === 'string' ? header.value : '';
+      }
+    }
+    return '';
+  }
+
+  // Best-effort manifest observation. Classifies a completed response via the
+  // pure classifyManifest filter and, on a non-null kind, emits STREAM.MEDIA_HINT
+  // through the same transport.send path. Fully contained so a hostile details
+  // object can never wedge the observer.
+  function handleManifestCompleted(details) {
+    if (disposed || !discoverManifests) return;
+    try {
+      if (!details || typeof details.url !== 'string') return;
+      var contentType = contentTypeOf(details.responseHeaders);
+      var kind = classifyManifest({ url: details.url, contentType: contentType });
+      if (!kind) return;
+      emitMediaHint(details.url, kind, contentType);
+    } catch (error) {
+      logWarn('manifest-observe-failed', error);
+    }
+  }
+
+  function emitMediaHint(manifestUrl, kind, contentType) {
+    if (!transport || typeof transport.send !== 'function') return;
+    var payload = {
+      scope: 'page',
+      manifestUrl: manifestUrl,
+      kind: kind,
+      streamSessionId: currentIdentity.streamSessionId,
+      snapshotId: currentIdentity.snapshotId
+    };
+    if (contentType) payload.contentType = contentType;
+    var nid = null;
+    try {
+      nid = resolveActiveMediaNid();
+    } catch (error) {
+      nid = null; // correlation is best-effort; failure -> page scope
+    }
+    if (typeof nid === 'string' && nid) {
+      payload.scope = 'element';
+      payload.nid = nid;
+    }
+    try {
+      transport.send(STREAM.MEDIA_HINT, payload);
+    } catch (error) {
+      logWarn('media-hint-send-failed', error);
+    }
+  }
+
+  var manifestListener = function manifestListener(details) {
+    return handleManifestCompleted(details);
+  };
+
+  function armManifestObserver() {
+    if (!discoverManifests) return;
+    if (!manifestDiscoveryAvailable) {
+      // Opted in but the permission/API is absent: graceful no-op (no listener,
+      // no hint, no throw). The progressive path is unaffected.
+      logWarn('manifest-discovery-unavailable');
+      return;
+    }
+    try {
+      chrome.webRequest.onCompleted.addListener(
+        manifestListener,
+        { urls: ['<all_urls>'] },
+        ['responseHeaders']
+      );
+    } catch (error) {
+      logWarn('manifest-observer-arm-failed', error);
+    }
+  }
+
+  function disarmManifestObserver() {
+    if (!manifestDiscoveryAvailable) return;
+    try {
+      if (chrome.webRequest && hasRemoveListener(chrome.webRequest.onCompleted)) {
+        chrome.webRequest.onCompleted.removeListener(manifestListener);
+      }
+    } catch (error) { /* best-effort cleanup */ }
+  }
+
   var runtimeListener = function runtimeListener(message, sender) {
     return handleRuntimeMessage(message, sender);
   };
@@ -290,6 +417,7 @@ export function createExtensionAdapter(options) {
       installed = true;
       chrome.runtime.onMessage.addListener(runtimeListener);
       chrome.alarms.onAlarm.addListener(alarmListener);
+      armManifestObserver();
       if (transport && typeof transport.onMessage === 'function') {
         unsubscribeTransport = transport.onMessage(handleTransportMessage);
       }
@@ -305,6 +433,7 @@ export function createExtensionAdapter(options) {
       if (hasRemoveListener(chrome.alarms.onAlarm)) {
         chrome.alarms.onAlarm.removeListener(alarmListener);
       }
+      disarmManifestObserver();
       if (typeof unsubscribeTransport === 'function') {
         unsubscribeTransport();
       }
