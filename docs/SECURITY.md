@@ -143,11 +143,17 @@ serialization paths plus the mutation attr path routes through the same testable
   baseline and **no `STREAM.MEDIA`** events -- neither its URL nor its playback timeline is
   mirrored.
 - `maskAssetUrls` -- a boolean. When `true`, every asset/media URL is parsed and its **token / PII
-  query params are stripped** before it goes on the wire; functional params survive. It is
-  **off by default**, so with masking disabled asset/media URLs stay **byte-identical** on the
-  wire (the differential oracle is preserved, no new ledger entry). When a URL has no denied
-  params the original string is returned unchanged (no normalization), preserving byte-identity
-  per-URL even with the global boolean on.
+  query params are stripped** before it goes on the wire; functional params are **preserved (not
+  stripped)**. It is **off by default**, so with masking disabled asset/media URLs stay
+  **byte-identical** on the wire (the differential oracle is preserved, no new ledger entry).
+  Byte-identity is guaranteed only on the no-strip path: when a URL has no denied param the
+  original string is returned **unchanged** (no `URL.toString()`, so no normalization), which is
+  also what keeps the off-by-default oracle intact. When a denied param **is** removed the URL is
+  re-serialized via `URL.toString()`, so the surviving functional params are preserved
+  *semantically* but the string may be normalized equivalently (`%20` -> `+`, host lowercased,
+  a default `:443` / `:80` dropped, percent-encoding canonicalized). This re-encode decodes to the
+  same bytes server-side -- it is not a fetch break -- but it is a wire divergence, so "survives
+  byte-for-byte" holds only for URLs that carried no denied param.
 - `maskAssetUrlFn(url, ctx) => string | null` -- a custom redactor with full host control. A
   returned string replaces the URL; `null` **blocks** the URL (placeholder); and a **thrown error
   fails closed -- the URL is blocked** (not raised, never passed raw). This is stricter than the
@@ -157,7 +163,10 @@ serialization paths plus the mutation attr path routes through the same testable
 
 The `maskAssetUrls` strip removes only **credential / signature / expiry / secret** params; it is
 matched **case-insensitively**, by **exact name OR a denied prefix**. Functional params (`w`, `h`,
-`q`, `format`, `v`, `id`, a `?t=` seek timestamp, etc.) are never stripped. The documented denylist:
+`q`, `format`, `v`, `id`, a `?t=` seek timestamp, etc.) are never stripped -- though on a URL where
+some other param *is* stripped they ride along through the `URL.toString()` re-serialization and
+may come back equivalently re-encoded (see the `maskAssetUrls` bullet above). The documented
+denylist:
 
 | Source | Param names |
 |---|---|
