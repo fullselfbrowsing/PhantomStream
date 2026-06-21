@@ -182,6 +182,27 @@ expiry timestamp is a replay / privacy signal; a plain content `?t=42` seek time
 different name and survives. The list is opt-in (`maskAssetUrls`) and auditable here; a host that
 needs different membership uses `maskAssetUrlFn` for full control.
 
+**Known residuals of the built-in `maskAssetUrls` strip.** The boolean strip is keyed on
+`URLSearchParams` param **names**, which split a query only on `&`. Two shapes therefore fall
+outside it:
+
+- **Matrix / `;`-separated query params.** A legacy `;`-delimited query
+  (`?w=10;token=SECRET&sig=x`) hides the token inside another param's *value* (`w` =
+  `"10;token=SECRET"`), so the name match never sees it and it survives on the wire (the
+  separately-named `sig` is still stripped). Semicolon query separators are legacy and uncommon,
+  so the built-in strip does not split on `;`; a host whose signed URLs use matrix params (or that
+  needs airtight redaction) should use `maskAssetUrlFn`, which receives the raw URL string and can
+  redact any shape.
+- **URL fragments.** A token in the fragment (`#access_token=...`) is not part of the query at
+  all. When the fragment carries a **denylisted param name** the built-in strip now drops the
+  whole fragment (it is never needed for an asset/media fetch); a fragment that merely contains
+  `=` without a denied name (an opaque app-router route, for example) is left intact, so a host
+  with credential-bearing fragments under non-denylisted names should still reach for
+  `maskAssetUrlFn`.
+
+Both residuals are fully covered by `maskAssetUrlFn`, which sees the complete URL string before
+any name-keyed parsing.
+
 ## 5. Host must-nevers
 
 Hosts embedding PhantomStream must preserve these rules:
