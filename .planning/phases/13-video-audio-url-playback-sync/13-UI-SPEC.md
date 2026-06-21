@@ -1,10 +1,11 @@
 ---
 phase: 13
 slug: video-audio-url-playback-sync
-status: draft
+status: approved
 shadcn_initialized: false
 preset: none
 created: 2026-06-20
+reviewed_at: 2026-06-20
 ---
 
 # Phase 13 — UI Design Contract
