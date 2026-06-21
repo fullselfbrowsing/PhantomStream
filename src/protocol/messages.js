@@ -23,6 +23,8 @@ export const STREAM = {
   SCROLL: 'ext:dom-scroll',
   /** Media playback state. Payload: MediaSyncPayload */
   MEDIA: 'ext:dom-media',
+  /** Adaptive-manifest discovery hint (opt-in, adapter-originated). Payload: MediaHintPayload */
+  MEDIA_HINT: 'ext:dom-media-hint',
   /** Automation overlay state. Payload: { glow, progress, streamSessionId, snapshotId } */
   OVERLAY: 'ext:dom-overlay',
   /** Native dialog mirroring. Payload: { dialog: DialogPayload } */
@@ -225,6 +227,30 @@ export const NID_ATTR = 'data-fsb-nid';
  * @property {number} [duration]          Media duration in seconds; present ONLY when finite
  * @property {boolean} [live]             true when duration is non-finite (stream); mutually exclusive with duration
  * @property {number} sentAt              Capture-side monotonic ms stamp for latency compensation
+ * @property {string} streamSessionId     Identity: minted per stream session
+ * @property {number} snapshotId          Identity: minted per snapshot
+ */
+
+/**
+ * One adaptive-manifest discovery hint surfaced by an adapter's opt-in network
+ * observation (Playwright `page.on('response')` / extension `chrome.webRequest`).
+ * The hint originates in the ADAPTER, never the capture core, so it adds no
+ * capture-wire divergence (no differential-oracle entry); it rides the existing
+ * raw relay + 1 MiB cap with the envelope byte-unchanged, and old viewers ignore
+ * the unknown STREAM.MEDIA_HINT type via the renderer dispatch default.
+ *
+ * Addressing is nid-scoped when manifest->element correlation is confident, else
+ * page-scoped (nid omitted, scope 'page'); a page hint is matched to an
+ * MSE-opaque media element on play by the viewer. Identity-stamped like every
+ * side channel; the viewer re-gates `manifestUrl` through the same fail-closed
+ * origin policy before any use.
+ *
+ * @typedef {Object} MediaHintPayload
+ * @property {string} [nid]               Element nid when correlation is confident; omitted for page-level
+ * @property {'page'|'element'} scope     'element' (nid set) or 'page' (viewer matches on play)
+ * @property {string} manifestUrl         Absolute manifest URL (https; viewer re-gates before use)
+ * @property {'hls'|'dash'} kind          Derived from URL extension and/or content-type
+ * @property {string} [contentType]       Observed response content-type (diagnostic)
  * @property {string} streamSessionId     Identity: minted per stream session
  * @property {number} snapshotId          Identity: minted per snapshot
  */
