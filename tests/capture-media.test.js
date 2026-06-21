@@ -481,3 +481,68 @@ test('Task 2: a removed element\'s listeners are detached -- events on it after 
     env.teardown();
   }
 });
+
+// ===========================================================================
+// WR-01: host-excluded (skipElement) media is neither baselined nor tracked
+// ===========================================================================
+
+test('WR-01: a skipElement-excluded <video> emits NO media[] baseline entry (parity with the value tracker)', () => {
+  // Use createCapture directly so a skipElement predicate can be supplied (the
+  // bare serializeSnapshot(doc) helper builds a default-options capture). The
+  // ambient globals are installed via setupEnv so capture.serializeSnapshot()
+  // sees the jsdom realm.
+  const env = setupEnv('<div id="host-ui"><video id="skipped"></video></div><video id="tracked"></video>');
+  try {
+    const skipped = env.document.getElementById('skipped');
+    const tracked = env.document.getElementById('tracked');
+    stubMedia(skipped, { currentTime: 9, paused: false, muted: false, volume: 1, playbackRate: 1, loop: false, ended: false, duration: 50 });
+    stubMedia(tracked, { currentTime: 4, paused: true, muted: false, volume: 1, playbackRate: 1, loop: false, ended: false, duration: 80 });
+
+    // skipElement excludes the host-UI subtree (the same predicate that excludes
+    // a same-page loopback viewer mirror).
+    env.capture = createCapture({
+      transport: { send() {} },
+      logger: silentLogger(),
+      skipElement(el) { return el && el.id === 'host-ui'; },
+    });
+    const payload = env.capture.serializeSnapshot();
+
+    assert.ok(Array.isArray(payload.media), 'snapshot still carries a media[] array for the non-excluded element');
+    assert.equal(payload.media.length, 1, 'only the non-excluded <video> is baselined');
+    assert.equal(payload.media[0].currentTime, 4, 'the surviving baseline entry is the tracked (non-skipped) element');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('WR-01: a skipElement-excluded <video> emits NO STREAM.MEDIA frames (wire never leaks excluded host-UI playback)', async () => {
+  const env = setupEnv('<div id="host-ui"><video id="skipped"></video></div><video id="tracked"></video>');
+  try {
+    const skipped = env.document.getElementById('skipped');
+    const tracked = env.document.getElementById('tracked');
+    stubMedia(skipped, { currentTime: 9, paused: false, muted: false, volume: 1, playbackRate: 1, loop: false, ended: false, duration: 50 });
+    stubMedia(tracked, { currentTime: 4, paused: false, muted: false, volume: 1, playbackRate: 1, loop: false, ended: false, duration: 80 });
+
+    const transport = createLoopbackTransport();
+    env.capture = createCapture({
+      transport,
+      logger: silentLogger(),
+      skipElement(el) { return el && el.id === 'host-ui'; },
+    });
+    env.capture.start();
+    await settle(env.window);
+
+    // Discrete events on the EXCLUDED element must produce no STREAM.MEDIA.
+    const beforeSkipped = mediaMsgs(transport).length;
+    for (const evName of DISCRETE_EVENTS) skipped.dispatchEvent(new env.window.Event(evName));
+    assert.equal(mediaMsgs(transport).length, beforeSkipped, 'no STREAM.MEDIA from a skipElement-excluded <video>');
+
+    // The non-excluded element is still tracked (the gate is targeted, not a
+    // blanket media kill).
+    const beforeTracked = mediaMsgs(transport).length;
+    tracked.dispatchEvent(new env.window.Event('play'));
+    assert.equal(mediaMsgs(transport).length, beforeTracked + 1, 'the non-excluded <video> still emits STREAM.MEDIA');
+  } finally {
+    env.teardown();
+  }
+});

@@ -4600,7 +4600,19 @@ export function createCapture(config) {
     var out = [];
     if (!document || typeof document.querySelectorAll !== 'function') return out;
     var nodes = document.querySelectorAll('video, audio');
-    for (var i = 0; i < nodes.length; i++) out.push(nodes[i]);
+    for (var i = 0; i < nodes.length; i++) {
+      // WR-01: a <video>/<audio> the host excludes (skipElement / a blocked or
+      // wire-dropped ancestor -- e.g. the host's own viewer UI in a same-page
+      // loopback mirror) must NOT be media-tracked. The value tracker already
+      // gates on these predicates (buildValueDiff); the media baseline now
+      // matches so a deliberately-excluded element emits no media[] entry.
+      if (skipElementWithAncestors(nodes[i])
+        || blockedWithAncestors(nodes[i])
+        || wireDroppedWithAncestors(nodes[i])) {
+        continue;
+      }
+      out.push(nodes[i]);
+    }
     return out;
   }
 
@@ -4679,6 +4691,13 @@ export function createCapture(config) {
     if (typeof el.addEventListener !== 'function') return;
     var tag = el.tagName ? String(el.tagName).toLowerCase() : '';
     if (tag !== 'video' && tag !== 'audio') return;
+    // WR-01: never track a host-excluded media element. This is the chokepoint
+    // every attach path funnels through (startMediaTracker, the added-node path,
+    // attachMediaListenersUnder), so gating here guarantees a skipped/blocked/
+    // wire-dropped <video>/<audio> emits no STREAM.MEDIA frames -- matching the
+    // value tracker's exclusion (buildValueDiff) so the wire never leaks the
+    // play/pause/seek timeline of deliberately-excluded host-UI media.
+    if (skipElementWithAncestors(el) || blockedWithAncestors(el) || wireDroppedWithAncestors(el)) return;
     if (mediaTracked.has(el)) return;
 
     var record = { lastMediaSend: 0, handlers: {} };
