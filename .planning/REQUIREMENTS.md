@@ -23,11 +23,11 @@ Each maps to exactly one roadmap phase.
 
 ### Time-Based Media + Playback Sync (MEDIA)
 
-- [ ] **MEDIA-01**: Progressive/direct `<video>` (mp4/webm) plays in the viewer, loading bytes from the source URL — never through the relay
+- [x] **MEDIA-01**: Progressive/direct `<video>` (mp4/webm) plays in the viewer, loading bytes from the source URL — never through the relay
 - [x] **MEDIA-02**: Initial media state (currentTime, paused, muted, volume, playbackRate, loop, duration) is captured in the snapshot as the baseline for deltas
 - [x] **MEDIA-03**: Playback changes (play/pause, seek, ratechange) stream over the throttled media-sync channel and are applied in the viewer with drift-corrected interpolation — hard-seek only on large drift, never per-message
 - [x] **MEDIA-04**: `<audio>` elements are mirrored by the same URL + playback-state model as video
-- [ ] **MEDIA-05**: The viewer honors autoplay policy (muted-autoplay default; observable affordance when `play()` is rejected) — the mirror never wedges on a blocked play
+- [x] **MEDIA-05**: The viewer honors autoplay policy (muted-autoplay default; observable affordance when `play()` is rejected) — the mirror never wedges on a blocked play
 
 ### Media Protocol & Sync Contract (MWIRE)
 
@@ -107,11 +107,11 @@ Which phases cover which requirements. Finalized during roadmap creation.
 | ASST-05 | Phase 12 | Complete |
 | MSEC-01 | Phase 12 | Complete |
 | MSEC-02 | Phase 12 | Complete |
-| MEDIA-01 | Phase 13 | Pending |
+| MEDIA-01 | Phase 13 | Complete |
 | MEDIA-02 | Phase 13 | Complete |
 | MEDIA-03 | Phase 13 | Complete |
 | MEDIA-04 | Phase 13 | Complete |
-| MEDIA-05 | Phase 13 | Pending |
+| MEDIA-05 | Phase 13 | Complete |
 | MWIRE-01 | Phase 13 | Complete |
 | MWIRE-02 | Phase 13 | Complete |
 | MADPT-01 | Phase 14 | Pending |

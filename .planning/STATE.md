@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Asset & Media Streaming
 status: executing
-stopped_at: Completed 13-02-PLAN.md
-last_updated: "2026-06-21T03:44:23.357Z"
-last_activity: 2026-06-21 -- Phase 13 Plan 02 complete (capture media[] baseline + STREAM.MEDIA tracker)
+stopped_at: Completed 13-03-PLAN.md
+last_updated: "2026-06-21T04:08:08.733Z"
+last_activity: 2026-06-21 -- Phase 13 Plan 03 complete (renderer media driver + media-src CSP/SSRF gate + affordances)
 progress:
   total_phases: 15
   completed_phases: 11
   total_plans: 64
-  completed_plans: 62
-  percent: 73
+  completed_plans: 63
+  percent: 98
 ---
 
 # Project State
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-06-19)
 ## Current Position
 
 Phase: 13 (Video/Audio URL + Playback Sync) — EXECUTING
-Plan: 3 of 4
-Status: Ready to execute
-Last activity: 2026-06-21
+Plan: 4 of 4
+Status: Ready to execute (Plans 01-03 complete; 04 = oracle slice / UAT)
+Last activity: 2026-06-21 — Phase 13 Plan 03 complete (renderer media driver + media-src CSP/SSRF gate + 3 affordances)
 
 **v2.0 phase order:** 12 → 13 → 14 → 15
 
@@ -98,6 +98,7 @@ Last activity: 2026-06-21
 | Phase 12 P12-03 | 42min | 3 tasks | 8 files |
 | Phase 13 P01 | 9min | 2 tasks | 6 files |
 | Phase 13 P02 | 11min | 2 tasks | 2 files |
+| Phase 13 P03 | 38min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -129,6 +130,8 @@ Earlier v1.0 decisions are retained in PROJECT.md Key Decisions and the prior ph
 - [Phase ?]: [Phase 13-01]: reconcileMediaDrift is a pure zero-import fn in src/protocol/media-reconcile.js (hold|pause|nudge|seek|rejoin-edge); 0.25s hold band, +/-5%-capped sign-correct nudge, hard-seek clamps to [0,duration], explicit-seeked short-circuit, live branch before duration math; no field ever NaN (6561-case hostile sweep). No D27 ledger entry yet (lands with 13-02 capture fixture).
 - [Phase ?]: [Phase 13-02]: serializeDOM appends a nid-keyed media[] playback baseline ONLY when >=1 <video>/<audio> exists (media-free fixtures stay byte-identical to the FSB reference; differential-ledger entry deferred to 13-04); duration sent only when finite, live:true otherwise (Infinity->null trap).
 - [Phase ?]: [Phase 13-02]: startMediaTracker is a scroll-twin armed/torn at the startScrollTracker sites; media events do not bubble so listeners are PER-ELEMENT (Map+records), with added-node attach + removed-node detach; STREAM.MEDIA discrete events emit immediately, timeupdate throttled at MEDIA_SYNC_THROTTLE_MS and playing-only; every payload nid-addressed + identity-stamped + sentAt-stamped; no media bytes on the wire.
+- [Phase 13-03]: media-src http: https: data: added to CSP_META (twin of img-src, NO blob: -- Phase 14; default-src 'none'/no script-src retained). gateSnapshotAssets generalized (findImgTagEnd->findTagEnd, a unified <img>/<video>/<source> pre-parse scan via nextAssetOpener) so <video src>/<video poster>/<source src> to a blocked origin are neutralized to the dimensioned placeholder at the STRING layer before the parser prefetches (Pitfall 5 SSRF fix); gateFragmentMedia is post-parse defense-in-depth + poster-mode source strip.
+- [Phase 13-03]: handleMedia (case STREAM.MEDIA; default already ignores it for old viewers) staleness-guards via isCurrentStream, resolves the nid, runs reconcileMediaDrift, and drives the inert in-iframe element cross-realm from the PARENT realm via applyMediaAction (seeking-hold, readyState>=1 seek gate, seekable.length rejoin guard). ensurePlaying: muted=true before first play; if (p !== undefined && typeof p.catch === 'function') jsdom guard; NotAllowedError -> media-blocked affordance + onMediaBlocked(nid) CONFIG callback (assetOriginPolicy-hook family, contained-not-rethrown), never wedges. Unmute trigger: el.muted && payload.muted===false in reference -> show media-unmute (onActivate sets muted=false+volume then hides). poster/off: no driver, no affordance (source already gate-neutralized). Snapshot media[] baseline applied once per nid on first bind (readyState-gated) then reconciler owns it (Pitfall 7). Sandbox stays EXACTLY allow-same-origin. No D27 ledger entry (renderer-only slice; the media-playback-sync fixture + D27 land in 13-04). Full suite 577/577.
 
 ### Pending Todos
 
@@ -156,6 +159,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-06-21T03:41:03.713Z
-Stopped at: Completed 13-02-PLAN.md
+Last session: 2026-06-21T04:08:08.729Z
+Stopped at: Completed 13-03-PLAN.md
 Resume file: None
