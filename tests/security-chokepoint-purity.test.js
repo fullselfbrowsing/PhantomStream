@@ -235,7 +235,18 @@ test('docs/SECURITY.md exists and carries the embed security contract markers', 
     'maskTextSelector',
     'Host must-nevers',
     'frame-ancestors',
-    'dialog/overlay side-channel'
+    'dialog/overlay side-channel',
+    // Phase 15 (MSEC-03/MSEC-04): pin the asset/media URL masking vocabulary,
+    // the document-level referrer suppression, and the parent-realm object-URL
+    // threat model so a future edit cannot silently drop the masking contract,
+    // weaken the referrerpolicy=no-referrer / no-credentials posture, or delete
+    // the blob: blast-radius threat subsection.
+    'maskMediaSelector',
+    'maskAssetUrls',
+    'maskAssetUrlFn',
+    'referrer',
+    'no-referrer',
+    'Parent-Realm Object-URL'
   ];
 
   for (const marker of requiredMarkers) {

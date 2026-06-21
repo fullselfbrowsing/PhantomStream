@@ -121,6 +121,54 @@ on the wire in raw form.
 - `select` / `option` display text remains a known privacy boundary: value masking does not make
   option labels private unless they are also covered by `maskTextSelector` or `blockSelector`.
 
+### Asset and media URL masking (MSEC-03)
+
+v2.0 mirrors images and `<video>` / `<audio>` **by reference** -- the wire carries URL strings and
+small playback state, and the viewer fetches the bytes (see §6). A signed-CDN URL can therefore
+carry credential/PII query params, and a media element's URL plus playback timeline can itself be
+private. Three host masking options, all validated at factory time alongside the existing
+selector family, redact or block those URLs **capture-side, before transport** -- the wire is
+already clean and the renderer never un-masks. URL masking lives in one place: a dedicated
+`'asset-url'` / `'media-url'` dispatch in `sanitizeForWire`, so every URL-bearing attribute
+(`src`, `poster`, `data`, `srcset` candidates) across the snapshot, iframe, and added-node
+serialization paths plus the mutation attr path routes through the same testable helper.
+
+- `maskMediaSelector` -- a CSS selector. A matched media/asset element **omits its URL from the
+  wire and degrades to the dimensioned placeholder** (the `blockSelector` path, identity-only:
+  `data-fsb-nid` + `rr_width` + `rr_height`). It also reuses the media-tracker skip predicates, so
+  a masked `<video>` / `<audio>` emits **no `STREAM.MEDIA`** baseline and **no `STREAM.MEDIA`**
+  events -- neither its URL nor its playback timeline is mirrored.
+- `maskAssetUrls` -- a boolean. When `true`, every asset/media URL is parsed and its **token / PII
+  query params are stripped** before it goes on the wire; functional params survive. It is
+  **off by default**, so with masking disabled asset/media URLs stay **byte-identical** on the
+  wire (the differential oracle is preserved, no new ledger entry). When a URL has no denied
+  params the original string is returned unchanged (no normalization), preserving byte-identity
+  per-URL even with the global boolean on.
+- `maskAssetUrlFn(url, ctx) => string | null` -- a custom redactor with full host control. A
+  returned string replaces the URL; `null` **blocks** the URL (placeholder); and a **thrown error
+  fails closed -- the URL is blocked** (not raised, never passed raw). This is stricter than the
+  text mask functions (whose fallback is the default asterisk mask) because a thrown URL redactor
+  is an undecided-unsafe URL, which must not be fetched. `ctx` carries the element/attr/tag/nid so
+  the host can decide per asset.
+
+The `maskAssetUrls` strip removes only **credential / signature / expiry / secret** params; it is
+matched **case-insensitively**, by **exact name OR a denied prefix**. Functional params (`w`, `h`,
+`q`, `format`, `v`, `id`, a `?t=` seek timestamp, etc.) are never stripped. The documented denylist:
+
+| Source | Param names |
+|---|---|
+| AWS S3 / CloudFront presigned (SigV4) | `X-Amz-Signature`, `X-Amz-Credential`, `X-Amz-Security-Token`, `X-Amz-Algorithm`, `X-Amz-Date`, `X-Amz-Expires`, `X-Amz-SignedHeaders`, plus the `x-amz-` *prefix* family |
+| AWS S3 / CloudFront presigned (SigV2 / canned policy) | `AWSAccessKeyId`, `Signature`, `Expires`, `Policy`, `Key-Pair-Id` |
+| Google Cloud Storage signed URL | `X-Goog-Signature`, `X-Goog-Credential`, `X-Goog-Algorithm`, `X-Goog-Date`, `X-Goog-Expires`, `X-Goog-SignedHeaders`, `GoogleAccessId`, plus the `x-goog-` *prefix* family |
+| Azure Blob SAS | `sig`, `se`, `sp`, `sv`, `sr`, `st`, `skoid`, `sktid`, `skt`, `ske`, `sks`, `skv`, `spr`, `sip`, `ss`, `srt` |
+| Generic token / secret / auth | `token`, `access_token`, `auth`, `authorization`, `apikey`, `api_key`, `key`, `signature`, `sign`, `hash`, `hmac`, `jwt`, `password`, `passwd`, `pwd`, `secret`, `session`, `sessionid`, `sid`, `expires`, `expiry`, `policy` |
+
+The `x-amz-` / `x-goog-` prefix rules subsume the explicit AWS / GCP rows; both are listed for
+clarity. `Expires` / `se` / `X-Amz-Expires` / `X-Goog-Expires` are stripped because a signed-URL
+expiry timestamp is a replay / privacy signal; a plain content `?t=42` seek timestamp is a
+different name and survives. The list is opt-in (`maskAssetUrls`) and auditable here; a host that
+needs different membership uses `maskAssetUrlFn` for full control.
+
 ## 5. Host must-nevers
 
 Hosts embedding PhantomStream must preserve these rules:
@@ -211,8 +259,66 @@ no `allow-scripts` literal and the static scan stays green), and the srcdoc CSP 
 `default-src 'none'`, the existing `img-src http: https: data:` already covers every static image
 surface (including `<video>` poster), there is **no `script-src`**, and there is **no `media-src`**
 -- the scoped `media-src` directive is deferred to Phase 13 (when `<video>`/`<audio>` actually
-needs it). Capture-side asset/media URL **masking** and `referrerpolicy` completion are Phase 15
-(MSEC-03/MSEC-04); Phase 12 makes the fetch-gate decisions, not the masking.
+needs it). Capture-side asset/media URL **masking** and `referrerpolicy` completion are **done in
+Phase 15** (MSEC-03/MSEC-04): see §4 Masking Guarantees for the masking vocabulary and the
+**Referrer and credentials** subsection below for the `referrerpolicy="no-referrer"` /
+no-credentials posture. Phase 12 makes the fetch-gate decisions, not the masking.
+
+**Referrer and credentials (MSEC-04, completed in Phase 15).** Because the viewer's browser now
+fetches mirrored asset/media URLs, two leakage vectors are closed at the document level:
+
+- **`referrerpolicy="no-referrer"`** is delivered once as a document-level
+  `<meta name="referrer" content="no-referrer">` injected into the srcdoc `<head>` **immediately
+  after the CSP meta** (`src/renderer/snapshot.js`), before the charset, viewport, the first
+  stylesheet `<link>`, and the first payload `<img>`. One document control covers **every**
+  viewer subresource fetch -- `<img>`, `<video>` / `<source>`, `<video>` poster, CSS
+  `background-image` / `url()`, fonts -- including CSS-initiated fetches that a per-element
+  `referrerpolicy` attribute could never reach. The mirrored page URL (which can itself carry
+  tokens) therefore never leaks in the `Referer` header to third-party CDNs.
+- **No credentials by default.** The posture already holds and is now documented and asserted: an
+  `allow-same-origin`-sandboxed srcdoc with **no `crossorigin` attribute** anywhere issues no-CORS
+  cross-origin GETs that omit credentials to third-party origins. Phase 15 deliberately adds **no**
+  `crossorigin` attribute -- forcing `crossorigin="anonymous"` would turn benign fetches into CORS
+  requests and break otherwise-fine assets served without `Access-Control-Allow-Origin`.
+
+The string-layer contract (the `no-referrer` meta is present, ordered after the CSP meta and
+before the first subresource, and no `crossorigin` attribute is emitted) is unit-pinned. The
+**live** referrer suppression and credential omission -- real `Referer`-less GETs and CSP
+enforcement observed in a browser -- are the documented deferred real-browser UAT, since jsdom
+neither parses the srcdoc nor issues real subresource requests (the same hidden-tab / jsdom limit
+as Phases 13-14).
+
+### Parent-Realm Object-URL Threat Model
+
+Adaptive playback (HLS / DASH via Media Source Extensions) mints a `blob:` **object URL** in the
+**parent (renderer-owning) realm** -- `URL.createObjectURL(mediaSource)` -- and assigns it to the
+**inert in-iframe** `<video>.src`. hls.js runs in the parent and `attachMedia`s the iframe element;
+the **parent** fetches every media segment and appends to the `SourceBuffer`. This is the one
+genuinely novel cross-realm construct in v2.0, so its blast radius is threat-modeled here against
+the existing sandbox. The asset under consideration is that parent-origin `blob:` object URL.
+
+| # | Threat | STRIDE | Why it is mitigated |
+|---|---|---|---|
+| 1 | Mirrored (attacker-influenced) content scripts the page to read the object URL's bytes and exfiltrate them | Information Disclosure | The iframe sandbox is **exactly `allow-same-origin`, never `allow-scripts`** -- no script runs inside the mirror at all. A `blob:` URL is readable only via `fetch` / `XHR` / `FileReader`, all of which require script. With no script the child can *play* the element but cannot *read* the blob. `createViewer` reads the token back and throws `viewer-sandbox-invalid` on any deviation. |
+| 2 | The object URL is parent-origin -- can the child reach parent-origin `blob:` resources for non-media use? | Information Disclosure / Elevation of Privilege | The blob's origin is the **parent document's**, not the mirrored page's. The child has no script to dereference it, and CSP `media-src blob:` permits only media *loading* of `blob:`, not `fetch` / `connect` (there is **no `connect-src`**). The blob is usable solely as a media source by the inert element. |
+| 3 | A leaked / long-lived object URL persists after the player is gone (use-after-free / leak / cross-session bleed) | Information Disclosure / Denial of Service | The object URL is **revoked on `destroy` / `destroyAll`** (`URL.revokeObjectURL`), and `destroyAll()` runs before any new-identity snapshot document swap, tearing down every parent-realm player first. A revoked `blob:` is dead; a later session cannot resolve it. |
+| 4 | `blob:` widens the CSP enough to load arbitrary local resources | Tampering | `blob:` is scoped to **`media-src` only** (not `img-src`, not `default-src`). `default-src 'none'` plus the absence of `script-src` / `connect-src` means `blob:` cannot be used for script, XHR, or any non-media fetch. |
+| 5 | The parent realm itself is the privileged attacker target (segment fetches, MSE in the parent) | Elevation of Privilege | The parent realm is **renderer / host code**, not mirrored content -- it was never sandboxed and is trusted by construction. The threat boundary is *mirrored content -> host*, and that boundary **is** the sandbox; moving the player to the parent is precisely what *avoids* granting the sandbox `allow-scripts`. |
+
+**Plain-language worst case:** the child iframe plays the parent's media object URL but cannot
+script, read, copy, or exfiltrate it -- there is no `allow-scripts`, no `connect-src`, and the
+`blob:` is dead the moment the player is destroyed. The only thing the mirror can do with the
+object URL is what a `<video>` does with a source it was handed: render frames. An attacker who
+fully controls the mirrored page gains the ability to display media the host already chose to
+mirror, and nothing more.
+
+Backing tests: the sandbox token is unchanged (`createViewer` `viewer-sandbox-invalid` + the
+purity scan); `allow-scripts` is absent from `src/renderer/media-player.js` (the purity-test
+renderer glob covers it, and `tests/security-media.test.js` names the case); `blob:` is scoped to
+`media-src` with no `script-src` / `connect-src` (`tests/renderer-media-csp.test.js`); the object
+URL is revoked on `destroy` / `destroyAll` (`tests/renderer-media-player.test.js` and
+`tests/security-media.test.js`); and a late cross-session `STREAM.MEDIA` frame is rejected by
+`isCurrentStream` (`tests/security-media.test.js`, citing `tests/renderer-media.test.js`).
 
 ## 7. Residual Risks
 
