@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Asset & Media Streaming
 status: executing
-stopped_at: Completed 14-05-PLAN.md
-last_updated: "2026-06-21T18:48:32.101Z"
-last_activity: 2026-06-21 -- Phase 15 planning complete
+stopped_at: Completed 15-01-PLAN.md
+last_updated: "2026-06-21T19:05:58.452Z"
+last_activity: "2026-06-21 -- 15-01 complete: MSEC-03 masking vocabulary shipped"
 progress:
   total_phases: 15
   completed_phases: 13
   total_plans: 73
-  completed_plans: 69
+  completed_plans: 70
   percent: 87
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-19)
 
 **Core value:** A live, trustworthy, low-bandwidth, semantically addressable mirror of a real browser tab — capture → relay → render → remote-control must work end-to-end as a standalone framework.
-**Current focus:** Phase 15 — media security, masking, threat model & docs
+**Current focus:** Phase 15 — Media Security, Masking, Threat Model & Docs
 
 ## Current Position
 
-Phase: 15
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-06-21 -- Phase 15 planning complete
+Phase: 15 (Media Security, Masking, Threat Model & Docs) — EXECUTING
+Plan: 2 of 4
+Status: 15-01 complete (capture asset/media URL masking spine); ready for 15-02
+Last activity: 2026-06-21 -- 15-01 complete: MSEC-03 masking vocabulary shipped
 
 **v2.0 phase order:** 12 → 13 → 14 → 15
 
@@ -107,6 +107,7 @@ Last activity: 2026-06-21 -- Phase 15 planning complete
 | Phase 14 P04 | 11min | 2 tasks | 4 files |
 | Phase 14 P03 | 6min | 3 tasks | 3 files |
 | Phase 14 P05 | 4min | 2 tasks | 3 files |
+| Phase 15 P01 | 33min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -151,6 +152,7 @@ Earlier v1.0 decisions are retained in PROJECT.md Key Decisions and the prior ph
 - [Phase ?]: [Phase 14-03]: createMediaPlayer constructed in createViewer (parent realm; sandbox stays exactly allow-same-origin); playerFactory + onMediaUnavailable are the config-callback family (function-or-ignored), onMediaUnavailable double-contained (safeInvokeMediaHook + the player degrade sink). mediaPlayer.destroyAll() on a new-identity snapshot (Pattern 2) tears down every parent-realm player before the document swap (no orphaned players / object-URL leak).
 - [Phase ?]: [Phase 14-03]: Live handling is ASSERTED reuse, not new code (MADPT-04) -- media-reconcile pins live:true -> rejoin-edge with NO absolute toTime, and applyMediaAction seeks seekable.end (live edge) ONLY under seekable.length>0, never to the payload absolute time. Closed the Phase-13 UI-review Fix 1 BLOCKER: the registered-but-dead State-C media-poster caption is now driven from handleMedia poster-mode (shown IFF no surviving poster). Full suite 659/659, oracle 48/48, package:smoke exit 0 with hls.js absent, dependencies stays { ws }.
 - [Phase ?]: [Phase 14-05]: hls.js declared ONLY as an OPTIONAL peerDependency ({ hls.js: >=1.5.0 } + peerDependenciesMeta.optional:true) -- npm neither auto-installs nor warns when absent; dependencies stays exactly { ws: 8.21.0 }, hls.js never a hard/dev dep, node_modules/hls.js absent. Zero-hard-dep PROVEN by package:smoke importing ./renderer in an hls.js-absent sandbox (resolves only because the hls.js import is dynamic-only, Plan 02); a named zero-hard-dep-violation smoke assertion (before the broad subpath loop) + a package-publish deps-shape guard catch any future top-level-import/hard-dep leak (T-14-17/T-14-18). publint 'All good!', attw exit 0, full suite 660/660, oracle 48/48. MADPT-01 fully closed; Phase 14 complete.
+- [Phase ?]: [Phase 15-01]: MSEC-03 capture masking spine shipped -- 3 host options (maskMediaSelector factory-validated, maskAssetUrls token/PII strip, maskAssetUrlFn fail-closed-to-BLOCK redactor) routed through ONE new 'asset-url'/'media-url' sanitizeForWire dispatch wrapping a PURE maskAssetUrlForWire helper + documented TOKEN_PARAM_DENYLIST (AWS SigV4/SigV2, GCP, Azure SAS, generic; case-insensitive exact-name OR x-amz-/x-goog- prefix). Off-by-default returns the ORIGINAL url string when nothing stripped (Pitfall 1: never URL.toString()) so the wire stays byte-identical (oracle 48/48, NO new ledger entry). maskMediaWithAncestors ORed into BOTH media-tracker skip guards + the blockSelector placeholder path -> masked <video>/<audio> emits no STREAM.MEDIA and degrades to the dimension-only placeholder (A3: plain block placeholder, no 'masked' reason). Zero new deps; full suite 689/689.
 
 ### Pending Todos
 
@@ -178,6 +180,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-06-21T11:53:44.641Z
-Stopped at: Completed 14-05-PLAN.md
+Last session: 2026-06-21T19:05:40.923Z
+Stopped at: Completed 15-01-PLAN.md
 Resume file: None
