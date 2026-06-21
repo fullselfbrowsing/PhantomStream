@@ -109,7 +109,9 @@ on the wire in raw form.
 - `maskInputs: true` masks input, textarea, and related form value surfaces.
 - `maskTextSelector` masks text owned by matching elements and descendants. The default transform
   replaces each non-whitespace character with `*`, preserving whitespace and length.
-- `blockSelector` emits a placeholder box with only `data-fsb-nid`, `rr_width`, and `rr_height`.
+- `blockSelector` emits a placeholder box carrying only the `rr_width` and `rr_height` dimension
+  attributes -- no `data-fsb-nid`, no other attributes, no children, no text. Identity travels
+  positionally in the `nodeIds` sidecar, never as a page-visible attribute on the placeholder.
   Attributes, children, and text from the blocked subtree are not serialized.
 - Invalid selectors fail at factory time with `invalid-mask-selector` instead of silently falling
   back to an unsafe state.
@@ -134,10 +136,12 @@ already clean and the renderer never un-masks. URL masking lives in one place: a
 serialization paths plus the mutation attr path routes through the same testable helper.
 
 - `maskMediaSelector` -- a CSS selector. A matched media/asset element **omits its URL from the
-  wire and degrades to the dimensioned placeholder** (the `blockSelector` path, identity-only:
-  `data-fsb-nid` + `rr_width` + `rr_height`). It also reuses the media-tracker skip predicates, so
-  a masked `<video>` / `<audio>` emits **no `STREAM.MEDIA`** baseline and **no `STREAM.MEDIA`**
-  events -- neither its URL nor its playback timeline is mirrored.
+  wire and degrades to the dimensioned placeholder** (the `blockSelector` path: a dimension-only
+  box carrying just `rr_width` + `rr_height`, with no `data-fsb-nid`, no other attributes, no
+  children, and no text -- identity travels in the `nodeIds` sidecar). It also reuses the
+  media-tracker skip predicates, so a masked `<video>` / `<audio>` emits **no `STREAM.MEDIA`**
+  baseline and **no `STREAM.MEDIA`** events -- neither its URL nor its playback timeline is
+  mirrored.
 - `maskAssetUrls` -- a boolean. When `true`, every asset/media URL is parsed and its **token / PII
   query params are stripped** before it goes on the wire; functional params survive. It is
   **off by default**, so with masking disabled asset/media URLs stay **byte-identical** on the
