@@ -51,11 +51,12 @@ test('output starts with the doctype+html shell and contains the charset meta', 
 // rationale clause: style-src gains http: https: so the external stylesheet
 // links the capture deliberately emits keep loading; script-blocking is
 // untouched -- default-src 'none' still governs scripts).
-// Phase 13 (MEDIA-01): media-src http: https: data: added (twin of img-src,
-// no blob: -- Phase 14). default-src 'none' and the absence of script-src are
-// untouched.
+// Phase 13 (MEDIA-01): media-src http: https: data: added (twin of img-src).
+// Phase 14 (MADPT-01): media-src gains `blob:` for the parent-realm MSE object
+// URL (the cross-realm adaptive bind). default-src 'none' and the absence of
+// script-src / connect-src are untouched (blob: is the ONLY Phase-14 CSP edit).
 const CSP_CONTENT = "default-src 'none'; img-src http: https: data:; "
-  + "media-src http: https: data:; "
+  + "media-src http: https: data: blob:; "
   + "style-src http: https: 'unsafe-inline'; font-src http: https: data:";
 
 test('the exact adopted CSP meta is the FIRST element after <head>, before the charset meta', () => {
@@ -69,13 +70,14 @@ test('the exact adopted CSP meta is the FIRST element after <head>, before the c
   );
 });
 
-// Phase 13 (plan 13-03, MEDIA-01 / V14): media-src is now PRESENT (the real
-// <video>/<audio> element ships this phase and the viewer's browser must fetch
-// media bytes by reference). img-src is retained; default-src 'none' and the
-// absence of script-src are untouched; NO blob: is added (that is Phase 14's
-// MSE concern). This pins the Phase-13 shape so an accidental future widening
-// (blob:, script-src) fails loudly.
-test('the srcdoc CSP allows images + media by reference but blocks scripts (13-03, MEDIA-01)', () => {
+// Phase 13 (plan 13-03, MEDIA-01 / V14): media-src is PRESENT so the viewer's
+// browser fetches <video>/<audio> bytes by reference. Phase 14 (plan 14-02,
+// MADPT-01): media-src additionally carries `blob:` for the parent-realm MSE
+// object URL the adaptive player binds. img-src is retained (NO blob: on img-
+// src); default-src 'none' and the absence of script-src / connect-src are
+// untouched. This pins the Phase-14 shape so an accidental future widening
+// (script-src, connect-src) fails loudly.
+test('the srcdoc CSP allows images + media (incl. blob: MSE) by reference but blocks scripts (14-02, MADPT-01)', () => {
   const html = buildSnapshotHtml(minimalPayload());
   // (i) images fetch by reference: img-src is present and scoped to http(s)+data:
   assert.ok(
@@ -92,16 +94,23 @@ test('the srcdoc CSP allows images + media by reference but blocks scripts (13-0
     !html.includes('script-src'),
     'CSP has NO script-src (default-src none governs scripts; a script-src would regress the sandbox)'
   );
-  // (iv) media-src is now present and scoped to http(s)+data: (Phase 13) so the
-  // viewer fetches <video>/<audio>/<source> bytes from the source origin.
+  // (iv) media-src now carries blob: (Phase 14 MSE object URL) on top of
+  // http(s)+data: so the viewer plays the parent-minted MediaSource blob and
+  // fetches <video>/<audio>/<source> bytes from the source origin.
   assert.ok(
-    html.includes('media-src http: https: data:'),
-    'CSP adds media-src http: https: data: (Phase 13 by-reference media)'
+    html.includes('media-src http: https: data: blob:'),
+    'CSP media-src is http: https: data: blob: (Phase 14 MSE adaptive bind)'
   );
-  // (v) media-src must NOT carry blob: this phase -- that is Phase 14's MSE add.
+  // (v) blob: is scoped to media-src ONLY -- it must NOT be added to img-src.
   assert.ok(
-    !html.includes('blob:'),
-    'CSP has NO blob: yet -- blob: in media-src is Phase 14 (MSE), not Phase 13'
+    !/img-src[^;]*blob:/.test(html),
+    'blob: is media-src only -- never widened into img-src'
+  );
+  // (vi) Pitfall 5: NO connect-src -- the iframe fetches nothing in the MSE path
+  // (the parent fetches segments; the child plays the blob).
+  assert.ok(
+    !html.includes('connect-src'),
+    'CSP has NO connect-src -- the inert iframe issues no network request (Pitfall 5)'
   );
 });
 
