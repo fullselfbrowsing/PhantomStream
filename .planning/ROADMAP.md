@@ -442,6 +442,6 @@ Phases execute in numeric order. v1.0 (1–11) is complete. v2.0 active order: 1
 | 10. npm Packaging & 0.x Publish | 5/5 | Complete | 2026-06-16 |
 | 11. FSB Swap-In → 1.0 | — | Complete (verified in FSB repo) | 2026-06-16 |
 | 12. Static Assets by Reference | 3/3 | Complete   | 2026-06-20 |
-| 13. Video/Audio URL + Playback Sync | 4/4 | Complete   | 2026-06-21 |
+| 13. Video/Audio URL + Playback Sync | 4/4 | Complete    | 2026-06-21 |
 | 14. Adaptive Streaming + Adapter Discovery + Fallback | 0/TBD | Not started | - |
 | 15. Media Security, Masking, Threat Model & Docs | 0/TBD | Not started | - |
