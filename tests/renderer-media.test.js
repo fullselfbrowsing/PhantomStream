@@ -1031,3 +1031,101 @@ test('an old viewer ignores STREAM.MEDIA_HINT via the dispatch default (no throw
     env.teardown();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Phase 14 Plan 03 Task 2: destroyAll() on re-snapshot (no orphaned players /
+// object-URL leak across snapshots, Pattern 2 / Pitfall 2) + the live-reuse
+// assertion (applyMediaAction seeks the live edge ONLY under seekable.length>0,
+// no absolute seek -- MADPT-04, verbatim reuse of the Phase 13 rejoin-edge).
+// ---------------------------------------------------------------------------
+
+test('a new-identity snapshot destroys the prior generation\'s live players (no orphaned players across snapshots)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const pf = recordingPlayerFactory();
+    // Bind a player via a consumed page hint on the first generation.
+    const ctx = streamingMediaViewerFactory(createViewer, env, {
+      mediaMode: 'reference',
+      allowAssetOrigins: ['cdn.example.test'],
+      playerFactory: pf.factory,
+    });
+    ctx.transport.emit('ext:dom-media-hint', {
+      scope: 'page', manifestUrl: HLS_MANIFEST, kind: 'hls', ...HINT_IDENTITY,
+    });
+    stubMediaElement(env, ctx.video, { paused: false });
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 0, paused: false, playbackRate: 1, live: true,
+      sentAt: Date.now(), ...HINT_IDENTITY,
+    });
+    assert.equal(pf.calls.attaches.length, 1, 'a player is live after the page hint binds');
+    assert.equal(pf.calls.destroys, 0, 'the live player is not yet destroyed');
+
+    // A NEW stream identity snapshot must tear down the prior generation's
+    // players BEFORE the new mirror document replaces the child elements.
+    ctx.transport.emit('ext:dom-snapshot', videoSnapshot({
+      streamSessionId: 's2', snapshotId: 2,
+    }));
+    assert.equal(pf.calls.destroys, 1, 'destroyAll() tears down the prior generation player on a re-snapshot');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('destroyAll fires even with no live players (idempotent, no throw on a bare re-snapshot)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const rec = recordingLogger();
+    const ctx = streamingMediaViewerFactory(createViewer, env, { mediaMode: 'reference', logger: rec.logger });
+    assert.doesNotThrow(() => ctx.transport.emit('ext:dom-snapshot', videoSnapshot({
+      streamSessionId: 's3', snapshotId: 3,
+    })));
+    assert.equal(rec.errors.length, 0, 'a re-snapshot with no live players logs no error');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('live reuse: applyMediaAction seeks the live edge (seekable.end) under seekable.length>0, NO absolute seek to payload time', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(createViewer, env, { mediaMode: 'reference' });
+    // A live element with a non-empty seekable range whose live edge is 100;
+    // local is far behind -> the reconciler returns rejoin-edge.
+    const rec = stubMediaElement(env, ctx.video, {
+      paused: false, currentTime: 0, readyState: 4,
+      seekable: { length: 1, end() { return 100; } },
+    });
+    ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 5000, paused: false, playbackRate: 1, live: true,
+      sentAt: Date.now() - 10000, ...IDENTITY,
+    });
+    // The element seeks to the LIVE EDGE (100, read from seekable.end), NOT to
+    // the payload's absolute currentTime (5000).
+    assert.ok(rec.currentTimeSets.indexOf(100) !== -1, 'live rejoin seeks to seekable.end (the live edge)');
+    assert.equal(rec.currentTimeSets.indexOf(5000), -1, 'a live stream is NEVER seeked to the payload absolute time');
+  } finally {
+    env.teardown();
+  }
+});
+
+test('live reuse: a live payload with an empty seekable range does NOT seek (the rejoin-edge guard holds, no new sync code)', async () => {
+  const { createViewer } = await import(RENDERER_MODULE);
+  const env = setupEnv();
+  try {
+    const ctx = streamingMediaViewerFactory(createViewer, env, { mediaMode: 'reference' });
+    const rec = stubMediaElement(env, ctx.video, {
+      paused: false, currentTime: 0, readyState: 4,
+      seekable: { length: 0, end() { throw new Error('IndexSizeError'); } },
+    });
+    assert.doesNotThrow(() => ctx.transport.emit('ext:dom-media', {
+      nid: '1', currentTime: 5000, paused: false, playbackRate: 1, live: true,
+      sentAt: Date.now() - 10000, ...IDENTITY,
+    }));
+    assert.equal(rec.currentTimeSets.length, 0, 'no seek when seekable is empty (guarded hold; reused Phase 13 branch)');
+  } finally {
+    env.teardown();
+  }
+});

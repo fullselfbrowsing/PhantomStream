@@ -203,6 +203,23 @@ test('live branch (remote.live === true): large drift -> rejoin-edge, never an a
   assertNoNaN(action, 'live-rejoin');
 });
 
+// Phase 14 (MADPT-04 -- adaptive live REUSE): an adaptive live manifest drives
+// the SAME reconciler live branch as a progressive live <video> -- there is NO
+// new adaptive sync path. A live: true payload at large drift returns rejoin-edge
+// and carries NO absolute toTime: the renderer's applyMediaAction computes the
+// live edge from the element's seekable range (guarded by seekable.length > 0),
+// never seeking to a payload-supplied absolute time. This pins the verbatim reuse.
+test('adaptive live reuse: live:true large drift -> rejoin-edge with NO absolute toTime (MADPT-04, verbatim reuse)', () => {
+  const remote = remoteVod(5000, { live: true, playbackRate: 1 }); // far-ahead live edge
+  delete remote.duration; // live entries omit duration
+  const local = { currentTime: 10, paused: false, playbackRate: 1 }; // huge drift
+  const action = reconcileMediaDrift(local, remote, NOW);
+  assert.equal(action.action, 'rejoin-edge', 'a live payload reconciles to rejoin-edge');
+  assert.notEqual(action.action, 'seek', 'a live payload never produces an absolute seek');
+  assert.equal(action.toTime, undefined, 'rejoin-edge carries NO absolute toTime (the edge is read from seekable)');
+  assertNoNaN(action, 'adaptive-live-reuse');
+});
+
 test('live branch: small drift -> hold (no rejoin)', () => {
   const remote = remoteVod(100, { live: true, playbackRate: 1 });
   delete remote.duration;

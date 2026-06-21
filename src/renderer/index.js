@@ -1503,9 +1503,14 @@ export function createViewer(options) {
     lastSnapshotPayload = p;
     clearIdentityIndex();
     mediaFirstBind.clear(); // new identity: re-bind media baseline on next load
-    // Phase 14: a new stream identity invalidates any stored page hint and the
-    // per-element bound set (a prior page's manifest must never bind a new page's
-    // element). Player teardown (mediaPlayer.destroyAll) is added in Task 2.
+    // Phase 14 (Pattern 2 -- teardown on new identity / Pitfall 2 -- object-URL
+    // leak): a new stream identity tears down EVERY live adaptive player before
+    // the new mirror document replaces the prior child elements, revoking parent-
+    // realm object URLs and freeing buffers so a re-snapshot never orphans a
+    // player bound to a now-dead element. It also invalidates any stored page hint
+    // and the per-element bound set (a prior page's manifest must never bind a new
+    // page's element).
+    mediaPlayer.destroyAll();
     pendingHints.clear();
     hintBoundNids.clear();
     // PRE-WRITE FETCH GATE (MSEC-01, THE timing rule -- 12-RESEARCH Pitfall 1):
