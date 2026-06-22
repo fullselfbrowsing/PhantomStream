@@ -1,6 +1,6 @@
 {
   "name": "@full-self-browsing/phantom-stream",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "DOM-native live browser mirroring: snapshot + MutationObserver diff streaming with stable node identity, compressed transport, and bidirectional remote control.",
   "type": "module",
   "main": "src/index.js",
