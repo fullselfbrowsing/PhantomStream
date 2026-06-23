@@ -11,7 +11,7 @@
 \usepackage{url}
 \usepackage{xcolor}
 \usepackage{tikz}
-\usetikzlibrary{arrows.meta,positioning,calc}
+\usetikzlibrary{arrows.meta,positioning,calc,backgrounds}
 \usepackage{pgfplots}
 \pgfplotsset{compat=1.18}
 \usepackage[hidelinks]{hyperref}
@@ -27,15 +27,39 @@
 
 \input{generated-results.tex}
 
+\definecolor{FSBInk}{HTML}{0F1117}
+\definecolor{FSBPanel}{HTML}{1E1E2E}
+\definecolor{FSBAmber}{HTML}{F59E0B}
+\definecolor{FSBGreen}{HTML}{22C55E}
+\definecolor{FSBMuted}{HTML}{888888}
+
 \tikzset{
-  psbox/.style={draw, rounded corners=2pt, align=center, font=\scriptsize,
-               text width=18mm, minimum height=9mm, inner sep=2pt, fill=blue!5},
-  pswide/.style={draw, rounded corners=2pt, align=center, font=\scriptsize,
-               text width=28mm, minimum height=9mm, inner sep=2pt, fill=blue!5},
-  psgreen/.style={psbox, fill=green!8},
-  psorange/.style={psbox, fill=orange!10},
-  psgray/.style={psbox, fill=black!8},
-  flow/.style={-{Latex[length=2mm]}, semithick},
+  psbox/.style={draw=FSBInk, line width=0.35pt, rounded corners=2pt,
+               align=center, font=\scriptsize, text=FSBInk,
+               text width=18mm, minimum height=9mm, inner sep=2pt,
+               fill=FSBAmber!8},
+  pswide/.style={psbox, text width=28mm},
+  psaccent/.style={psbox, draw=FSBAmber!75!FSBInk, fill=FSBAmber!14},
+  psgreen/.style={psbox, draw=FSBGreen!60!FSBInk, fill=FSBGreen!10},
+  psorange/.style={psbox, draw=FSBAmber!75!FSBInk, fill=FSBAmber!14},
+  psgray/.style={psbox, draw=FSBMuted!80!FSBInk, fill=FSBMuted!12},
+  flow/.style={-{Latex[length=1.6mm,width=1.25mm]}, line width=0.45pt,
+               draw=FSBMuted!80!FSBInk, shorten >=2pt, shorten <=2pt},
+  accentflow/.style={flow, draw=FSBAmber!85!FSBInk},
+  greenflow/.style={flow, draw=FSBGreen!70!FSBInk},
+}
+\pgfplotsset{
+  fsbaxis/.style={
+    axis line style={draw=FSBMuted!70},
+    tick style={draw=FSBMuted!70},
+    ticklabel style={font=\scriptsize, text=FSBInk},
+    label style={font=\scriptsize, text=FSBInk},
+    grid style={draw=FSBMuted!20},
+    major grid style={draw=FSBMuted!24},
+  },
+  phantomplot/.style={draw=FSBAmber!85!FSBInk, fill=FSBAmber!28},
+  rrwebplot/.style={draw=FSBGreen!65!FSBInk, fill=FSBGreen!18},
+  cdpplot/.style={draw=FSBInk, fill=FSBMuted!28},
 }
 
 \newcommand{\code}[1]{\texttt{\small #1}}
@@ -192,19 +216,22 @@ authorized and how it should be dispatched to the browser.
 \centering
 \begin{tikzpicture}[
   node distance=3mm,
-  stage/.style={draw, rounded corners=2pt, align=center, font=\tiny,
-    text width=11mm, minimum height=7mm, inner sep=1pt, fill=blue!5},
+  stage/.style={draw=FSBInk, rounded corners=2pt, align=center, font=\tiny,
+    text=FSBInk, text width=11mm, minimum height=7mm, inner sep=1pt,
+    fill=FSBAmber!8},
 ]
-  \node[stage, fill=black!8] (attach) {attach};
+  \node[stage, draw=FSBMuted!80!FSBInk, fill=FSBMuted!12] (attach) {attach};
   \node[stage, right=of attach] (snapshot) {snapshot};
-  \node[stage, fill=green!8, right=of snapshot] (live) {live\\diffs};
-  \node[stage, fill=orange!10, right=of live] (recover) {recover};
+  \node[stage, draw=FSBGreen!60!FSBInk, fill=FSBGreen!10, right=of snapshot] (live) {live\\diffs};
+  \node[stage, draw=FSBAmber!75!FSBInk, fill=FSBAmber!14, right=of live] (recover) {recover};
   \node[stage, right=of recover] (control) {control};
-  \draw[flow] (attach) -- (snapshot);
-  \draw[flow] (snapshot) -- (live);
-  \draw[flow] (live) -- (recover);
-  \draw[flow] (recover) -- (live);
-  \draw[flow] (live) -- (control);
+  \begin{scope}[on background layer]
+    \draw[flow] (attach) -- (snapshot);
+    \draw[accentflow] (snapshot) -- (live);
+    \draw[accentflow] (live) -- (recover);
+    \draw[flow] (recover.south west) to[out=-140,in=-40,looseness=0.8] (live.south east);
+    \draw[accentflow] (live) -- (control);
+  \end{scope}
 \end{tikzpicture}
 \caption{Runtime lifecycle. A stream becomes useful after the first snapshot;
 diffs are the normal path, while re-snapshot and subtree requests repair drift or
@@ -224,16 +251,18 @@ inert iframe.
   \node[pswide, right=of page] (capture) {capture\\snapshot + diffs};
   \node[pswide, right=of capture] (transport) {transport\\envelope};
   \node[pswide, right=of transport] (relay) {relay\\fan-out cap};
-  \node[pswide, right=of relay] (viewer) {sandboxed\\viewer};
+  \node[psaccent, text width=28mm, right=of relay] (viewer) {sandboxed\\viewer};
   \node[psgreen, below=of capture] (identity) {WeakMap\\node ids};
   \node[psgreen, below=of viewer] (control) {reverse\\control};
-  \draw[flow] (page) -- (capture);
-  \draw[flow] (capture) -- (transport);
-  \draw[flow] (transport) -- (relay);
-  \draw[flow] (relay) -- (viewer);
-  \draw[flow] (identity) -- (capture);
-  \draw[flow] (viewer) -- (control);
-  \draw[flow] (control.west) .. controls +(left:20mm) and +(down:12mm) .. (page.south);
+  \begin{scope}[on background layer]
+    \draw[accentflow] (page) -- (capture);
+    \draw[accentflow] (capture) -- (transport);
+    \draw[flow] (transport) -- (relay);
+    \draw[accentflow] (relay) -- (viewer);
+    \draw[greenflow] (identity) -- (capture);
+    \draw[greenflow] (viewer) -- (control);
+    \draw[accentflow] (control.south west) .. controls +(down:24mm) and +(down:24mm) .. (page.south);
+  \end{scope}
 \end{tikzpicture}
 \caption{PhantomStream mirrors browser state rather than pixels. Capture emits
 sanitized snapshot and diff frames addressed by stable node ids; the viewer
@@ -414,16 +443,18 @@ unavailable instead of substituting invented numbers.
 \begin{tikzpicture}[node distance=2.6mm]
   \node[pswide] (corpus) {local corpus};
   \node[pswide, below=of corpus] (runner) {Playwright runner};
-  \node[pswide, below=of runner] (systems) {PhantomStream / rrweb / CDP};
+  \node[psaccent, text width=28mm, below=of runner] (systems) {PhantomStream / rrweb / CDP};
   \node[pswide, below=of systems] (json) {result JSON};
   \node[pswide, below=of json] (tex) {generated macros};
   \node[psgreen, below=of tex] (paper) {paper check};
-  \draw[flow] (corpus) -- (runner);
-  \draw[flow] (runner) -- (systems);
-  \draw[flow] (systems) -- (json);
-  \draw[flow] (json) -- (tex);
-  \draw[flow] (tex) -- (paper);
-  \draw[flow] (json) -- (paper);
+  \begin{scope}[on background layer]
+    \draw[flow] (corpus) -- (runner);
+    \draw[accentflow] (runner) -- (systems);
+    \draw[accentflow] (systems) -- (json);
+    \draw[flow] (json) -- (tex);
+    \draw[greenflow] (tex) -- (paper);
+    \draw[greenflow] (json.east) -- ++(8mm,0) |- (paper.east);
+  \end{scope}
 \end{tikzpicture}
 \caption{Benchmark-to-paper pipeline. The paper imports generated result macros;
 the validator fails if required metrics are missing, non-finite, or mismatched.}
@@ -489,22 +520,28 @@ more compact replay log.
 \centering
 \begin{tikzpicture}
 \begin{axis}[
+  fsbaxis,
   ybar,
   width=\columnwidth, height=43mm,
   bar width=9mm,
   ymin=0,
   ylabel={median KB/run},
   symbolic x coords={PhantomStream,rrweb,CDP},
-  xtick=data,
+  xtick={PhantomStream,rrweb,CDP},
   nodes near coords,
   every node near coord/.append style={font=\scriptsize},
   xticklabel style={font=\scriptsize, rotate=15, anchor=east},
   yticklabel style={font=\scriptsize},
   ylabel style={font=\scriptsize},
   enlarge x limits=0.35,
+  ymajorgrids,
 ]
-\addplot[draw=blue!60!black, fill=blue!30] coordinates
-  {(PhantomStream,\PSPhantomMedianKB) (rrweb,\PSRrwebMedianKB) (CDP,\PSCDPMedianKB)};
+\addplot[phantomplot, bar shift=0pt] coordinates
+  {(PhantomStream,\PSPhantomMedianKB)};
+\addplot[rrwebplot, bar shift=0pt] coordinates
+  {(rrweb,\PSRrwebMedianKB)};
+\addplot[cdpplot, bar shift=0pt] coordinates
+  {(CDP,\PSCDPMedianKB)};
 \end{axis}
 \end{tikzpicture}
 \caption{Median bytes per deterministic local run. PhantomStream is smaller than
@@ -523,22 +560,28 @@ the first post-action screencast frame in this setup.
 \centering
 \begin{tikzpicture}
 \begin{axis}[
+  fsbaxis,
   ybar,
   width=\columnwidth, height=43mm,
   bar width=9mm,
   ymin=0,
   ylabel={median ms},
   symbolic x coords={PhantomStream,rrweb,CDP},
-  xtick=data,
+  xtick={PhantomStream,rrweb,CDP},
   nodes near coords,
   every node near coord/.append style={font=\scriptsize},
   xticklabel style={font=\scriptsize, rotate=15, anchor=east},
   yticklabel style={font=\scriptsize},
   ylabel style={font=\scriptsize},
   enlarge x limits=0.35,
+  ymajorgrids,
 ]
-\addplot[draw=green!45!black, fill=green!25] coordinates
-  {(PhantomStream,\PSPhantomLatencyMs) (rrweb,\PSRrwebLatencyMs) (CDP,\PSCDPLatencyMs)};
+\addplot[phantomplot, bar shift=0pt] coordinates
+  {(PhantomStream,\PSPhantomLatencyMs)};
+\addplot[rrwebplot, bar shift=0pt] coordinates
+  {(rrweb,\PSRrwebLatencyMs)};
+\addplot[cdpplot, bar shift=0pt] coordinates
+  {(CDP,\PSCDPLatencyMs)};
 \end{axis}
 \end{tikzpicture}
 \caption{Median post-action latency on non-idle local activities.}
@@ -576,6 +619,7 @@ CDP screencast & \PSCDPVisualDiff & \PSCDPSemantic \\
 \centering
 \begin{tikzpicture}
 \begin{axis}[
+  fsbaxis,
   width=\columnwidth, height=48mm,
   xmin=0, xmax=14,
   ymin=-0.05, ymax=1.1,
@@ -586,13 +630,17 @@ CDP screencast & \PSCDPVisualDiff & \PSCDPSemantic \\
   xticklabel style={font=\scriptsize},
   yticklabel style={font=\scriptsize},
   grid=both,
-  legend style={font=\scriptsize, at={(0.03,0.03)}, anchor=south west},
+  legend style={font=\scriptsize, at={(0.03,0.03)}, anchor=south west,
+    draw=FSBMuted!55, fill=white},
 ]
-\addplot+[only marks, mark=*, mark size=2.4pt, blue] coordinates {(\PSPhantomLatencyMs,\PSPhantomSemantic)};
+\addplot[only marks, mark=*, mark size=2.4pt, color=FSBAmber!85!FSBInk,
+  mark options={draw=FSBAmber!85!FSBInk, fill=FSBAmber!70}] coordinates {(\PSPhantomLatencyMs,\PSPhantomSemantic)};
 \addlegendentry{PhantomStream}
-\addplot+[only marks, mark=square*, mark size=2.4pt, green!45!black] coordinates {(\PSRrwebLatencyMs,\PSRrwebSemantic)};
+\addplot[only marks, mark=square*, mark size=2.4pt, color=FSBGreen!65!FSBInk,
+  mark options={draw=FSBGreen!65!FSBInk, fill=FSBGreen!55}] coordinates {(\PSRrwebLatencyMs,\PSRrwebSemantic)};
 \addlegendentry{rrweb}
-\addplot+[only marks, mark=triangle*, mark size=2.8pt, black] coordinates {(\PSCDPLatencyMs,\PSCDPSemantic)};
+\addplot[only marks, mark=triangle*, mark size=2.8pt, color=FSBInk,
+  mark options={draw=FSBInk, fill=FSBMuted!55}] coordinates {(\PSCDPLatencyMs,\PSCDPSemantic)};
 \addlegendentry{CDP}
 \end{axis}
 \end{tikzpicture}
