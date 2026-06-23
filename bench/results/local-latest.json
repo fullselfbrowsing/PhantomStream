@@ -1,0 +1,654 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-06-23T16:57:47.764Z",
+  "environment": {
+    "node": "v25.9.0",
+    "platform": "darwin",
+    "browser": "playwright-chromium-headless",
+    "viewport": {
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "package": {
+    "name": "@full-self-browsing/phantom-stream",
+    "version": "0.2.1"
+  },
+  "project": {
+    "testCount": 712,
+    "testFiles": 66,
+    "productionFiles": 36,
+    "productionLoc": 21379
+  },
+  "corpus": [
+    {
+      "id": "article",
+      "title": "Static Article"
+    },
+    {
+      "id": "feed",
+      "title": "Infinite Feed"
+    },
+    {
+      "id": "dashboard",
+      "title": "SPA Dashboard"
+    },
+    {
+      "id": "fidelity",
+      "title": "Modern DOM Fidelity"
+    },
+    {
+      "id": "media",
+      "title": "Media by Reference"
+    }
+  ],
+  "activities": [
+    "idle",
+    "reading",
+    "agent"
+  ],
+  "semanticRubric": {
+    "dimensions": [
+      "DOM structure is available to the receiver",
+      "incremental DOM changes are available without decoding pixels",
+      "stable node identity can address mirrored elements",
+      "reverse-control targetability is preserved as structured data"
+    ],
+    "scores": {
+      "phantomstream": 1,
+      "rrweb": 0.5,
+      "cdp": 0
+    }
+  },
+  "systems": {
+    "phantomstream": {
+      "available": true,
+      "description": "PhantomStream capture stream measured as JSON wire bytes."
+    },
+    "rrweb": {
+      "available": true,
+      "description": "rrweb browser recorder measured as serialized event bytes."
+    },
+    "cdp": {
+      "available": true,
+      "description": "Chrome DevTools Protocol Page.startScreencast measured as PNG frame bytes."
+    },
+    "webrtc": {
+      "available": false,
+      "reason": "Headless local benchmark does not claim WebRTC getDisplayMedia because it requires an interactive capture permission surface."
+    }
+  },
+  "runs": [
+    {
+      "scenarioId": "article-idle",
+      "pageId": "article",
+      "activity": "idle",
+      "systems": {
+        "phantomstream": {
+          "available": true,
+          "bytes": 42020,
+          "framesOrEvents": 5,
+          "startupMs": 4.5,
+          "latencyMs": null,
+          "visualDiffPct": 0,
+          "semanticScore": 1
+        },
+        "rrweb": {
+          "available": true,
+          "bytes": 14161,
+          "framesOrEvents": 4,
+          "startupMs": 0.5,
+          "latencyMs": null,
+          "visualDiffPct": 4.762,
+          "semanticScore": 0.5,
+          "replayError": null
+        },
+        "cdp": {
+          "available": true,
+          "bytes": 337533,
+          "framesOrEvents": 1,
+          "startupMs": 18.064,
+          "latencyMs": null,
+          "visualDiffPct": 0,
+          "semanticScore": 0,
+          "unavailableReason": null
+        }
+      }
+    },
+    {
+      "scenarioId": "article-reading",
+      "pageId": "article",
+      "activity": "reading",
+      "systems": {
+        "phantomstream": {
+          "available": true,
+          "bytes": 42357,
+          "framesOrEvents": 7,
+          "startupMs": 3.8,
+          "latencyMs": 3,
+          "visualDiffPct": 0,
+          "semanticScore": 1
+        },
+        "rrweb": {
+          "available": true,
+          "bytes": 14512,
+          "framesOrEvents": 6,
+          "startupMs": 0.4,
+          "latencyMs": 0.9,
+          "visualDiffPct": 5.846,
+          "semanticScore": 0.5,
+          "replayError": null
+        },
+        "cdp": {
+          "available": true,
+          "bytes": 614156,
+          "framesOrEvents": 3,
+          "startupMs": 4.354,
+          "latencyMs": 2.739,
+          "visualDiffPct": 0,
+          "semanticScore": 0,
+          "unavailableReason": null
+        }
+      }
+    },
+    {
+      "scenarioId": "article-agent",
+      "pageId": "article",
+      "activity": "agent",
+      "systems": {
+        "phantomstream": {
+          "available": true,
+          "bytes": 42344,
+          "framesOrEvents": 7,
+          "startupMs": 4.2,
+          "latencyMs": 0.6,
+          "visualDiffPct": 0,
+          "semanticScore": 1
+        },
+        "rrweb": {
+          "available": true,
+          "bytes": 14363,
+          "framesOrEvents": 6,
+          "startupMs": 0.5,
+          "latencyMs": 0.7,
+          "visualDiffPct": 5.456,
+          "semanticScore": 0.5,
+          "replayError": null
+        },
+        "cdp": {
+          "available": true,
+          "bytes": 581787,
+          "framesOrEvents": 2,
+          "startupMs": 17.236,
+          "latencyMs": 15.045,
+          "visualDiffPct": 0,
+          "semanticScore": 0,
+          "unavailableReason": null
+        }
+      }
+    },
+    {
+      "scenarioId": "feed-idle",
+      "pageId": "feed",
+      "activity": "idle",
+      "systems": {
+        "phantomstream": {
+          "available": true,
+          "bytes": 124098,
+          "framesOrEvents": 5,
+          "startupMs": 8.8,
+          "latencyMs": null,
+          "visualDiffPct": 0,
+          "semanticScore": 1
+        },
+        "rrweb": {
+          "available": true,
+          "bytes": 16999,
+          "framesOrEvents": 4,
+          "startupMs": 0.4,
+          "latencyMs": null,
+          "visualDiffPct": 8.781,
+          "semanticScore": 0.5,
+          "replayError": null
+        },
+        "cdp": {
+          "available": true,
+          "bytes": 216289,
+          "framesOrEvents": 1,
+          "startupMs": 14.312,
+          "latencyMs": null,
+          "visualDiffPct": 0,
+          "semanticScore": 0,
+          "unavailableReason": null
+        }
+      }
+    },
+    {
+      "scenarioId": "feed-reading",
+      "pageId": "feed",
+      "activity": "reading",
+      "systems": {
+        "phantomstream": {
+          "available": true,
+          "bytes": 124435,
+          "framesOrEvents": 7,
+          "startupMs": 9,
+          "latencyMs": 5.3,
+          "visualDiffPct": 0.166,
+          "semanticScore": 1
+        },
+        "rrweb": {
+          "available": true,
+          "bytes": 17351,
+          "framesOrEvents": 6,
+          "startupMs": 0.5,
+          "latencyMs": 0.9,
+          "visualDiffPct": 15.297,
+          "semanticScore": 0.5,
+          "replayError": null
+        },
+        "cdp": {
+          "available": true,
+          "bytes": 297384,
+          "framesOrEvents": 3,
+          "startupMs": 4.295,
+          "latencyMs": 2.568,
+          "visualDiffPct": 0,
+          "semanticScore": 0,
+          "unavailableReason": null
+        }
+      }
+    },
+    {
+      "scenarioId": "feed-agent",
+      "pageId": "feed",
+      "activity": "agent",
+      "systems": {
+        "phantomstream": {
+          "available": true,
+          "bytes": 153240,
+          "framesOrEvents": 8,
+          "startupMs": 9.1,
+          "latencyMs": 0.6,
+          "visualDiffPct": 0.188,
+          "semanticScore": 1
+        },
+        "rrweb": {
+          "available": true,
+          "bytes": 21706,
+          "framesOrEvents": 7,
+          "startupMs": 0.4,
+          "latencyMs": 0.5,
+          "visualDiffPct": 15.473,
+          "semanticScore": 0.5,
+          "replayError": null
+        },
+        "cdp": {
+          "available": true,
+          "bytes": 363965,
+          "framesOrEvents": 3,
+          "startupMs": 16.358,
+          "latencyMs": 14.089,
+          "visualDiffPct": 0,
+          "semanticScore": 0,
+          "unavailableReason": null
+        }
+      }
+    },
+    {
+      "scenarioId": "dashboard-idle",
+      "pageId": "dashboard",
+      "activity": "idle",
+      "systems": {
+        "phantomstream": {
+          "available": true,
+          "bytes": 119186,
+          "framesOrEvents": 5,
+          "startupMs": 8.5,
+          "latencyMs": null,
+          "visualDiffPct": 0.001,
+          "semanticScore": 1
+        },
+        "rrweb": {
+          "available": true,
+          "bytes": 14330,
+          "framesOrEvents": 4,
+          "startupMs": 0.6,
+          "latencyMs": null,
+          "visualDiffPct": 1.935,
+          "semanticScore": 0.5,
+          "replayError": null
+        },
+        "cdp": {
+          "available": true,
+          "bytes": 204787,
+          "framesOrEvents": 1,
+          "startupMs": 15.211,
+          "latencyMs": null,
+          "visualDiffPct": 0,
+          "semanticScore": 0,
+          "unavailableReason": null
+        }
+      }
+    },
+    {
+      "scenarioId": "dashboard-reading",
+      "pageId": "dashboard",
+      "activity": "reading",
+      "systems": {
+        "phantomstream": {
+          "available": true,
+          "bytes": 119523,
+          "framesOrEvents": 7,
+          "startupMs": 9.6,
+          "latencyMs": 5,
+          "visualDiffPct": 0.001,
+          "semanticScore": 1
+        },
+        "rrweb": {
+          "available": true,
+          "bytes": 14682,
+          "framesOrEvents": 6,
+          "startupMs": 0.5,
+          "latencyMs": 0.9,
+          "visualDiffPct": 0.547,
+          "semanticScore": 0.5,
+          "replayError": null
+        },
+        "cdp": {
+          "available": true,
+          "bytes": 16380,
+          "framesOrEvents": 1,
+          "startupMs": 9.587,
+          "latencyMs": 7.194,
+          "visualDiffPct": 0.547,
+          "semanticScore": 0,
+          "unavailableReason": null
+        }
+      }
+    },
+    {
+      "scenarioId": "dashboard-agent",
+      "pageId": "dashboard",
+      "activity": "agent",
+      "systems": {
+        "phantomstream": {
+          "available": true,
+          "bytes": 119720,
+          "framesOrEvents": 8,
+          "startupMs": 8.5,
+          "latencyMs": 0.5,
+          "visualDiffPct": 0.001,
+          "semanticScore": 1
+        },
+        "rrweb": {
+          "available": true,
+          "bytes": 14692,
+          "framesOrEvents": 7,
+          "startupMs": 0.5,
+          "latencyMs": 0.6,
+          "visualDiffPct": 0.547,
+          "semanticScore": 0.5,
+          "replayError": null
+        },
+        "cdp": {
+          "available": true,
+          "bytes": 285226,
+          "framesOrEvents": 3,
+          "startupMs": 4.413,
+          "latencyMs": 2.613,
+          "visualDiffPct": 0,
+          "semanticScore": 0,
+          "unavailableReason": null
+        }
+      }
+    },
+    {
+      "scenarioId": "fidelity-idle",
+      "pageId": "fidelity",
+      "activity": "idle",
+      "systems": {
+        "phantomstream": {
+          "available": true,
+          "bytes": 66544,
+          "framesOrEvents": 5,
+          "startupMs": 6.1,
+          "latencyMs": null,
+          "visualDiffPct": 0.71,
+          "semanticScore": 1
+        },
+        "rrweb": {
+          "available": true,
+          "bytes": 11245,
+          "framesOrEvents": 5,
+          "startupMs": 0.5,
+          "latencyMs": null,
+          "visualDiffPct": 5.304,
+          "semanticScore": 0.5,
+          "replayError": null
+        },
+        "cdp": {
+          "available": true,
+          "bytes": 398464,
+          "framesOrEvents": 2,
+          "startupMs": 13.806,
+          "latencyMs": null,
+          "visualDiffPct": 0,
+          "semanticScore": 0,
+          "unavailableReason": null
+        }
+      }
+    },
+    {
+      "scenarioId": "fidelity-reading",
+      "pageId": "fidelity",
+      "activity": "reading",
+      "systems": {
+        "phantomstream": {
+          "available": true,
+          "bytes": 66881,
+          "framesOrEvents": 7,
+          "startupMs": 6.8,
+          "latencyMs": 7.9,
+          "visualDiffPct": 0,
+          "semanticScore": 1
+        },
+        "rrweb": {
+          "available": true,
+          "bytes": 11597,
+          "framesOrEvents": 7,
+          "startupMs": 0.6,
+          "latencyMs": 0.9,
+          "visualDiffPct": 15.291,
+          "semanticScore": 0.5,
+          "replayError": null
+        },
+        "cdp": {
+          "available": true,
+          "bytes": 271339,
+          "framesOrEvents": 2,
+          "startupMs": 9.373,
+          "latencyMs": 8.903,
+          "visualDiffPct": 0,
+          "semanticScore": 0,
+          "unavailableReason": null
+        }
+      }
+    },
+    {
+      "scenarioId": "fidelity-agent",
+      "pageId": "fidelity",
+      "activity": "agent",
+      "systems": {
+        "phantomstream": {
+          "available": true,
+          "bytes": 95662,
+          "framesOrEvents": 8,
+          "startupMs": 7.4,
+          "latencyMs": 0.6,
+          "visualDiffPct": 0.164,
+          "semanticScore": 1
+        },
+        "rrweb": {
+          "available": true,
+          "bytes": 15952,
+          "framesOrEvents": 8,
+          "startupMs": 0.6,
+          "latencyMs": 0.6,
+          "visualDiffPct": 15.302,
+          "semanticScore": 0.5,
+          "replayError": null
+        },
+        "cdp": {
+          "available": true,
+          "bytes": 327970,
+          "framesOrEvents": 3,
+          "startupMs": 13.303,
+          "latencyMs": 12.863,
+          "visualDiffPct": 0,
+          "semanticScore": 0,
+          "unavailableReason": null
+        }
+      }
+    },
+    {
+      "scenarioId": "media-idle",
+      "pageId": "media",
+      "activity": "idle",
+      "systems": {
+        "phantomstream": {
+          "available": true,
+          "bytes": 52508,
+          "framesOrEvents": 5,
+          "startupMs": 5,
+          "latencyMs": null,
+          "visualDiffPct": 0,
+          "semanticScore": 1
+        },
+        "rrweb": {
+          "available": true,
+          "bytes": 9222,
+          "framesOrEvents": 4,
+          "startupMs": 0.5,
+          "latencyMs": null,
+          "visualDiffPct": 42.72,
+          "semanticScore": 0.5,
+          "replayError": null
+        },
+        "cdp": {
+          "available": true,
+          "bytes": 10628560,
+          "framesOrEvents": 55,
+          "startupMs": 13.667,
+          "latencyMs": null,
+          "visualDiffPct": 0,
+          "semanticScore": 0,
+          "unavailableReason": null
+        }
+      }
+    },
+    {
+      "scenarioId": "media-reading",
+      "pageId": "media",
+      "activity": "reading",
+      "systems": {
+        "phantomstream": {
+          "available": true,
+          "bytes": 52845,
+          "framesOrEvents": 7,
+          "startupMs": 5.3,
+          "latencyMs": 0.9,
+          "visualDiffPct": 0,
+          "semanticScore": 1
+        },
+        "rrweb": {
+          "available": true,
+          "bytes": 9573,
+          "framesOrEvents": 6,
+          "startupMs": 0.5,
+          "latencyMs": 1,
+          "visualDiffPct": 12.052,
+          "semanticScore": 0.5,
+          "replayError": null
+        },
+        "cdp": {
+          "available": true,
+          "bytes": 325157,
+          "framesOrEvents": 3,
+          "startupMs": 16.03,
+          "latencyMs": 15.61,
+          "visualDiffPct": 0,
+          "semanticScore": 0,
+          "unavailableReason": null
+        }
+      }
+    },
+    {
+      "scenarioId": "media-agent",
+      "pageId": "media",
+      "activity": "agent",
+      "systems": {
+        "phantomstream": {
+          "available": true,
+          "bytes": 81699,
+          "framesOrEvents": 8,
+          "startupMs": 5.2,
+          "latencyMs": 0.8,
+          "visualDiffPct": 0,
+          "semanticScore": 1
+        },
+        "rrweb": {
+          "available": true,
+          "bytes": 13959,
+          "framesOrEvents": 7,
+          "startupMs": 0.6,
+          "latencyMs": 0.5,
+          "visualDiffPct": 15.453,
+          "semanticScore": 0.5,
+          "replayError": null
+        },
+        "cdp": {
+          "available": true,
+          "bytes": 337811,
+          "framesOrEvents": 3,
+          "startupMs": 16.686,
+          "latencyMs": 15.916,
+          "visualDiffPct": 0,
+          "semanticScore": 0,
+          "unavailableReason": null
+        }
+      }
+    }
+  ],
+  "summary": {
+    "phantomstream": {
+      "availableRuns": 15,
+      "medianBytes": 81699,
+      "medianKB": 79.78,
+      "medianStartupMs": 6.8,
+      "medianLatencyMs": 0.85,
+      "medianVisualDiffPct": 0,
+      "meanSemanticScore": 1
+    },
+    "rrweb": {
+      "availableRuns": 15,
+      "medianBytes": 14363,
+      "medianKB": 14.03,
+      "medianStartupMs": 0.5,
+      "medianLatencyMs": 0.8,
+      "medianVisualDiffPct": 8.781,
+      "meanSemanticScore": 0.5
+    },
+    "cdp": {
+      "availableRuns": 15,
+      "medianBytes": 327970,
+      "medianKB": 320.28,
+      "medianStartupMs": 13.81,
+      "medianLatencyMs": 10.88,
+      "medianVisualDiffPct": 0,
+      "meanSemanticScore": 0
+    },
+    "byteReductionVsCdpPct": 75.09,
+    "byteReductionVsRrwebPct": -468.82
+  }
+}

@@ -75,6 +75,9 @@
     "package:pack": "npm run types && npm pack --dry-run",
     "package:smoke": "npm run types && node scripts/package-smoke.mjs",
     "package:check": "npm test && npm run types && npm run lint:package && npm run attw && npm run package:pack && npm run package:smoke",
+    "bench:local": "node scripts/bench-local.mjs",
+    "paper:pdf": "cd paper && tectonic main.tex",
+    "paper:check": "node scripts/paper-check.mjs && npm run paper:pdf",
     "demo": "node bin/phantom-stream.js demo",
     "demo:playwright": "node bin/phantom-stream.js playwright-demo",
     "example:loopback": "node examples/serve.js"
@@ -97,8 +100,11 @@
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.3",
     "jsdom": "^29.1.1",
+    "pixelmatch": "^7.2.0",
     "playwright": "^1.60.0",
+    "pngjs": "^7.0.0",
     "publint": "^0.3.21",
+    "rrweb": "^2.0.1",
     "typescript": "^6.0.3"
   },
   "peerDependencies": {
