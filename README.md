@@ -17,8 +17,9 @@ PhantomStream mirrors a live browser tab to a remote viewer as structured DOM da
 [![Stars](https://img.shields.io/github/stars/fullselfbrowsing/PhantomStream?style=for-the-badge&logo=github&logoColor=white&color=555555)](https://github.com/fullselfbrowsing/PhantomStream/stargazers)
 [![Issues](https://img.shields.io/github/issues/fullselfbrowsing/PhantomStream?style=for-the-badge&logo=github&logoColor=white&color=555555)](https://github.com/fullselfbrowsing/PhantomStream/issues)
 [![Last Commit](https://img.shields.io/github/last-commit/fullselfbrowsing/PhantomStream?style=for-the-badge&logo=github&logoColor=white&color=555555)](https://github.com/fullselfbrowsing/PhantomStream/commits/main)
+[![Discussions](https://img.shields.io/github/discussions/fullselfbrowsing/PhantomStream?style=for-the-badge&logo=github&logoColor=white&color=555555)](https://github.com/fullselfbrowsing/PhantomStream/discussions)
 
-[The Problem](#the-problem) · [The Solution](#the-solution) · [Why DOM Streaming](#why-dom-streaming-instead-of-video) · [Architecture](#architecture) · [Features](#features) · [Tech Stack](#tech-stack) · [Getting Started](#getting-started) · [Quickstarts](docs/QUICKSTARTS.md) · [Documentation](#documentation) · [Roadmap](#roadmap)
+[The Problem](#the-problem) · [The Solution](#the-solution) · [Why DOM Streaming](#why-dom-streaming-instead-of-video) · [Architecture](#architecture) · [Features](#features) · [Tech Stack](#tech-stack) · [Getting Started](#getting-started) · [Quickstarts](docs/QUICKSTARTS.md) · [Documentation](#documentation) · [Roadmap](#roadmap) · [Discussions](https://github.com/fullselfbrowsing/PhantomStream/discussions)
 
 </div>
 
