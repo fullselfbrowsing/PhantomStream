@@ -13,6 +13,7 @@ PhantomStream mirrors a live browser tab to a remote viewer as structured DOM da
 ![Playwright](https://img.shields.io/badge/Playwright-2EAD33?style=for-the-badge&logo=playwright&logoColor=white)
 ![MIT License](https://img.shields.io/badge/License-MIT-3DA639?style=for-the-badge)
 
+[![npm](https://img.shields.io/npm/v/@full-self-browsing/phantom-stream?style=for-the-badge&logo=npm&logoColor=white&color=CB3837)](https://www.npmjs.com/package/@full-self-browsing/phantom-stream)
 [![Stars](https://img.shields.io/github/stars/fullselfbrowsing/PhantomStream?style=for-the-badge&logo=github&logoColor=white&color=555555)](https://github.com/fullselfbrowsing/PhantomStream/stargazers)
 [![Issues](https://img.shields.io/github/issues/fullselfbrowsing/PhantomStream?style=for-the-badge&logo=github&logoColor=white&color=555555)](https://github.com/fullselfbrowsing/PhantomStream/issues)
 [![Last Commit](https://img.shields.io/github/last-commit/fullselfbrowsing/PhantomStream?style=for-the-badge&logo=github&logoColor=white&color=555555)](https://github.com/fullselfbrowsing/PhantomStream/commits/main)
@@ -88,6 +89,7 @@ Core mechanisms (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full t
 - **Dual watchdogs.** A capture-side self-watchdog rescues a stuck mutation queue. A second host-side alarm survives service-worker eviction and requests a fresh snapshot if the stream strands silently.
 - **Session identity.** Every message carries a `streamSessionId` plus a `snapshotId`. The viewer rejects stale messages, so late diffs from a previous page can never corrupt the mirror.
 - **Side channels.** Scroll position, automation overlays (action glow, progress card), and native `alert` / `confirm` / `prompt` dialogs mirror alongside the DOM.
+- **Media by reference.** Images, video, and audio resolve to absolute source URLs and load in the viewer's own browser, so only URLs and small playback-state messages cross the relay. Playback syncs through a drift-corrected reconciler driven cross-realm, adaptive HLS and DASH play through an optional lazy player, and any media that cannot be referenced degrades to a never-break poster. A fail-closed fetch gate (https-only, private-range deny, `mediaMode`, CSP, no-referrer) governs every viewer fetch.
 
 ---
 
@@ -107,6 +109,10 @@ Core mechanisms (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full t
 | **Capture-side sanitization** | Serialization strips `on*` handlers, dangerous URL schemes, `srcdoc`, and `object` / `embed` subtrees on the wire clone only. The live page is never touched. |
 | **Privacy masking** | `blockSelector`, `maskTextSelector`, `maskInputs`, and custom mask functions redact sensitive content before it leaves the page, with passwords always masked. |
 | **Side-channel mirroring** | Scroll, automation overlays, and native dialogs stream alongside the DOM and render as host-document overlays above the mirror. |
+| **Media by reference** | Images, video, and audio render in the viewer by loading the original source URL over the viewer's own network, so media bytes never cross the relay. Covers `img`, `srcset`, `picture`, `source`, SVG image, CSS background image, and video poster. |
+| **Drift-corrected playback** | Video and audio play from the source URL, driven cross-realm from the parent so no player code runs in the sandbox. A pure reconciler holds small drift in tolerance, hard-seeks on large drift, and rejoins the live edge. |
+| **Adaptive streaming with fallback** | HLS and DASH play through an optional lazy player, and adapters surface manifest URLs as opt-in hints. Media that cannot be referenced degrades to a poster with an observable reason, so the mirror never breaks. `hls.js` is an optional peer dependency, so the published module stays dependency-free. |
+| **Fail-closed media fetch** | An https-only origin policy blocks private and internal ranges, a `mediaMode` switch gates playable sources, a string-layer gate runs before `srcdoc` parse, and a document-level no-referrer policy sends no credentials by default. |
 | **Playwright adapter** | Drop the capture core into a Playwright or CDP page through a ready-made adapter, including authorized reverse remote control. |
 | **Pluggable transport** | Capture, viewer, and relay all talk through a small transport seam, so the same core runs over WebSocket, an in-page loopback channel, or any channel you supply. |
 
@@ -231,6 +237,7 @@ bin/phantom-stream.js         CLI entry point for the demos
 | [docs/SECURITY.md](docs/SECURITY.md) | The embed security contract: threat model, sanitization, masking, CSP, and sandbox guarantees |
 | [docs/DESIGN-HISTORY.md](docs/DESIGN-HISTORY.md) | How the system evolved, what failed along the way, and why the current shape won |
 | [docs/RELEASE.md](docs/RELEASE.md) | Package validation and publish-gate checklist |
+| [CHANGELOG.md](CHANGELOG.md) | Release notes for every published version |
 | [docs/paper/OUTLINE.md](docs/paper/OUTLINE.md) | Research paper structure and the evaluation plan against video and rrweb baselines |
 
 ---
@@ -247,6 +254,7 @@ bin/phantom-stream.js         CLI entry point for the demos
 | Security pipeline: sanitization, sandbox, privacy masking | Shipped |
 | Reference demos: two-tab, Playwright, and embedded loopback | Shipped |
 | Fidelity completion: WeakMap identity, nodeIds sidecars, shadow DOM, same-origin iframes, subtree recovery, and CSSOM mode | Shipped |
+| Asset and media streaming by reference: static assets, drift-corrected video and audio sync, adaptive HLS/DASH with fallback, and media security | Shipped |
 | Evaluation harness: bandwidth, latency, and fidelity against WebRTC, CDP screencast, and rrweb | Planned |
 | Research paper draft | Planned |
 
